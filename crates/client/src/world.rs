@@ -1292,6 +1292,71 @@ impl World {
         true
     }
 
+    /// In orbit of the first planet with two cities or more (this system's
+    /// or the nearest system's), with 12 t of food bound for the last of
+    /// them and nothing targeted: the case of issue #116 (for testing).
+    /// Returns the planet.
+    pub fn start_by_cities(&mut self) -> Option<BodyId> {
+        let two_cities = |w: &Self, id: SystemId| {
+            let view = SystemView::new(&w.galaxy, id);
+            view.cities
+                .iter()
+                .map(|&(_, b)| b)
+                .find(|&b| view.cities.iter().filter(|&&(_, o)| o == b).count() >= 2)
+        };
+        if two_cities(self, self.system).is_none() {
+            let here = self.galaxy.systems[self.system].position;
+            let system = self
+                .galaxy
+                .systems
+                .iter()
+                .filter(|&(id, _)| two_cities(self, id).is_some())
+                .min_by(|a, b| {
+                    here.distance(a.1.position)
+                        .total_cmp(&here.distance(b.1.position))
+                })
+                .map(|(id, _)| id)?;
+            self.arrive_jump(system);
+        }
+        let body = two_cities(self, self.system)?;
+        let cities: Vec<_> = self.cities_on(body).collect();
+        let to = *cities.last()?;
+        let place = Place::Body(body);
+        let centre = self.position(place);
+        // On the sunlit side, looking down at the planet.
+        let up = (-centre).normalize_or(DVec3::X);
+        let up = (up + up.cross(DVec3::Y) * 0.5 + DVec3::Y * 0.3).normalize();
+        self.mode = Mode::Normal;
+        self.ship.frame = place;
+        self.ship.rel = up * self.place_radius(place) * 1.25;
+        self.ship.vel = DVec3::ZERO;
+        self.ship.throttle = 0.0;
+        self.ship.rot = look_rotation(-self.ship.rel);
+        self.cam_rot = self.ship.rot;
+        self.target = None;
+        self.landing = None;
+        let amount = 12.0;
+        self.player.cargo[Good::Food] += amount;
+        self.player.contracts.push(contracts::Contract {
+            offer: Offer {
+                from: cities[0],
+                to,
+                good: Good::Food,
+                amount,
+                jumps: 0,
+                trip_days: 1.0,
+                deadline: GalaxyTime::from_days(self.galaxy.time.days() + 30),
+                value: 900.0,
+                fee: 240.0,
+                shortage: 0.5,
+                urgent: false,
+            },
+            accepted: self.galaxy.time,
+        });
+        self.message = None;
+        Some(body)
+    }
+
     /// Park in the first asteroid field of this system (or the nearest
     /// system with one), facing a mid-sized rock a few hundred metres off
     /// (for testing). Returns whether it found one.

@@ -5,7 +5,7 @@
 //! the galaxy simulates around you. Esc pauses.
 //!
 //! Development flags skip the title and drop straight into a fresh game:
-//! `--seed N`, `--station`, `--undocked`, `--map`, `--course <jumps>`,
+//! `--seed N`, `--station`, `--undocked`, `--cities`, `--map`, `--course <jumps>`,
 //! `--ship <hull>`, `--screen <trade|hangar|shipyard|contracts>`,
 //! `--combat` (by a raider band), `--brawl` (in a fight), `--lost <s>`
 //! (the ship lost that long ago; with `--keys`, it has a checkpoint at a
@@ -73,6 +73,8 @@ struct Flags {
     seed: Option<u64>,
     /// Start in space rather than docked (handy for testing).
     undocked: bool,
+    /// In orbit of a planet with two cities, cargo bound for one (#116).
+    cities: bool,
     /// Start docked at a station, in the first system that has one.
     station: bool,
     /// Start in an asteroid field, facing a rock, prospected.
@@ -148,6 +150,7 @@ impl Flags {
         Self {
             seed: value("--seed").and_then(|s| s.parse().ok()),
             undocked: has("--undocked"),
+            cities: has("--cities"),
             station: has("--station"),
             field: has("--field"),
             traffic: has("--traffic"),
@@ -191,6 +194,7 @@ impl Flags {
             None => {
                 self.seed.is_some()
                     || self.undocked
+                    || self.cities
                     || self.station
                     || self.field
                     || self.traffic
@@ -257,6 +261,9 @@ impl Flags {
             // Look back at the station.
             world.ship.rot *= DQuat::from_rotation_y(2.6);
             world.cam_rot = world.ship.rot;
+        }
+        if self.cities && world.start_by_cities().is_none() {
+            eprintln!("--cities: no planet with two cities anywhere");
         }
         if self.field && world.start_at_field() {
             world.act(Action::Scan);

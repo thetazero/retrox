@@ -972,30 +972,13 @@ fn fast_travel_to_a_gas_giant_stops_over_its_clouds() {
     assert!(above > crate::skim::BAND_M, "arrives inside the band");
 }
 
-/// A world in orbit of a body with two cities or more (issue #116).
+/// A world in orbit of a body with two cities or more (issue #116), with
+/// cargo bound for the last of them.
 fn above_a_two_city_planet() -> (World, BodyId, Vec<SettlementId>) {
     let mut world = World::new(1);
-    let (system, body) = world
-        .galaxy
-        .systems
-        .iter()
-        .find_map(|(id, _)| {
-            let view = SystemView::new(&world.galaxy, id);
-            view.cities
-                .iter()
-                .map(|&(_, b)| b)
-                .find(|&b| view.cities.iter().filter(|&&(_, o)| o == b).count() >= 2)
-                .map(|b| (id, b))
-        })
+    let body = world
+        .start_by_cities()
         .expect("a planet with two cities somewhere");
-    world.system = system;
-    world.view = SystemView::new(&world.galaxy, system);
-    world.mode = Mode::Normal;
-    world.target = None;
-    let r = world.place_radius(Place::Body(body));
-    world.ship.frame = Place::Body(body);
-    world.ship.rel = DVec3::new(0.0, 0.0, r * 1.25);
-    world.ship.vel = DVec3::ZERO;
     let cities = world.cities_on(body).collect();
     (world, body, cities)
 }
@@ -1003,6 +986,7 @@ fn above_a_two_city_planet() -> (World, BodyId, Vec<SettlementId>) {
 #[test]
 fn every_city_on_a_planet_can_be_landed_at() {
     let (mut world, body, cities) = above_a_two_city_planet();
+    world.player.contracts.clear();
     assert_eq!(world.prompts().land, Some((cities[0], body)));
     for &city in &cities {
         world.act(Action::TargetCity(city));
@@ -1026,22 +1010,6 @@ fn every_city_on_a_planet_can_be_landed_at() {
 fn the_landing_prompt_offers_where_the_cargo_is_bound() {
     let (mut world, body, cities) = above_a_two_city_planet();
     let to = *cities.last().unwrap();
-    world.player.contracts.push(crate::contracts::Contract {
-        offer: retrox_sim::freight::Offer {
-            from: cities[0],
-            to,
-            good: retrox_sim::economy::Good::Food,
-            amount: 12.0,
-            jumps: 0,
-            trip_days: 1.0,
-            deadline: world.galaxy.time,
-            value: 100.0,
-            fee: 10.0,
-            shortage: 0.5,
-            urgent: false,
-        },
-        accepted: world.galaxy.time,
-    });
     assert_eq!(world.prompts().land, Some((to, body)));
     let hint = crate::guide::hint(&world).expect("a hint");
     let name = world.galaxy.settlements[to].name.clone();
