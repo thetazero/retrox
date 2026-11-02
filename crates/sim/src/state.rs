@@ -131,6 +131,8 @@ pub struct Faction {
     pub name: String,
     pub economy: EconomyModel,
     pub capital: SystemId,
+    /// Map and branding colour, sRGB.
+    pub color: [u8; 3],
     pub founded: GalaxyTime,
 }
 

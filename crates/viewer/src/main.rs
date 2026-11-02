@@ -1,0 +1,395 @@
+//! `retrox-viewer` — a developer tool that runs the galaxy simulation live
+//! on a pannable, zoomable map.
+//!
+//! Drag to pan, scroll to zoom, click a system to inspect it.
+
+use std::time::Instant;
+
+use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2};
+use retrox_gen::{GalaxyConfig, generate};
+use retrox_sim::economy::{Good, summarize};
+use retrox_sim::{EconomyModel, GalaxyState, SystemId, tick};
+
+fn main() -> eframe::Result {
+    let seed = std::env::args()
+        .skip_while(|a| a != "--seed")
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_title("retrox viewer")
+            .with_inner_size([1500.0, 950.0]),
+        ..Default::default()
+    };
+    eframe::run_native(
+        "retrox viewer",
+        options,
+        Box::new(move |_cc| Ok(Box::new(Viewer::new(seed)))),
+    )
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ColorMode {
+    Faction,
+    Population,
+    Price,
+    Shortage,
+}
+
+struct Viewer {
+    state: GalaxyState,
+    seed: u64,
+    running: bool,
+    days_per_frame: u32,
+    last_tick_ms: f64,
+    mode: ColorMode,
+    good: Good,
+    selected: Option<SystemId>,
+    /// Galaxy light-years → screen points.
+    zoom: f32,
+    /// Screen offset of the galactic centre from the canvas centre.
+    pan: Vec2,
+}
+
+impl Viewer {
+    fn new(seed: u64) -> Self {
+        Self {
+            state: generate(seed, &GalaxyConfig::default()),
+            seed,
+            running: false,
+            days_per_frame: 1,
+            last_tick_ms: 0.0,
+            mode: ColorMode::Faction,
+            good: Good::Food,
+            selected: None,
+            zoom: 1.6,
+            pan: Vec2::ZERO,
+        }
+    }
+
+    fn to_screen(&self, canvas: Rect, x: f64, y: f64) -> Pos2 {
+        canvas.center() + self.pan + Vec2::new(x as f32, y as f32) * self.zoom
+    }
+
+    fn system_color(&self, id: SystemId) -> Color32 {
+        let system = &self.state.systems[id];
+        let market = &system.economy.market;
+        match self.mode {
+            ColorMode::Faction => match system.owner {
+                Some(f) => {
+                    let [r, g, b] = self.state.factions[f].color;
+                    Color32::from_rgb(r, g, b)
+                }
+                None => Color32::from_gray(90),
+            },
+            ColorMode::Population => {
+                let p = system.economy.population;
+                if p <= 0.0 {
+                    Color32::from_gray(50)
+                } else {
+                    ramp(((p.ln() + 1.0) / 6.5) as f32)
+                }
+            }
+            ColorMode::Price => {
+                // log2(price / base): -2 (cheap, blue) .. +2 (dear, red).
+                let rel = (market.price[self.good] / self.good.base_price()).log2();
+                diverging((rel / 2.0) as f32)
+            }
+            ColorMode::Shortage => {
+                let demand = market.demand[self.good];
+                if demand <= 0.0 {
+                    Color32::from_gray(50)
+                } else {
+                    let unmet = market.shortfall[self.good] / demand;
+                    if unmet <= 1e-6 {
+                        Color32::from_rgb(70, 110, 90)
+                    } else {
+                        ramp(0.5 + unmet as f32 * 0.5)
+                    }
+                }
+            }
+        }
+    }
+
+    fn controls(&mut self, ui: &mut egui::Ui) {
+        ui.heading(format!("Galaxy {}", self.state.time));
+        ui.label(format!("seed {}", self.seed));
+        ui.horizontal(|ui| {
+            if ui
+                .button(if self.running { "⏸ Pause" } else { "▶ Run" })
+                .clicked()
+            {
+                self.running = !self.running;
+            }
+            if ui.button("Step day").clicked() {
+                self.step(1);
+            }
+            if ui.button("Step month").clicked() {
+                self.step(30);
+            }
+        });
+        ui.add(egui::Slider::new(&mut self.days_per_frame, 1..=30).text("days / frame"));
+        ui.label(format!("last frame: {:.1} ms of sim", self.last_tick_ms));
+
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.label("Colour by");
+            egui::ComboBox::from_id_salt("mode")
+                .selected_text(match self.mode {
+                    ColorMode::Faction => "faction",
+                    ColorMode::Population => "population",
+                    ColorMode::Price => "price",
+                    ColorMode::Shortage => "shortage",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.mode, ColorMode::Faction, "faction");
+                    ui.selectable_value(&mut self.mode, ColorMode::Population, "population");
+                    ui.selectable_value(&mut self.mode, ColorMode::Price, "price");
+                    ui.selectable_value(&mut self.mode, ColorMode::Shortage, "shortage");
+                });
+        });
+        if matches!(self.mode, ColorMode::Price | ColorMode::Shortage) {
+            ui.horizontal(|ui| {
+                ui.label("Good");
+                egui::ComboBox::from_id_salt("good")
+                    .selected_text(self.good.name())
+                    .show_ui(ui, |ui| {
+                        for good in Good::ALL {
+                            ui.selectable_value(&mut self.good, good, good.name());
+                        }
+                    });
+            });
+        }
+
+        ui.separator();
+        ui.strong("Galaxy economy");
+        let e = summarize(&self.state);
+        ui.label(format!("population {:.0}", e.population));
+        egui::Grid::new("galaxy_econ").striped(true).show(ui, |ui| {
+            for h in ["good", "stock", "short/d", "price", "#short"] {
+                ui.strong(h);
+            }
+            ui.end_row();
+            for good in Good::ALL {
+                ui.label(good.name());
+                ui.label(format!("{:.0}", e.stock[good]));
+                ui.label(format!("{:.0}", e.shortfall[good]));
+                ui.label(format!("{:.2}", e.mean_price[good]));
+                ui.label(format!("{}", e.systems_short[good]));
+                ui.end_row();
+            }
+        });
+
+        if let Some(id) = self.selected {
+            ui.separator();
+            self.system_panel(ui, id);
+        }
+    }
+
+    fn system_panel(&self, ui: &mut egui::Ui, id: SystemId) {
+        let s = &self.state.systems[id];
+        ui.strong(&s.name);
+        ui.label(format!("{:?} star · {} lanes", s.star, s.lanes.len()));
+        match s.owner {
+            Some(f) => {
+                let faction = &self.state.factions[f];
+                let model = match faction.economy {
+                    EconomyModel::Planned => "planned",
+                    EconomyModel::Market => "market",
+                };
+                let capital = if faction.capital == id {
+                    " · capital"
+                } else {
+                    ""
+                };
+                ui.label(format!("{} ({model}){capital}", faction.name));
+            }
+            None => {
+                ui.label("unclaimed");
+            }
+        }
+        ui.label(format!(
+            "population {:.1} · ore {:.2} · ice {:.2}",
+            s.economy.population, s.resources.ore, s.resources.ice
+        ));
+        for f in &s.economy.facilities {
+            ui.label(format!("  {:?} ×{:.1}", f.kind, f.scale));
+        }
+        let m = &s.economy.market;
+        egui::Grid::new("system_market")
+            .striped(true)
+            .show(ui, |ui| {
+                for h in ["good", "stock", "target", "price", "short/d"] {
+                    ui.strong(h);
+                }
+                ui.end_row();
+                for good in Good::ALL {
+                    ui.label(good.name());
+                    ui.label(format!("{:.0}", m.stock[good]));
+                    ui.label(format!("{:.0}", m.target(good)));
+                    ui.label(format!("{:.2}", m.price[good]));
+                    ui.label(format!("{:.1}", m.shortfall[good]));
+                    ui.end_row();
+                }
+            });
+    }
+
+    fn step(&mut self, days: u32) {
+        let start = Instant::now();
+        for _ in 0..days {
+            tick(&mut self.state);
+        }
+        self.last_tick_ms = start.elapsed().as_secs_f64() * 1000.0;
+    }
+
+    fn map(&mut self, ui: &mut egui::Ui) {
+        let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
+        let canvas = response.rect;
+        painter.rect_filled(canvas, 0.0, Color32::from_rgb(11, 13, 18));
+
+        if response.dragged() {
+            self.pan += response.drag_delta();
+        }
+        if response.hovered() {
+            let (scroll, pinch) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
+            let factor = pinch * (scroll * 0.002).exp();
+            if (factor - 1.0).abs() > f32::EPSILON
+                && let Some(cursor) = response.hover_pos()
+            {
+                // Zoom around the cursor.
+                let before = cursor - canvas.center() - self.pan;
+                self.zoom = (self.zoom * factor).clamp(0.3, 60.0);
+                self.pan = cursor - canvas.center() - before * factor;
+            }
+        }
+
+        let lane_stroke = Stroke::new(1.0, Color32::from_rgba_unmultiplied(200, 85, 61, 70));
+        for lane in self.state.lanes.as_slice() {
+            let (a, b) = (
+                self.state.systems[lane.a].position,
+                self.state.systems[lane.b].position,
+            );
+            let (pa, pb) = (
+                self.to_screen(canvas, a.x, a.y),
+                self.to_screen(canvas, b.x, b.y),
+            );
+            if canvas.contains(pa) || canvas.contains(pb) {
+                painter.line_segment([pa, pb], lane_stroke);
+            }
+        }
+
+        let radius = (self.zoom * 0.9).clamp(1.5, 7.0);
+        let mut hovered: Option<(SystemId, f32)> = None;
+        let cursor = response.hover_pos();
+        for (id, s) in self.state.systems.iter() {
+            let p = self.to_screen(canvas, s.position.x, s.position.y);
+            if !canvas.contains(p) {
+                continue;
+            }
+            painter.circle_filled(p, radius, self.system_color(id));
+            if let Some(c) = cursor {
+                let d = c.distance(p);
+                if d < 10.0 && hovered.is_none_or(|(_, best)| d < best) {
+                    hovered = Some((id, d));
+                }
+            }
+        }
+
+        for faction in self.state.factions.values() {
+            let c = self.state.systems[faction.capital].position;
+            let p = self.to_screen(canvas, c.x, c.y);
+            painter.circle_stroke(p, radius + 3.0, Stroke::new(1.5, Color32::from_gray(230)));
+            if self.zoom > 2.5 {
+                painter.text(
+                    p - Vec2::new(0.0, radius + 6.0),
+                    egui::Align2::CENTER_BOTTOM,
+                    &faction.name,
+                    egui::FontId::monospace(12.0),
+                    Color32::from_gray(230),
+                );
+            }
+        }
+
+        if let Some(id) = self.selected {
+            let s = self.state.systems[id].position;
+            let p = self.to_screen(canvas, s.x, s.y);
+            painter.circle_stroke(p, radius + 6.0, Stroke::new(2.0, Color32::YELLOW));
+        }
+
+        if let Some((id, _)) = hovered {
+            let s = &self.state.systems[id];
+            response.clone().on_hover_text(format!(
+                "{}\npop {:.1}\n{} {:.2}",
+                s.name,
+                s.economy.population,
+                self.good.name(),
+                s.economy.market.price[self.good]
+            ));
+            if response.clicked() {
+                self.selected = Some(id);
+            }
+        }
+    }
+}
+
+impl eframe::App for Viewer {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.running {
+            self.step(self.days_per_frame);
+            ctx.request_repaint();
+        }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        egui::Panel::right("controls")
+            .min_size(340.0)
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| self.controls(ui));
+            });
+        egui::CentralPanel::default()
+            .frame(egui::Frame::NONE)
+            .show(ui, |ui| self.map(ui));
+    }
+}
+
+/// Dark → amber → white, for "more is more" values in 0..1.
+fn ramp(t: f32) -> Color32 {
+    let t = t.clamp(0.0, 1.0);
+    let lerp = |a: f32, b: f32, t: f32| (a + (b - a) * t) as u8;
+    if t < 0.5 {
+        let u = t * 2.0;
+        Color32::from_rgb(
+            lerp(60.0, 230.0, u),
+            lerp(40.0, 140.0, u),
+            lerp(70.0, 40.0, u),
+        )
+    } else {
+        let u = (t - 0.5) * 2.0;
+        Color32::from_rgb(
+            lerp(230.0, 255.0, u),
+            lerp(140.0, 245.0, u),
+            lerp(40.0, 220.0, u),
+        )
+    }
+}
+
+/// Blue (negative) ← grey (zero) → red (positive), for values in -1..1.
+fn diverging(t: f32) -> Color32 {
+    let t = t.clamp(-1.0, 1.0);
+    let lerp = |a: f32, b: f32, t: f32| (a + (b - a) * t) as u8;
+    if t < 0.0 {
+        let u = -t;
+        Color32::from_rgb(
+            lerp(150.0, 60.0, u),
+            lerp(150.0, 130.0, u),
+            lerp(150.0, 240.0, u),
+        )
+    } else {
+        Color32::from_rgb(
+            lerp(150.0, 240.0, t),
+            lerp(150.0, 70.0, t),
+            lerp(150.0, 50.0, t),
+        )
+    }
+}

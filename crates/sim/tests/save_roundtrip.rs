@@ -9,6 +9,7 @@ fn small_galaxy() -> GalaxyState {
         name: "Union of Free Stations".into(),
         economy: EconomyModel::Planned,
         capital: retrox_sim::SystemId::from_index(0),
+        color: [200, 60, 50],
         founded: GalaxyTime::ZERO,
     });
     state

@@ -29,7 +29,7 @@ pub fn seed(rng: &mut Rng, state: &mut GalaxyState, config: &GalaxyConfig) {
     let claim_total = config.claimed_fraction * state.systems.len() as f64;
 
     let mut ids: Vec<FactionId> = Vec::with_capacity(count);
-    for &capital in &capitals {
+    for (i, &capital) in capitals.iter().enumerate() {
         let economy = if rng.chance(0.5) {
             EconomyModel::Planned
         } else {
@@ -43,6 +43,8 @@ pub fn seed(rng: &mut Rng, state: &mut GalaxyState, config: &GalaxyConfig) {
             name,
             economy,
             capital,
+            // Spread hues around the wheel by the golden angle.
+            color: hsl((i as f64 * 137.508) % 360.0, 0.65, 0.6),
             founded: GalaxyTime::ZERO,
         });
         state.history.record(
@@ -162,4 +164,20 @@ fn faction_name(rng: &mut Rng, capital: &str, economy: EconomyModel, fresh: bool
         ],
     };
     rng.pick(templates).replace("{}", &base)
+}
+
+fn hsl(h: f64, s: f64, l: f64) -> [u8; 3] {
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+    let m = l - c / 2.0;
+    let (r, g, b) = match (h / 60.0) as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let to = |v: f64| ((v + m) * 255.0).round() as u8;
+    [to(r), to(g), to(b)]
 }
