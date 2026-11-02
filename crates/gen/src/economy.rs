@@ -85,7 +85,8 @@ pub fn seed(rng: &mut Rng, state: &mut GalaxyState) {
                 res.ice * if owned { 1.0 } else { 0.5 },
             ));
         }
-        if pop > 0.0 && r.chance(0.75) {
+        // Big settlements always grow some of their own food.
+        if pop > 0.0 && (pop > 20.0 || r.chance(0.75)) {
             placed.push((i, FacilityKind::Hydroponics, pop));
         }
         if pop > 2.0 && (res.ice > 0.3 || r.chance(0.3)) {

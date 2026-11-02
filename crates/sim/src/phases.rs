@@ -8,8 +8,11 @@ pub fn production(state: &mut GalaxyState) {
     crate::economy::production(state);
 }
 
-/// Faction AI: plan quotas, fleet orders, diplomacy.
-pub fn planning(_state: &mut GalaxyState) {}
+/// Faction AI: taxes and welfare now; plan quotas, fleet orders and
+/// diplomacy later.
+pub fn planning(state: &mut GalaxyState) {
+    crate::fiscal::taxes_and_welfare(state);
+}
 
 /// Docked fleets sell their cargo and pick their next trip.
 pub fn trade(state: &mut GalaxyState) {
