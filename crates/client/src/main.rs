@@ -124,6 +124,11 @@ struct Flags {
     keys: Vec<String>,
     /// No sound. Screenshot and scripted runs are silent unless `--sound`.
     mute: bool,
+    /// `--remote PATH`: play turn by turn, for playtesting without a person
+    /// at the window. Steps appended to the file run as if in `--keys`
+    /// (one per line or comma-separated), and the world stands still
+    /// between them. See [`Running::run_script`] for the steps.
+    remote: Option<PathBuf>,
 }
 
 impl Flags {
@@ -160,7 +165,10 @@ impl Flags {
             keys: value("--keys")
                 .map(|k| k.split(',').map(|s| s.trim().to_lowercase()).collect())
                 .unwrap_or_default(),
-            mute: has("--mute") || (!has("--sound") && (has("--screenshot") || has("--keys"))),
+            mute: has("--mute")
+                || (!has("--sound")
+                    && (has("--screenshot") || has("--keys") || has("--remote"))),
+            remote: value("--remote").map(PathBuf::from),
         }
     }
 
@@ -400,6 +408,12 @@ struct Running {
     /// wait before the next.
     script: std::collections::VecDeque<String>,
     script_wait: u32,
+    /// `--remote`: the step file and how far into it we've read.
+    remote: Option<(PathBuf, usize)>,
+    /// Scripted keys held down, with the frames left to hold them.
+    holds: Vec<(KeyCode, u32)>,
+    /// Scripted pointer events for the UI, one batch a frame.
+    pointer: std::collections::VecDeque<Vec<egui::Event>>,
     /// A short note in the corner: "checkpoint saved".
     toast: Option<(String, bool, Instant)>,
     /// The ship was lost and the game is rewinding to its checkpoint
@@ -495,6 +509,9 @@ impl ApplicationHandler for App {
             quit: false,
             script: self.flags.keys.iter().cloned().collect(),
             script_wait: 0,
+            remote: self.flags.remote.clone().map(|p| (p, 0)),
+            holds: Vec::new(),
+            pointer: std::collections::VecDeque::new(),
         };
         if self.flags.straight_in() {
             let world = self.flags.world();
@@ -1010,6 +1027,7 @@ impl Running {
         self.last_frame = now;
         self.poll_background();
         self.run_script();
+        let idle = self.remote_idle();
 
         let keys = std::mem::take(&mut self.just_pressed);
         let mut menu_actions = Vec::new();
@@ -1053,6 +1071,8 @@ impl Running {
                 game.world.act(a);
             }
             let was_lost = game.world.combat.lost;
+            // Played by remote, the world waits for the next step.
+            let dt = if idle { 0.0 } else { dt };
             game.world.update(dt, controls);
             // The card slams in over the wreck.
             if let (Some(before), Some(now)) = (was_lost, game.world.combat.lost)
@@ -1091,7 +1111,10 @@ impl Running {
             (proj * view, instances, DVec3::ZERO, title::STAR)
         };
 
-        let raw_input = self.egui_state.take_egui_input(&self.renderer.window);
+        let mut raw_input = self.egui_state.take_egui_input(&self.renderer.window);
+        if let Some(events) = self.pointer.pop_front() {
+            raw_input.events.extend(events);
+        }
         let mut ui_actions = Vec::new();
         let mut lost_choice = None;
         let output = self.egui_ctx.run_ui(raw_input, |ui| {
@@ -1228,8 +1251,59 @@ impl Running {
         });
     }
 
-    /// Press the next scripted key, if it's time.
+    /// Played by `--remote` with nothing left to do: the world stands
+    /// still until the next step arrives.
+    fn remote_idle(&self) -> bool {
+        self.remote.is_some()
+            && self.script.is_empty()
+            && self.script_wait == 0
+            && self.holds.is_empty()
+            && self.pointer.is_empty()
+    }
+
+    /// Steps appended to the `--remote` file since we last looked.
+    fn read_remote(&mut self) {
+        let Some((path, read)) = &mut self.remote else {
+            return;
+        };
+        let Ok(text) = std::fs::read_to_string(&*path) else {
+            return;
+        };
+        // Only whole lines, so a step being written isn't cut in half.
+        let Some(end) = text.rfind('\n').map(|i| i + 1) else {
+            return;
+        };
+        if end <= *read {
+            return;
+        }
+        let new = text[*read..end].to_owned();
+        *read = end;
+        for step in new.split(['\n', ',']) {
+            let step = step.trim().to_lowercase();
+            if !step.is_empty() {
+                self.script.push_back(step);
+            }
+        }
+    }
+
+    /// Press the next scripted key, if it's time. Steps:
+    /// - a key's name (`f`, `enter`, `esc`, `up`, `f1`, `space`, `1`…)
+    ///   presses it once;
+    /// - `waitN` waits N frames (and any wait lasts until a game being
+    ///   started is ready);
+    /// - `hold:KEY:N` holds a key down for N frames (`hold:w:60`, or
+    ///   `hold:r:30` for the trigger), without waiting for it;
+    /// - `click:X:Y` clicks the UI at that pixel of the window (as in a
+    ///   screenshot), `move:X:Y` just points there;
+    /// - `shot:PATH` saves this frame as a PPM.
     fn run_script(&mut self) {
+        self.holds.retain_mut(|(key, left)| {
+            *left = left.saturating_sub(1);
+            if *left == 0 {
+                self.keys.remove(key);
+            }
+            *left > 0
+        });
         if self.pending.is_some() || !self.writers.is_empty() {
             return;
         }
@@ -1237,38 +1311,55 @@ impl Running {
             self.script_wait -= 1;
             return;
         }
+        if self.script.is_empty() {
+            self.read_remote();
+        }
         let Some(step) = self.script.pop_front() else {
             return;
         };
-        let key = match step.as_str() {
-            "up" => KeyCode::ArrowUp,
-            "down" => KeyCode::ArrowDown,
-            "enter" => KeyCode::Enter,
-            "esc" => KeyCode::Escape,
-            "tab" => KeyCode::Tab,
-            other => {
-                if let Some(n) = other.strip_prefix("wait") {
-                    self.script_wait = n.parse().unwrap_or(30);
-                } else if let Some(c) = other.chars().next().filter(|_| other.len() == 1) {
-                    let code = match c.to_ascii_lowercase() {
-                        'f' => Some(KeyCode::KeyF),
-                        'l' => Some(KeyCode::KeyL),
-                        'j' => Some(KeyCode::KeyJ),
-                        't' => Some(KeyCode::KeyT),
-                        'm' => Some(KeyCode::KeyM),
-                        'h' => Some(KeyCode::KeyH),
-                        'g' => Some(KeyCode::KeyG),
-                        'y' => Some(KeyCode::KeyY),
-                        _ => None,
-                    };
-                    self.just_pressed.extend(code);
-                }
-                // The step after a key waits a frame for it to land.
-                self.script_wait = self.script_wait.max(2);
+        let parts: Vec<&str> = step.split(':').collect();
+        let points = |x: &str, y: &str| {
+            let ppp = self.egui_ctx.pixels_per_point();
+            Some(egui::pos2(
+                x.parse::<f32>().ok()? / ppp,
+                y.parse::<f32>().ok()? / ppp,
+            ))
+        };
+        match parts.as_slice() {
+            [wait] if wait.starts_with("wait") => {
+                self.script_wait = wait[4..].parse().unwrap_or(30);
                 return;
             }
-        };
-        self.just_pressed.push(key);
+            ["hold", key, n] => {
+                if let (Some(code), Ok(n)) = (key_code(key), n.parse()) {
+                    self.just_pressed.push(code);
+                    self.keys.insert(code);
+                    self.holds.push((code, n));
+                }
+            }
+            ["click", x, y] => {
+                if let Some(pos) = points(x, y) {
+                    let button = |pressed| egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    };
+                    self.pointer
+                        .push_back(vec![egui::Event::PointerMoved(pos), button(true)]);
+                    self.pointer.push_back(vec![button(false)]);
+                }
+            }
+            ["move", x, y] => {
+                if let Some(pos) = points(x, y) {
+                    self.pointer.push_back(vec![egui::Event::PointerMoved(pos)]);
+                }
+            }
+            ["shot", path @ ..] => self.renderer.capture = Some(PathBuf::from(path.join(":"))),
+            [key] => self.just_pressed.extend(key_code(key)),
+            _ => {}
+        }
+        // The step after a key waits a frame for it to land.
         self.script_wait = 2;
     }
 
@@ -2407,4 +2498,42 @@ fn refit_sections(fit: &mut retrox_sim::ship::Loadout, ids: &str) {
             }
         }
     }
+}
+
+/// A key by the name a key script uses for it (see [`Running::run_script`]).
+fn key_code(name: &str) -> Option<KeyCode> {
+    use KeyCode::*;
+    const LETTERS: [KeyCode; 26] = [
+        KeyA, KeyB, KeyC, KeyD, KeyE, KeyF, KeyG, KeyH, KeyI, KeyJ, KeyK, KeyL, KeyM, KeyN, KeyO,
+        KeyP, KeyQ, KeyR, KeyS, KeyT, KeyU, KeyV, KeyW, KeyX, KeyY, KeyZ,
+    ];
+    const DIGITS: [KeyCode; 10] = [
+        Digit0, Digit1, Digit2, Digit3, Digit4, Digit5, Digit6, Digit7, Digit8, Digit9,
+    ];
+    const FS: [KeyCode; 12] = [F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12];
+    let mut chars = name.chars();
+    if let (Some(c), None) = (chars.next(), chars.next()) {
+        return match c {
+            'a'..='z' => Some(LETTERS[c as usize - 'a' as usize]),
+            '0'..='9' => Some(DIGITS[c as usize - '0' as usize]),
+            _ => None,
+        };
+    }
+    if let Some(n) = name.strip_prefix('f').and_then(|n| n.parse::<usize>().ok()) {
+        return FS.get(n.checked_sub(1)?).copied();
+    }
+    Some(match name {
+        "up" => ArrowUp,
+        "down" => ArrowDown,
+        "left" => ArrowLeft,
+        "right" => ArrowRight,
+        "enter" => Enter,
+        "esc" => Escape,
+        "tab" => Tab,
+        "space" => Space,
+        "shift" => ShiftLeft,
+        "ctrl" => ControlLeft,
+        "backspace" => Backspace,
+        _ => return None,
+    })
 }
