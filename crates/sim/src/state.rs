@@ -35,6 +35,25 @@ impl GalaxyState {
             .record(GalaxyTime::ZERO, crate::HistoryKind::Genesis { seed });
         state
     }
+
+    /// Add a hyperlane between two systems, keeping both systems' lane
+    /// lists in sync.
+    pub fn connect(&mut self, a: SystemId, b: SystemId) -> LaneId {
+        assert_ne!(a, b, "a hyperlane must join two different systems");
+        let length_ly = self.systems[a].position.distance(self.systems[b].position);
+        let lane = self.lanes.push(Hyperlane { a, b, length_ly });
+        self.systems[a].lanes.push(lane);
+        self.systems[b].lanes.push(lane);
+        lane
+    }
+
+    /// Systems one hyperlane jump away from `system`.
+    pub fn neighbours(&self, system: SystemId) -> impl Iterator<Item = SystemId> + '_ {
+        self.systems[system]
+            .lanes
+            .iter()
+            .map(move |&lane| self.lanes[lane].other(system))
+    }
 }
 
 /// A position in the galaxy, in light-years from the galactic centre.
@@ -61,7 +80,25 @@ impl GalaxyPos {
 pub struct StarSystem {
     pub name: String,
     pub position: GalaxyPos,
+    pub star: StarClass,
+    /// Hyperlanes touching this system. Maintained by [`GalaxyState::connect`].
+    pub lanes: Vec<LaneId>,
     pub owner: Option<FactionId>,
+}
+
+/// The primary star's spectral class.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum StarClass {
+    O,
+    B,
+    A,
+    F,
+    G,
+    K,
+    M,
+    WhiteDwarf,
+    Neutron,
+    BlackHole,
 }
 
 /// An undirected hyperlane between two systems.

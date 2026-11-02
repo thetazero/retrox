@@ -1,5 +1,5 @@
 use retrox_sim::{
-    EconomyModel, Faction, GalaxyPos, GalaxyState, GalaxyTime, HistoryKind, Hyperlane, StarSystem,
+    EconomyModel, Faction, GalaxyPos, GalaxyState, GalaxyTime, HistoryKind, StarClass, StarSystem,
     tick,
 };
 
@@ -16,17 +16,18 @@ fn small_galaxy() -> GalaxyState {
     let a = state.systems.push(StarSystem {
         name: "Zarya".into(),
         position: GalaxyPos::new(0.0, 0.0, 0.0),
+        star: StarClass::G,
+        lanes: Vec::new(),
         owner: Some(faction),
     });
     let b = state.systems.push(StarSystem {
         name: "Polaris Gate".into(),
         position: GalaxyPos::new(3.0, 4.0, 0.0),
+        star: StarClass::M,
+        lanes: Vec::new(),
         owner: None,
     });
-    let length_ly = state.systems[a]
-        .position
-        .distance(state.systems[b].position);
-    state.lanes.push(Hyperlane { a, b, length_ly });
+    state.connect(a, b);
     state
 }
 
@@ -55,6 +56,7 @@ fn save_roundtrips() {
     let lane = &loaded.lanes.as_slice()[0];
     assert_eq!(loaded.systems[lane.b].name, "Polaris Gate");
     assert_eq!(lane.length_ly, 5.0);
+    assert_eq!(loaded.neighbours(lane.a).collect::<Vec<_>>(), vec![lane.b]);
     let owner = loaded.systems[lane.a].owner.unwrap();
     assert_eq!(loaded.factions[owner].economy, EconomyModel::Planned);
 }
