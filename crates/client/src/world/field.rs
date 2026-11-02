@@ -5,7 +5,15 @@ use glam::DVec3;
 use retrox_gen::rocks;
 
 use super::{Mode, Place, World};
-use crate::mining;
+use crate::mining::{self, RockId};
+use retrox_sim::FieldId;
+
+/// Fast travel into a field stops this far off a rock's surface: inside
+/// the light mining laser's reach, so the first cut is a press away.
+pub const STOP_CLEARANCE_M: f64 = 400.0;
+/// The rock it stops by is at least this big: one that fills a courier's
+/// hold, and fractures into chunks rather than crumbling.
+const STOP_ROCK_MIN_M: f64 = 20.0;
 
 impl World {
     pub(super) fn update_field(&mut self) {
@@ -23,6 +31,23 @@ impl World {
             }
             (None, None) => {}
         }
+    }
+
+    /// The rock fast travel into `field` stops by (issue #122), coming in
+    /// from `side` (a unit vector out from the field's centre): the
+    /// outermost whole rock on that side worth cutting, neither a quarry
+    /// nor volatile. Its offset from the field's centre, and how far from
+    /// its centre to stop.
+    pub fn field_stop(&self, field: FieldId, side: DVec3) -> Option<(DVec3, f64)> {
+        let f = &self.galaxy.fields[field];
+        let rocks = rocks(f);
+        self.mining
+            .live_rocks(field, f, &rocks, self.clock_s)
+            .filter(|r| matches!(r.id, RockId::Base(_)))
+            .filter(|r| (STOP_ROCK_MIN_M..=mining::QUARRY_RADIUS).contains(&r.radius))
+            .filter(|r| !r.lode.volatile)
+            .max_by(|a, b| a.pos.dot(side).total_cmp(&b.pos.dot(side)))
+            .map(|r| (r.pos, r.radius + STOP_CLEARANCE_M))
     }
 
     /// Where the mining laser's muzzle is, in ship space (metres, nose
