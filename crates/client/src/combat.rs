@@ -1192,6 +1192,15 @@ impl Combat {
 
     /// A ship blows up: a fireball and its secondaries, a flash, plates
     /// and embers flung out, and the wreck tumbling on.
+    /// The player's ship goes up, whatever its hull has left (for
+    /// screenshots).
+    pub fn lose_player(&mut self, craft: Craft) {
+        let fit = self.player.fit.clone();
+        let length = self.player.stats.length_m;
+        self.explode(&fit, craft, length);
+        self.lost = Some(0.0);
+    }
+
     fn explode(&mut self, fit: &Loadout, craft: Craft, length: f64) {
         self.tally.blasts += 1;
         let r = (length * 1.6).max(14.0);

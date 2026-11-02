@@ -15,6 +15,8 @@ pub(crate) mod guide;
 mod map;
 mod mining;
 
+pub(crate) use map::drum;
+
 use crate::world::{AU, Action, COMBAT_SPEED, Leg, Mode, Place, SECONDS_PER_DAY, World};
 
 /// Enamel cream: body text and rules.

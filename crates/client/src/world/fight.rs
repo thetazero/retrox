@@ -186,6 +186,13 @@ impl World {
         self.park_in(field)
     }
 
+    /// Blow the ship up, as if `t` seconds ago (for screenshots).
+    pub fn stage_loss(&mut self, t: f64) {
+        let craft = self.player_craft();
+        self.combat.lose_player(craft);
+        self.combat.lost = Some(t);
+    }
+
     /// Bring a band in close, in front of the ship and already battered,
     /// so a fight is under way at once (for screenshots).
     pub fn stage_brawl(&mut self) -> bool {

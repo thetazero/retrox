@@ -880,7 +880,13 @@ fn heading_rule(painter: &egui::Painter, at: Pos2, right: f32, title: &str) {
 /// A mechanical drum counter at `at` showing `value`: cream digits on black
 /// drums, the low digit rolling continuously and each higher one turning
 /// over as the one below it passes nine. Returns the counter's rect.
-fn drum(painter: &egui::Painter, at: Pos2, value: f64, digits: usize, signed: bool) -> Rect {
+pub(crate) fn drum(
+    painter: &egui::Painter,
+    at: Pos2,
+    value: f64,
+    digits: usize,
+    signed: bool,
+) -> Rect {
     let size = Vec2::new(17.0, 24.0);
     let windows = digits + usize::from(signed);
     let whole = Rect::from_min_size(at, Vec2::new(size.x * windows as f32, size.y));

@@ -87,6 +87,10 @@ pub struct Header {
     pub played_s: f64,
     /// Galaxy date, as the HUD shows it.
     pub date: String,
+    /// Galaxy seconds, exactly: what the rewind to a checkpoint rolls the
+    /// date counter back to. Older headers lack it.
+    #[serde(default)]
+    pub clock_s: Option<f64>,
     pub system: String,
     /// Where the player is: "docked at X", "landed at Y", "in space near Z".
     pub place: String,
@@ -200,6 +204,7 @@ pub fn snapshot(
         saved: now_unix(),
         played_s,
         date: world.date().to_string(),
+        clock_s: Some(world.clock_s),
         system: world.galaxy.systems[world.system].name.clone(),
         place: place_text(world),
         credits: world.player.credits,
@@ -693,7 +698,13 @@ mod tests {
         // Guns fired at nothing before the checkpoint: their dice aren't
         // saved, so they mustn't change the fight to come.
         for frame in 0..90 {
-            world.update(1.0 / 60.0, Controls { fire: frame % 2 == 0, ..Controls::default() });
+            world.update(
+                1.0 / 60.0,
+                Controls {
+                    fire: frame % 2 == 0,
+                    ..Controls::default()
+                },
+            );
         }
         // Back in, and the checkpoint written as it is on docking.
         world.start_at_station();
@@ -711,10 +722,7 @@ mod tests {
             "the raiders win: {}",
             first.last().unwrap()
         );
-        assert!(
-            can_save(&world).is_err(),
-            "a lost ship isn't a checkpoint"
-        );
+        assert!(can_save(&world).is_err(), "a lost ship isn't a checkpoint");
 
         // Restored: the galaxy as it was then, the ship whole.
         let mut restored = decode(&checkpoint).unwrap().world;
