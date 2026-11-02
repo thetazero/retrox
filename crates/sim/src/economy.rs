@@ -541,7 +541,8 @@ mod tests {
         e.market.stock[Good::Fuel] = 3.0;
         e.produce();
         // The 3 fuel there is what 10 people need: the factory gets none.
-        assert_eq!(e.market.shortfall[Good::Fuel], 10.0);
+        let short = e.market.shortfall[Good::Fuel];
+        assert!((short - 10.0).abs() < 1e-9, "fuel short {short}");
         assert_eq!(e.market.stock[Good::Metal], 10.0);
     }
 }
