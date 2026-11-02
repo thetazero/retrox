@@ -915,6 +915,14 @@ from a random generator (pillar 5).
   plays an animation and opens the location's UI.
 - Fast travel brings the ship into landing range of a planet's city, and
   [J] climbs back out after launch (§7.1.1).
+- **A planet may have several cities** (issue #116). Each is a row of its
+  own in NAVIGATION, under its planet; picking one (click, or [T], which
+  steps through city rows too) targets the planet and makes that city the
+  one [L] lands at. With none picked, [L] lands where the hold's cargo is
+  bound, else at the first city listed. While more than one city is in
+  reach, the prompts say so and point at NAVIGATION. Hints name a city with
+  its planet ("Kiolgristio, on Mufath Prime III") so the player knows
+  where to fly.
 
 ### 7.7 Death
 
@@ -1141,7 +1149,11 @@ Decided while bringing every screen into one style (issue #77):
   of one action, like a row of switches on a panel.
 - **Chart symbols** in lists of places: a rayed star, ringed gas giants,
   stations as teal diamonds, fields as scattered dots; moons hang off their
-  planet on a bracket.
+  planet on a bracket, and cities (a little skyline of three blocks) hang
+  off the body they're on the same way, one step further in. A city row
+  carries no range (its planet's row has it). Where the hold's cargo is
+  bound, the row is tagged CARGO in amber, as a pirate lair is tagged
+  RAIDERS in red.
 - **Slot plates:** loadout slots carry a stencilled kind plate coloured by
   role (weapons red; engines, power and jump amber; shields, radar and RCS
   teal; radiators and cargo cream).

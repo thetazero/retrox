@@ -1005,3 +1005,78 @@ fn fast_travel_to_a_gas_giant_stops_over_its_clouds() {
     assert!(above < crate::skim::BAND_M * 2.0, "{above} m up");
     assert!(above > crate::skim::BAND_M, "arrives inside the band");
 }
+
+/// A world in orbit of a body with two cities or more (issue #116), with
+/// cargo bound for the last of them.
+fn above_a_two_city_planet() -> (World, BodyId, Vec<SettlementId>) {
+    let mut world = World::new(1);
+    let body = world
+        .start_by_cities()
+        .expect("a planet with two cities somewhere");
+    let cities = world.cities_on(body).collect();
+    (world, body, cities)
+}
+
+#[test]
+fn every_city_on_a_planet_can_be_landed_at() {
+    let (mut world, body, cities) = above_a_two_city_planet();
+    world.player.contracts.clear();
+    assert_eq!(world.prompts().land, Some((cities[0], body)));
+    for &city in &cities {
+        world.act(Action::TargetCity(city));
+        assert_eq!(world.target, Some(Place::Body(body)));
+        assert_eq!(
+            world.prompts().land,
+            Some((city, body)),
+            "[L] lands where picked"
+        );
+    }
+    let last = *cities.last().unwrap();
+    world.act(Action::Land);
+    assert!(
+        matches!(world.mode, Mode::Landed { city, .. } if city == last),
+        "landed at the city picked: {:?}",
+        world.mode
+    );
+}
+
+#[test]
+fn the_landing_prompt_offers_where_the_cargo_is_bound() {
+    let (mut world, body, cities) = above_a_two_city_planet();
+    let to = *cities.last().unwrap();
+    assert_eq!(world.prompts().land, Some((to, body)));
+    let hint = crate::guide::hint(&world).expect("a hint");
+    let name = world.galaxy.settlements[to].name.clone();
+    assert_eq!(hint, format!("[L] to land at {name}."));
+
+    // From afar, the hint names the planet the city is on, until it's
+    // picked in NAVIGATION.
+    let near = world.ship.clone();
+    open_space(&mut world);
+    let hint = crate::guide::hint(&world).expect("a hint");
+    let planet = world.name(Place::Body(body));
+    assert!(hint.contains(&format!("{name}, on {planet}")), "{hint}");
+    world.act(Action::TargetCity(cities[0]));
+    let hint = crate::guide::hint(&world).expect("a hint");
+    assert!(
+        hint.contains(&format!("on {planet}")),
+        "the wrong city: {hint}"
+    );
+    world.act(Action::TargetCity(to));
+    let hint = crate::guide::hint(&world).expect("a hint");
+    assert!(!hint.contains("NAVIGATION"), "picked: {hint}");
+    world.ship = near;
+    assert_eq!(world.prompts().land, Some((to, body)));
+}
+
+#[test]
+fn t_cycles_through_cities_under_their_planet() {
+    let (mut world, body, cities) = above_a_two_city_planet();
+    world.act(Action::Target(Place::Body(body)));
+    for &city in &cities {
+        world.act(Action::CycleTarget);
+        assert_eq!(world.nav_selected(), Some((Place::Body(body), Some(city))));
+    }
+    world.act(Action::CycleTarget);
+    assert_eq!(world.landing.filter(|c| cities.contains(c)), None);
+}

@@ -237,6 +237,8 @@ pub enum Action {
     Jump(SystemId),
     CycleTarget,
     Target(Place),
+    /// Pick a city in NAVIGATION: target its planet and land there.
+    TargetCity(SettlementId),
     ToggleCamera,
     ToggleFlightAssist,
     /// Wait docked or landed for up to this many days. The days pass over
@@ -309,6 +311,9 @@ pub struct World {
     pub ship: Ship,
     pub mode: Mode,
     pub target: Option<Place>,
+    /// The city picked in NAVIGATION to land at (issue #116): a planet
+    /// may have several. Only counts while its planet is the one in reach.
+    pub landing: Option<SettlementId>,
     pub cockpit: bool,
     pub cam_rot: DQuat,
     /// Rocks of the asteroid field the ship is in, if any.
@@ -438,6 +443,7 @@ impl World {
             ship,
             mode,
             target: None,
+            landing: None,
             cockpit: false,
             cam_rot,
             field_rocks: None,
@@ -613,6 +619,64 @@ impl World {
         self.view.cities.iter().any(|&(_, b)| b == body)
     }
 
+    /// The cities on a body, in the order NAVIGATION lists them.
+    pub fn cities_on(&self, body: BodyId) -> impl Iterator<Item = SettlementId> + '_ {
+        self.view
+            .cities
+            .iter()
+            .filter(move |&&(_, b)| b == body)
+            .map(|&(c, _)| c)
+    }
+
+    /// The body a city of this system is on.
+    pub fn city_body(&self, city: SettlementId) -> Option<BodyId> {
+        self.view
+            .cities
+            .iter()
+            .find(|&&(c, _)| c == city)
+            .map(|&(_, b)| b)
+    }
+
+    /// Where [L] puts down on a body (issue #116): the city picked in
+    /// NAVIGATION, else the first one cargo is bound for, else the first
+    /// listed.
+    pub fn landing_city(&self, body: BodyId) -> Option<SettlementId> {
+        let on_body = |c: &SettlementId| self.city_body(*c) == Some(body);
+        self.landing
+            .filter(on_body)
+            .or_else(|| {
+                self.player
+                    .contracts
+                    .iter()
+                    .map(|c| c.offer.to)
+                    .find(on_body)
+            })
+            .or_else(|| self.cities_on(body).next())
+    }
+
+    /// Every row of NAVIGATION, in order: each place, with a body's cities
+    /// right under it (`Some(city)`, the place being its body).
+    pub fn nav_entries(&self) -> Vec<(Place, Option<SettlementId>)> {
+        let mut out = Vec::new();
+        for place in self.nav_places() {
+            out.push((place, None));
+            if let Place::Body(b) = place {
+                out.extend(self.cities_on(b).map(|c| (place, Some(c))));
+            }
+        }
+        out
+    }
+
+    /// The NAVIGATION row that's selected: a city row once one is picked.
+    pub fn nav_selected(&self) -> Option<(Place, Option<SettlementId>)> {
+        let target = self.target?;
+        let city = match target {
+            Place::Body(b) => self.landing.filter(|&c| self.city_body(c) == Some(b)),
+            _ => None,
+        };
+        Some((target, city))
+    }
+
     /// Where fast travel to `place` stops, measured from its centre.
     pub fn arrival_distance(&self, place: Place) -> f64 {
         match place {
@@ -663,12 +727,25 @@ impl World {
                 p.dock = Some(s);
             }
         }
-        for &(city, body) in &self.view.cities {
+        // The body in reach (the targeted one first, if two are), and the
+        // city on it [L] lands at.
+        let in_reach = |body: BodyId| {
             let reach = self.place_radius(Place::Body(body)) * LANDING_RADII;
-            if self.distance_to(Place::Body(body)) < reach {
-                p.land = Some((city, body));
-            }
-        }
+            self.distance_to(Place::Body(body)) < reach
+        };
+        let targeted = match self.target {
+            Some(Place::Body(b)) if self.has_city(b) && in_reach(b) => Some(b),
+            _ => None,
+        };
+        p.land = targeted
+            .or_else(|| {
+                self.view
+                    .cities
+                    .iter()
+                    .map(|&(_, b)| b)
+                    .find(|&b| in_reach(b))
+            })
+            .and_then(|b| Some((self.landing_city(b)?, b)));
         p.well = self.current_well();
         if self.hostiles_near() == 0 {
             // Inside a well the autopilot only flies within it (DESIGN
@@ -702,17 +779,28 @@ impl World {
                 let state = if self.ship.flight_assist { "on" } else { "off" };
                 self.say(format!("Flight assist {state}"));
             }
-            Action::Target(place) => self.target = Some(place),
+            Action::Target(place) => {
+                self.target = Some(place);
+                self.landing = None;
+            }
+            Action::TargetCity(city) => {
+                if let Some(body) = self.city_body(city) {
+                    self.target = Some(Place::Body(body));
+                    self.landing = Some(city);
+                }
+            }
             Action::CycleTarget => {
-                let places = self.nav_places();
+                // Through every NAVIGATION row, cities included.
+                let rows = self.nav_entries();
                 let next = match self
-                    .target
-                    .and_then(|t| places.iter().position(|p| *p == t))
+                    .nav_selected()
+                    .and_then(|sel| rows.iter().position(|r| *r == sel))
                 {
-                    Some(i) => places[(i + 1) % places.len()],
-                    None => places[0],
+                    Some(i) => rows[(i + 1) % rows.len()],
+                    None => rows[0],
                 };
-                self.target = Some(next);
+                self.target = Some(next.0);
+                self.landing = next.1;
             }
             Action::FastTravel => match (self.mode, prompts.fast_travel, prompts.climb) {
                 (Mode::Normal, _, _) if self.hostiles_near() > 0 => {
@@ -1204,6 +1292,70 @@ impl World {
         self.cam_rot = self.ship.rot;
         self.message = None;
         true
+    }
+
+    /// In orbit of the first planet with two cities or more (this system's
+    /// or the nearest system's), with a contract for 12 t of food to the
+    /// last of them and nothing targeted: the case of issue #116 (for
+    /// testing). Returns the planet.
+    pub fn start_by_cities(&mut self) -> Option<BodyId> {
+        let two_cities = |w: &Self, id: SystemId| {
+            let view = SystemView::new(&w.galaxy, id);
+            view.cities
+                .iter()
+                .map(|&(_, b)| b)
+                .find(|&b| view.cities.iter().filter(|&&(_, o)| o == b).count() >= 2)
+        };
+        if two_cities(self, self.system).is_none() {
+            let here = self.galaxy.systems[self.system].position;
+            let system = self
+                .galaxy
+                .systems
+                .iter()
+                .filter(|&(id, _)| two_cities(self, id).is_some())
+                .min_by(|a, b| {
+                    here.distance(a.1.position)
+                        .total_cmp(&here.distance(b.1.position))
+                })
+                .map(|(id, _)| id)?;
+            self.arrive_jump(system);
+        }
+        let body = two_cities(self, self.system)?;
+        let cities: Vec<_> = self.cities_on(body).collect();
+        let to = *cities.last()?;
+        let place = Place::Body(body);
+        let centre = self.position(place);
+        // On the sunlit side, looking down at the planet.
+        let up = (-centre).normalize_or(DVec3::X);
+        let up = (up + up.cross(DVec3::Y) * 0.5 + DVec3::Y * 0.3).normalize();
+        self.mode = Mode::Normal;
+        self.ship.frame = place;
+        self.ship.rel = up * self.place_radius(place) * 1.25;
+        self.ship.vel = DVec3::ZERO;
+        self.ship.throttle = 0.0;
+        self.ship.rot = look_rotation(-self.ship.rel);
+        self.cam_rot = self.ship.rot;
+        self.target = None;
+        self.landing = None;
+        let amount = 12.0;
+        self.player.contracts.push(contracts::Contract {
+            offer: Offer {
+                from: cities[0],
+                to,
+                good: Good::Food,
+                amount,
+                jumps: 0,
+                trip_days: 1.0,
+                deadline: GalaxyTime::from_days(self.galaxy.time.days() + 30),
+                value: 900.0,
+                fee: 240.0,
+                shortage: 0.5,
+                urgent: false,
+            },
+            accepted: self.galaxy.time,
+        });
+        self.message = None;
+        Some(body)
     }
 
     /// Park in the first asteroid field of this system (or the nearest

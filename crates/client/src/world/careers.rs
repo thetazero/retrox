@@ -243,16 +243,10 @@ impl Bot {
             Place::Body(_) => {
                 let r = self.w.place_radius(place);
                 self.approach(place, r * 1.9);
+                // A body may have several cities: pick this one, as a
+                // player does in NAVIGATION.
+                self.w.act(Action::TargetCity(to));
                 self.w.act(Action::Land);
-                // A body may have several cities; the bot means this one
-                // (the landing prompt offers whichever is listed last).
-                if let Mode::Landed { body, timer, .. } = self.w.mode {
-                    self.w.mode = Mode::Landed {
-                        city: to,
-                        body,
-                        timer,
-                    };
-                }
                 self.idle(f64::from(LANDING_DURATION) + DT);
             }
             _ => unreachable!(),
