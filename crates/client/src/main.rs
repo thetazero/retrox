@@ -1789,26 +1789,21 @@ fn scene(
             .with_scorch(battle_scorch(world.combat.player.hull_left()))
             .own_hull(),
         ));
-        // Engine plumes, growing with the throttle.
-        let thrust = world.ship.throttle.max(0.0) as f32;
-        for &(nozzle, r) in meshes.ship_shape.nozzles.iter().filter(|_| thrust > 0.01) {
-            let len = r * (1.0 + 3.0 * thrust);
-            out.push((
-                meshes.sphere,
-                Instance::new(
-                    Mat4::from_scale_rotation_translation(
-                        Vec3::new(r * 0.8, r * 0.8, len),
-                        rot,
-                        rel(pos) + rot * (nozzle + Vec3::Z * len * 0.6),
-                    ),
-                    [0.35, 0.7, 1.0],
-                    Surface::Star,
-                    1.2 + 2.5 * thrust,
-                    0.0,
-                    [0.0, 1.0, 0.0, 1.0],
-                ),
-            ));
-        }
+        // Engine plumes: growing with the throttle, or in fast travel with
+        // how hard the drive is burning (issue #157).
+        let burn = match world.mode {
+            Mode::FastTravel(trip) => trip.burn,
+            _ => world.ship.throttle.max(0.0) as f32,
+        };
+        engine_plumes(
+            meshes,
+            &meshes.ship_shape.nozzles,
+            burn,
+            rot,
+            rel(pos),
+            [0.35, 0.7, 1.0],
+            &mut out,
+        );
         // The gas scoop open in a giant's clouds: the same plume NPC
         // skimmers trail.
         if world.skim.open {
@@ -1936,24 +1931,15 @@ fn traffic_scene(
                 )
                 .with_detail(0.5),
             ));
-            for &(nozzle, r) in shape.nozzles.iter().filter(|_| burn > 0.02) {
-                let len = r * (1.0 + 3.0 * burn);
-                out.push((
-                    meshes.sphere,
-                    Instance::new(
-                        Mat4::from_scale_rotation_translation(
-                            Vec3::new(r * 0.8, r * 0.8, len),
-                            q,
-                            rel(pos) + q * (nozzle + Vec3::Z * len * 0.6),
-                        ),
-                        [0.35, 0.7, 1.0],
-                        Surface::Star,
-                        1.2 + 2.5 * burn,
-                        0.0,
-                        [0.0, 1.0, 0.0, 1.0],
-                    ),
-                ));
-            }
+            engine_plumes(
+                meshes,
+                &shape.nozzles,
+                burn,
+                q,
+                rel(pos),
+                [0.35, 0.7, 1.0],
+                out,
+            );
         }
     }
 }
@@ -1999,25 +1985,51 @@ fn pirate_scene(
                 )
                 .with_detail(0.5),
             ));
-            for &(nozzle, r) in shape.nozzles.iter().filter(|_| burn > 0.02) {
-                let len = r * (1.0 + 3.0 * burn);
-                out.push((
-                    meshes.sphere,
-                    Instance::new(
-                        Mat4::from_scale_rotation_translation(
-                            Vec3::new(r * 0.8, r * 0.8, len),
-                            q,
-                            rel(pos) + q * (nozzle + Vec3::Z * len * 0.6),
-                        ),
-                        [1.0, 0.45, 0.25],
-                        Surface::Star,
-                        1.2 + 2.5 * burn,
-                        0.0,
-                        [0.0, 1.0, 0.0, 1.0],
-                    ),
-                ));
-            }
+            engine_plumes(
+                meshes,
+                &shape.nozzles,
+                burn,
+                q,
+                rel(pos),
+                [1.0, 0.45, 0.25],
+                out,
+            );
         }
+    }
+}
+
+/// A ship's engine plumes: one glowing flame astern of each nozzle,
+/// longer and brighter the harder it `burn`s (0..1), and none at all
+/// while it coasts.
+fn engine_plumes(
+    meshes: &Meshes,
+    nozzles: &[(Vec3, f32)],
+    burn: f32,
+    q: Quat,
+    at: Vec3,
+    color: [f32; 3],
+    out: &mut Vec<(MeshId, Instance)>,
+) {
+    if burn <= 0.02 {
+        return;
+    }
+    for &(nozzle, r) in nozzles {
+        let len = r * (1.0 + 3.0 * burn);
+        out.push((
+            meshes.sphere,
+            Instance::new(
+                Mat4::from_scale_rotation_translation(
+                    Vec3::new(r * 0.8, r * 0.8, len),
+                    q,
+                    at + q * (nozzle + Vec3::Z * len * 0.6),
+                ),
+                color,
+                Surface::Star,
+                1.2 + 2.5 * burn,
+                0.0,
+                [0.0, 1.0, 0.0, 1.0],
+            ),
+        ));
     }
 }
 

@@ -199,6 +199,10 @@ pub struct FastTravel {
     pub warp: f64,
     /// Real seconds since departure.
     pub elapsed: f32,
+    /// How hard the drive is burning, 0..1: the share of its acceleration
+    /// pushing along the ship's tail. Dark while the ship coasts or turns
+    /// over to brake; lit again as it brakes tail first.
+    pub burn: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

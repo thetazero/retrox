@@ -260,9 +260,11 @@ impl Traffic {
                     vel: g.vel,
                 };
             }
+            // Held where it arrived, or with nowhere to go, it isn't burning
+            // (issue #157): its engines go dark and it faces the way it drifts.
             let thrust = match goal(track.t_s) {
-                Some(g) => flight::autopilot(&track.ship, &g, accel, 1.0),
-                None => track.ship.vel,
+                Some(g) if !track.done => flight::autopilot(&track.ship, &g, accel, 1.0),
+                _ => [0.0; 3],
             };
             let mut fits = Vec::with_capacity(gang.ships.len());
             for h in &gang.ships {

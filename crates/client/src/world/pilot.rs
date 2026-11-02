@@ -232,6 +232,7 @@ impl World {
             depart_s: self.clock_s,
             warp: estimate / real,
             elapsed: 0.0,
+            burn: 0.0,
         });
     }
 
@@ -258,6 +259,7 @@ impl World {
             let k = 1.0 - (-4.0 * dt).exp();
             self.ship.rot = self.ship.rot.slerp(look_rotation(thrust), k).normalize();
         }
+        trip.burn = drive_burn(thrust, self.ship.rot, accel);
         let anchor = self.combat_anchor();
         self.ship.frame = Place::Star;
         self.ship.rel = pos;
@@ -418,4 +420,12 @@ impl World {
             }
         }
     }
+}
+
+/// How hard a ship's main engines burn, 0..1, pushing `thrust` m/s² with
+/// its nose at `rot` and `accel` m/s² to give: only the share along the
+/// nose counts, so the engines go dark while it turns over to brake.
+pub fn drive_burn(thrust: DVec3, rot: DQuat, accel: f64) -> f32 {
+    let along = thrust.dot(rot * DVec3::NEG_Z);
+    (along / accel.max(1e-9)).clamp(0.0, 1.0) as f32
 }
