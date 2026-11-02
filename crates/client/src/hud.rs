@@ -273,7 +273,7 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
                     Stroke::new(1.0, AMBER.gamma_multiply(0.6)),
                 );
             }
-            crate::widgets::shadowed_galley(&painter, rect.min + Vec2::splat(2.0), galley);
+            crate::widgets::plated_galley(&painter, rect.min + Vec2::splat(2.0), galley);
         }
 
         // Crosshair and stick position.

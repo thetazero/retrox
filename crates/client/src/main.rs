@@ -83,6 +83,11 @@ struct Flags {
     station: bool,
     /// Start in an asteroid field, facing a rock, prospected.
     field: bool,
+    /// Start in the field with the biggest sun in its sky, the sun behind
+    /// the rock (#156).
+    sunward: bool,
+    /// The window's size in logical pixels (`--size 1280x800`).
+    size: Option<(f64, f64)>,
     /// Start in space alongside a trader fleet.
     traffic: bool,
     /// Fly past a pirate gang's lair until it pulls the ship out of fast
@@ -160,7 +165,12 @@ impl Flags {
             undocked: has("--undocked"),
             cities: has("--cities"),
             station: has("--station"),
-            field: has("--field"),
+            field: has("--field") || has("--sunward"),
+            sunward: has("--sunward"),
+            size: value("--size").and_then(|s| {
+                let (w, h) = s.split_once('x')?;
+                Some((w.parse().ok()?, h.parse().ok()?))
+            }),
             traffic: has("--traffic"),
             interdict: has("--interdict"),
             convoy: has("--convoy") || has("--hostile-convoy"),
@@ -276,7 +286,12 @@ impl Flags {
         if self.cities && world.start_by_cities().is_none() {
             eprintln!("--cities: no planet with two cities anywhere");
         }
-        if self.field && world.start_at_field() {
+        let parked = if self.sunward {
+            world.start_sunward()
+        } else {
+            self.field && world.start_at_field()
+        };
+        if parked {
             world.act(Action::Scan);
         }
         if self.traffic {
@@ -470,18 +485,22 @@ impl ApplicationHandler for App {
         }
         let settings_path = settings::path();
         let settings = Settings::load(&settings_path);
+        let (width, height) = self.flags.size.unwrap_or((1600.0, 960.0));
         let window = Arc::new(
             event_loop
                 .create_window(
                     Window::default_attributes()
                         .with_title("retrox")
-                        .with_inner_size(winit::dpi::LogicalSize::new(1600.0, 960.0))
+                        .with_inner_size(winit::dpi::LogicalSize::new(width, height))
                         .with_fullscreen(
                             settings.fullscreen.then_some(Fullscreen::Borderless(None)),
                         ),
                 )
                 .expect("create window"),
         );
+        if self.flags.size.is_none() && !settings.fullscreen {
+            fit_to_monitor(&window);
+        }
         let mut renderer = Renderer::new(window.clone());
         let meshes = Meshes {
             sphere: renderer.add_mesh(&meshes::icosphere(5)),
@@ -500,7 +519,7 @@ impl ApplicationHandler for App {
 
         let egui_ctx = egui::Context::default();
         hud::style(&egui_ctx);
-        egui_ctx.set_zoom_factor(settings.ui_scale);
+        egui_ctx.set_zoom_factor(hud_zoom(settings.ui_scale, &window));
         let egui_state = egui_winit::State::new(
             egui_ctx.clone(),
             egui::ViewportId::ROOT,
@@ -628,7 +647,11 @@ impl ApplicationHandler for App {
             .consumed;
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::Resized(size) => r.renderer.resize(size.width, size.height),
+            WindowEvent::Resized(size) => {
+                r.renderer.resize(size.width, size.height);
+                r.egui_ctx
+                    .set_zoom_factor(hud_zoom(r.settings.ui_scale, &r.renderer.window));
+            }
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key {
                     match event.state {
@@ -958,7 +981,8 @@ impl Running {
                             .then_some(Fullscreen::Borderless(None)),
                     );
                 }
-                self.egui_ctx.set_zoom_factor(self.settings.ui_scale);
+                self.egui_ctx
+                    .set_zoom_factor(hud_zoom(self.settings.ui_scale, window));
                 if let Err(why) = self.settings.save(&self.settings_path) {
                     self.toast(why, false);
                 }
@@ -1568,6 +1592,45 @@ impl Running {
     }
 }
 
+/// The UI's zoom: the player's UI scale, shrunk in a window smaller than
+/// the 1600 × 960 the HUD is laid out for (#156), so its corner panels
+/// keep their room and never pile onto each other.
+fn hud_zoom(ui_scale: f32, window: &Window) -> f32 {
+    let size = window.inner_size().to_logical::<f32>(window.scale_factor());
+    if size.width <= 0.0 || size.height <= 0.0 {
+        return ui_scale;
+    }
+    let fit = (size.width / 1600.0)
+        .min(size.height / 960.0)
+        .clamp(0.6, 1.0);
+    ui_scale * fit
+}
+
+/// Shrinks a new window that came out bigger than its monitor, keeping its
+/// shape (#156): a window past the screen's edges loses the HUD's corner
+/// panels with them. Works in physical pixels, since a compositor's
+/// fractional scale isn't known until the window exists.
+fn fit_to_monitor(window: &Window) {
+    let Some(monitor) = window.current_monitor() else {
+        return;
+    };
+    let room = monitor.size();
+    let size = window.outer_size();
+    if room.width == 0 || room.height == 0 || size.width == 0 || size.height == 0 {
+        return;
+    }
+    // Room for the desktop's own bars round the window.
+    let fit = (room.width as f64 * 0.95 / size.width as f64)
+        .min(room.height as f64 * 0.9 / size.height as f64);
+    if fit < 1.0 {
+        let inner = window.inner_size();
+        let _ = window.request_inner_size(winit::dpi::PhysicalSize::new(
+            (inner.width as f64 * fit) as u32,
+            (inner.height as f64 * fit) as u32,
+        ));
+    }
+}
+
 /// Everything visible, positioned relative to the camera.
 fn scene(
     world: &World,
@@ -1585,11 +1648,17 @@ fn scene(
 
     // The star, never smaller than a small disc so it reads from anywhere.
     let star_r = world.star_radius_m().max(cam.length() * 0.0035);
-    let star_rgb = if world.star() == StarClass::BlackHole {
+    let black_hole = world.star() == StarClass::BlackHole;
+    let star_rgb = if black_hole {
         [0.02, 0.0, 0.03]
     } else {
         star_color(world.star())
     };
+    // A far star is a point that has to burn through the bloom; a near
+    // one is a disc whose surface should show, so it's exposed down as it
+    // grows (#156), like an eye adjusting.
+    let across = (star_r / cam.length().max(1.0)) as f32;
+    let brightness = 6.0 - 4.4 * smoothstep(0.004, 0.04, across);
     out.push((
         meshes.sphere,
         Instance::new(
@@ -1600,11 +1669,30 @@ fn scene(
             ),
             star_rgb,
             Surface::Star,
-            6.0,
+            brightness,
             0.0,
             [0.0, 1.0, 0.0, 1.0],
         ),
     ));
+    if !black_hole {
+        const CORONA: f32 = 3.0;
+        out.push((
+            meshes.sphere,
+            Instance::new(
+                Mat4::from_scale_rotation_translation(
+                    Vec3::splat(star_r as f32 * CORONA),
+                    Quat::IDENTITY,
+                    rel(DVec3::ZERO),
+                ),
+                star_rgb,
+                Surface::Corona,
+                brightness * 0.45,
+                world.system.index() as f32 % 1000.0,
+                [0.0, 1.0, 0.0, 1.0],
+            )
+            .with_detail(CORONA),
+        ));
+    }
 
     for &b in &world.view.bodies {
         let body = &world.galaxy.bodies[b];
@@ -2402,10 +2490,10 @@ fn mining_scene(
                     rel(pos),
                 ),
                 color,
-                Surface::Plain,
+                Surface::Rock,
                 // Glowing from the laser's work.
                 (rock.damage as f32).powi(2) * 0.25,
-                0.0,
+                (rock.seed % 10_000) as f32,
                 lit,
             ),
         ));
@@ -2474,13 +2562,19 @@ fn mining_scene(
                     rel(center + b.pos),
                 ),
                 glow,
-                Surface::Star,
-                5.0 * (1.0 - k).powi(2),
+                Surface::Flash,
+                if b.volatile { 3.0 } else { 1.6 },
                 0.0,
-                [0.0, 1.0, 0.0, 1.0],
+                [0.0, 1.0, 0.0, k],
             ),
         ));
     }
+}
+
+/// Hermite step from 0 at `a` to 1 at `b`.
+fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
+    let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 /// A ship on the hangar bay floor, the camera slowly circling it. The bay

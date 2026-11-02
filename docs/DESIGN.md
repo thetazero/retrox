@@ -1251,15 +1251,24 @@ Decided while bringing every screen into one style (issue #77):
   station under its body drops the body's name too (*Highport*), the
   bracket says whose it is. Names that still don't fit are cut to the
   pixel room left by the range and any tag, never to a fixed count.
-- **Text over the scene gets a backing** (#124): blocks of free-floating
-  text (the corner key strip, the readout on the rock under the reticle)
-  sit on a dark plate; single labels on markers and rocks get a dark drop
-  shadow, which keeps a crowded field light. The rock readout stands
+- **Text over the scene gets a backing** (#124, #156): blocks of
+  free-floating text (the corner key strip, the readout on the rock under
+  the reticle) sit on a dark plate; single labels on markers and rocks sit
+  on a tight opaque plate of their own, which can't be seen against black
+  space and keeps the label whole over a sunlit rock or a star. (A
+  one-pixel drop shadow, tried first, read as a ghosted second copy of
+  the text over anything bright.) The rock readout stands
   beside the rock's brackets (which close round the rock as it looks on
   screen), flipping to its left near the screen's edge, never over it.
   HUD panels are near opaque, menu pages fully opaque: the surface blends
   in linear light, so a bright station shows through far more than a
-  panel's alpha suggests.
+  panel's alpha suggests. Plates are near opaque for the same reason.
+- **The HUD fits the window** (#156): it is laid out for 1600 × 960, and
+  in a smaller window the whole UI zooms down with it (to no less than
+  0.6 of the player's UI scale) rather than letting corner panels pile
+  onto each other. A new window that comes out bigger than its monitor
+  is shrunk to fit, since a window past the screen's edges loses the
+  corner panels with them.
 - **The message banner fits its text** (#120): one line up to 760 px,
   wrapped only at spaces past that, centred under the top edge. It is
   painted straight onto a layer, not laid out in an egui `Area`, whose
@@ -1323,6 +1332,39 @@ Decided while fixing nearby stars that drew as blurred discs (issue #121):
   light-years off is a bigger version of the same, not a fog bank.
 - **The spikes lie on the diagonals**, fixed to the frame like a real
   lens's, so they never line up with the HUD's square-on reticle ticks.
+
+### 8.7 Asteroid fields
+
+Decided while making mining in a belt look finished (issue #156):
+
+- **Rock is dark stone**, not painted hull: its own surface, with an
+  albedo of a fifth or so, mottled light and dark, pitted and gritty by a
+  bump map that scales with the rock (a boulder and a quarry are equally
+  rough), and pale flecks close up. It takes a hard key light and only a
+  faint cool fill, so a rock with the sun behind it is a dark shape with
+  a lit edge. Fine detail fades out before it can sparkle.
+- **Laser heat glows out of cracks**, dull red going orange, spreading
+  over the rock only near the fracture: the rock stays rock.
+- **A breaking rock flashes, it doesn't cover the view**: a soft
+  additive puff, white-hot at the core for an instant and cooling to a
+  dusty cloud in the ore's colour, drawn over the scene without hiding
+  anything. (It used to be a solid glowing ball the size of the rock,
+  which from close up filled half the screen like a sun.)
+- **Rock tags**, not letters on rocks: a read rock gets a short leader
+  from its upper right edge to a plated tag, *ORE C* or *ICE B* (and
+  *VOLATILE* in red), bright when the laser reaches it, dim when it's a
+  flight away; up to 14, nearest first, never overlapping. The rock
+  under the reticle has its readout instead, and worked-out rocks go
+  untagged.
+- **Loose ore** is a small diamond: filled while the tractor has it,
+  hollow out of its reach, dim cream when the hold is full. The nearest
+  piece out of reach says how far it is (*LOOSE ORE · 196 m*), or *HOLD
+  FULL*.
+- **A near star shows its surface**: it is exposed down as its disc grows,
+  like an eye adjusting, so limb darkening (redder toward the edge),
+  granulation and the odd spot show rather than a flat white disc, and a
+  faint corona with streamers stands round it. A far star stays a point
+  that burns through the bloom (§8.6).
 
 ## 9. Technical architecture
 

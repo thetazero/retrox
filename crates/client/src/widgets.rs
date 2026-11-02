@@ -13,7 +13,11 @@ pub(crate) const CARD_FILL: Color32 = Color32::from_rgba_premultiplied(24, 18, 2
 pub(crate) const READOUT_FILL: Color32 = Color32::from_rgba_premultiplied(9, 7, 14, 205);
 /// The dark plate behind free-floating HUD text (key legend, the rock
 /// readout), so it reads over a bright planet or a pale rock (#124).
-pub(crate) const BACKING: Color32 = Color32::from_rgba_premultiplied(9, 7, 14, 232);
+/// Near opaque: the surface blends in linear light, so a bright sun
+/// shows through far more than the alpha suggests (#156).
+pub(crate) const BACKING: Color32 = Color32::from_rgba_premultiplied(9, 7, 14, 250);
+/// The plate under a single label over the scene ([`plated_galley`]).
+pub(crate) const LABEL_PLATE: Color32 = Color32::from_rgb(9, 7, 14);
 /// A plain button's face.
 pub(crate) const FACE: Color32 = Color32::from_rgb(30, 24, 34);
 
@@ -340,8 +344,8 @@ pub(crate) fn truncate(s: &str, n: usize) -> String {
     }
 }
 
-/// Text with a dark drop shadow, for labels floating over the scene.
-pub(crate) fn shadowed_text(
+/// Text on a tight dark plate, for labels floating over the scene.
+pub(crate) fn plated_text(
     painter: &egui::Painter,
     pos: Pos2,
     align: Align2,
@@ -351,24 +355,20 @@ pub(crate) fn shadowed_text(
 ) {
     let galley = painter.layout_no_wrap(text, font, color);
     let rect = align.anchor_size(pos, galley.size());
-    shadowed_galley(painter, rect.min, galley);
+    plated_galley(painter, rect.min, galley);
 }
 
-/// A laid-out label with a dark drop shadow under it.
-pub(crate) fn shadowed_galley(
+/// A laid-out label on a tight dark plate (#156). On black space the
+/// plate doesn't show; over a sunlit rock, a planet or a flash it keeps
+/// the label whole. (A one-pixel drop shadow read as a second, ghosted
+/// copy of the text over anything bright.)
+pub(crate) fn plated_galley(
     painter: &egui::Painter,
     at: Pos2,
     galley: std::sync::Arc<egui::Galley>,
 ) {
-    let shadow = Color32::from_black_alpha(220);
-    for d in [
-        Vec2::new(1.0, 1.0),
-        Vec2::new(0.0, 1.0),
-        Vec2::new(1.0, 0.0),
-        Vec2::new(-1.0, 0.0),
-    ] {
-        painter.galley_with_override_text_color(at + d, galley.clone(), shadow);
-    }
+    let plate = Rect::from_min_size(at, galley.size()).expand2(Vec2::new(4.0, 1.0));
+    painter.rect_filled(plate, 0.0, LABEL_PLATE);
     painter.galley(at, galley, CREAM);
 }
 

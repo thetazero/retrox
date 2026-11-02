@@ -11,9 +11,9 @@ use super::{
 use crate::mining::{self, LiveRock};
 use crate::world::{Mode, Place, World};
 
-/// Rock labels are drawn this close, nearest first, up to [`MAX_LABELS`].
+/// Rocks are tagged this close, nearest first, up to [`MAX_LABELS`].
 const LABEL_RANGE: f64 = 1500.0;
-const MAX_LABELS: usize = 40;
+const MAX_LABELS: usize = 14;
 
 fn good_color(good: Good) -> Color32 {
     match good {
@@ -68,6 +68,18 @@ pub(super) fn buyers(ui: &mut egui::Ui, w: &World, good: Good, tonnes: f64) {
     }
 }
 
+/// How big a ball of `radius` at `pos` looks on screen, in pixels, given
+/// where its centre lands (`p`).
+fn on_screen_radius(h: &HudInput, pos: glam::DVec3, radius: f64, p: Pos2, screen: Rect) -> f32 {
+    let rel = (pos - h.camera).as_vec3();
+    let across = rel
+        .cross(glam::Vec3::Y)
+        .try_normalize()
+        .unwrap_or(glam::Vec3::X);
+    super::project_any(h.view_proj, rel + across * radius as f32, screen)
+        .map_or(0.0, |e| (e - p).length())
+}
+
 /// Draws over the view while flying: markers in the world and the mining
 /// panel. Only when there's a laser fitted or a field to mine.
 pub fn draw(ctx: &egui::Context, h: &HudInput) {
@@ -81,64 +93,109 @@ pub fn draw(ctx: &egui::Context, h: &HudInput) {
     let ship = w.ship_position();
     let to_screen = |p: glam::DVec3| project(h.view_proj, (p - h.camera).as_vec3(), screen);
 
-    // Read rocks, labelled with their grade.
+    // Read rocks get a tag beside them (#156): what's in it, bright when
+    // the laser reaches it, dim when it's a flight away.
     if let Some((field, rocks)) = &w.field_rocks {
         let centre = w.position(Place::Field(*field));
         let f = &w.galaxy.fields[*field];
+        let aimed = w.mining.aim.map(|a| a.rock.id);
         let mut near: Vec<(f64, LiveRock)> = w
             .mining
             .live_rocks(*field, f, rocks, w.clock_s)
-            .filter(|r| r.scanned)
+            .filter(|r| r.scanned && !r.worked_out && Some(r.id) != aimed)
             .map(|r| ((centre + r.pos - ship).length() - r.radius, r))
             .filter(|(d, _)| *d < LABEL_RANGE)
             .collect();
         near.sort_by(|a, b| a.0.total_cmp(&b.0));
-        for (_, rock) in near.into_iter().take(MAX_LABELS) {
-            let Some(p) = to_screen(centre + rock.pos) else {
+        let mut taken: Vec<Rect> = Vec::new();
+        for (gap, rock) in near.into_iter().take(MAX_LABELS) {
+            let pos = centre + rock.pos;
+            let Some(p) = to_screen(pos) else {
                 continue;
             };
+            let in_reach = gap <= stats.mining_range_m;
             let color = if rock.lode.volatile {
                 ALARM
-            } else if rock.worked_out {
-                CREAM_DIM
             } else {
                 good_color(rock.lode.good)
             };
-            let text = if rock.worked_out {
-                "×".to_owned()
-            } else if rock.lode.volatile {
-                format!("{}!", rock.lode.grade_letter())
+            let color = if in_reach {
+                color
             } else {
-                rock.lode.grade_letter().to_string()
+                color.gamma_multiply(0.55)
             };
-            crate::widgets::shadowed_text(
-                &painter,
-                p,
-                Align2::CENTER_CENTER,
-                text,
-                mono(12.0),
-                color,
+            let mut text = format!(
+                "{} {}",
+                rock.lode.good.name().to_uppercase(),
+                rock.lode.grade_letter()
             );
+            if rock.lode.volatile {
+                text.push_str(" · VOLATILE");
+            }
+            // From the rock's upper right edge, as it looks on screen.
+            let r = on_screen_radius(h, pos, rock.radius, p, screen).clamp(3.0, 120.0);
+            let edge = p + Vec2::new(0.7, -0.7) * r;
+            let elbow = edge + Vec2::new(7.0, -7.0);
+            let galley = painter.layout_no_wrap(text, mono(11.0), color);
+            let at = elbow + Vec2::new(6.0, -galley.size().y / 2.0);
+            let rect = Rect::from_min_size(at, galley.size()).expand2(Vec2::new(4.0, 1.0));
+            if !screen.contains_rect(rect) || taken.iter().any(|t| t.intersects(rect)) {
+                continue;
+            }
+            taken.push(rect);
+            let ink = Stroke::new(1.0, color);
+            painter.line_segment([edge, elbow], ink);
+            painter.line_segment([elbow, elbow + Vec2::new(4.0, 0.0)], ink);
+            crate::widgets::plated_galley(&painter, at, galley);
         }
 
-        // Loose ore: small diamonds, so nothing is lost in the dark.
+        // Loose ore: a filled diamond while the tractor has it, hollow
+        // when it's out of reach, dim when the hold is full. The nearest
+        // piece out of reach says how far, so none is lost in the dark.
         if let Some(state) = w.mining.field(*field) {
+            let full = w.player.cargo_t() >= stats.cargo_t - 0.01;
+            let mut nearest: Option<(f64, Pos2, Good)> = None;
             for n in &state.nuggets {
                 let pos = centre + n.pos;
-                if (pos - ship).length() > 1500.0 {
+                let d = (pos - ship).length();
+                if d > LABEL_RANGE {
                     continue;
                 }
-                if let Some(p) = to_screen(pos) {
-                    let r = 3.0;
-                    painter.add(egui::Shape::closed_line(
-                        vec![
-                            p + Vec2::new(0.0, -r),
-                            p + Vec2::new(r, 0.0),
-                            p + Vec2::new(0.0, r),
-                            p + Vec2::new(-r, 0.0),
-                        ],
-                        Stroke::new(1.0, good_color(n.good)),
-                    ));
+                let Some(p) = to_screen(pos) else {
+                    continue;
+                };
+                let pulled = d < mining::TRACTOR_RANGE && !full;
+                let color = if full { CREAM_DIM } else { good_color(n.good) };
+                let r = 3.5;
+                let points = vec![
+                    p + Vec2::new(0.0, -r),
+                    p + Vec2::new(r, 0.0),
+                    p + Vec2::new(0.0, r),
+                    p + Vec2::new(-r, 0.0),
+                ];
+                if pulled {
+                    painter.add(egui::Shape::convex_polygon(points, color, Stroke::NONE));
+                } else {
+                    painter.add(egui::Shape::closed_line(points, Stroke::new(1.0, color)));
+                }
+                if !pulled && nearest.is_none_or(|(best, ..)| d < best) {
+                    nearest = Some((d, p, n.good));
+                }
+            }
+            if let Some((d, p, good)) = nearest {
+                let (text, color) = if full {
+                    ("HOLD FULL".to_owned(), CREAM_DIM)
+                } else {
+                    (
+                        format!("LOOSE {} · {}", good.name().to_uppercase(), distance(d)),
+                        good_color(good),
+                    )
+                };
+                let galley = painter.layout_no_wrap(text, mono(11.0), color);
+                let at = p + Vec2::new(10.0, -galley.size().y / 2.0);
+                let rect = Rect::from_min_size(at, galley.size()).expand2(Vec2::new(4.0, 1.0));
+                if !taken.iter().any(|t| t.intersects(rect)) {
+                    crate::widgets::plated_galley(&painter, at, galley);
                 }
             }
         }
@@ -203,14 +260,7 @@ pub fn draw(ctx: &egui::Context, h: &HudInput) {
             // The brackets close round the rock as it looks on screen, and
             // the readout stands beside them, not over the rock (issue
             // #124): it's read while aiming at the rock.
-            let rel = (pos - h.camera).as_vec3();
-            let across = rel
-                .cross(glam::Vec3::Y)
-                .try_normalize()
-                .unwrap_or(glam::Vec3::X);
-            let on_screen =
-                super::project_any(h.view_proj, rel + across * rock.radius as f32, screen)
-                    .map_or(0.0, |e| (e - p).length());
+            let on_screen = on_screen_radius(h, pos, rock.radius, p, screen);
             let size = (on_screen + 8.0).clamp(26.0, screen.height() * 0.3);
             brackets(
                 &painter,

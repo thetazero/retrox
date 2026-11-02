@@ -40,6 +40,8 @@ struct VOut {
     @location(5) shade: f32,
     @location(6) view_dir: vec3<f32>,
     @location(7) paint: f32,
+    // Camera-relative world position.
+    @location(8) wpos: vec3<f32>,
 };
 
 @vertex
@@ -56,6 +58,7 @@ fn vs(v: VIn) -> VOut {
     o.shade = v.shade;
     o.view_dir = normalize(-world.xyz);
     o.paint = v.paint;
+    o.wpos = world.xyz;
     return o;
 }
 
@@ -109,10 +112,13 @@ const ICE: u32 = 5u;
 const LAVA: u32 = 6u;
 const DESERT: u32 = 7u;
 const BARREN: u32 = 8u;
+const ROCK: u32 = 9u;
 // Glows (fs_glow, additive).
 const SHIELD: u32 = 20u;
 const FIRE: u32 = 21u;
 const RING: u32 = 22u;
+const FLASH: u32 = 23u;
+const CORONA: u32 = 24u;
 
 // Paints for built things (must match meshes.rs).
 const HULL: u32 = 0u;
@@ -263,6 +269,92 @@ fn built(i: VOut, n: vec3<f32>, mu: f32, fw: vec3<f32>) -> vec3<f32> {
     return color;
 }
 
+// fbm with each octave faded out as it nears the pixel size: `w` is the
+// pixel's footprint in units of `p`.
+fn fbm_aa(p: vec3<f32>, w: f32) -> f32 {
+    var sum = 0.0;
+    var amp = 0.5;
+    var q = p;
+    var f = 1.0;
+    for (var i = 0; i < 5; i = i + 1) {
+        let keep = 1.0 - smoothstep(0.2, 0.5, f * w);
+        // A faded octave leaves its average behind.
+        sum = sum + amp * mix(0.5, noise(q), keep);
+        q = OCTAVE * q * 2.02;
+        f = f * 2.02;
+        amp = amp * 0.5;
+    }
+    return sum;
+}
+
+// Rock height for the bump: lumps, pits and grit, in object space, each
+// faded out before it aliases (`w`: the pixel's footprint in `p` units).
+fn rock_height(p: vec3<f32>, w: f32) -> f32 {
+    let lumps = fbm_aa(p * 3.0, w * 3.0);
+    let pits = smoothstep(0.55, 0.75, noise(p * 7.0)) * (1.0 - smoothstep(0.1, 0.3, w * 7.0));
+    let grit = (noise(p * 22.0) - 0.5) * (1.0 - smoothstep(0.15, 0.4, w * 22.0));
+    return lumps * 0.6 - pits * 0.35 + grit * 0.15;
+}
+
+// Bare rock: dark, mottled regolith over faceted stone, bump-mapped,
+// lit hard by the sun with only a faint cool fill, so a rock with the sun
+// behind it is a dark shape with a lit edge, not a pale slab.
+fn rock(i: VOut, n0: vec3<f32>, dox: vec3<f32>, doy: vec3<f32>, dwx: vec3<f32>, dwy: vec3<f32>) -> vec3<f32> {
+    let s = i.params.z;
+    let p = i.obj * 1.7 + vec3<f32>(s % 13.0, s % 7.0, s % 5.0);
+    let w = max(length(dox), length(doy)) * 1.7;
+    // Bump: the height's gradient by finite differences in object space,
+    // carried to the screen through the position derivatives (surface
+    // gradient, Mikkelsen 2010).
+    let e = 0.01;
+    let h0 = rock_height(p, w);
+    let gobj = vec3<f32>(
+        rock_height(p + vec3<f32>(e, 0.0, 0.0), w) - h0,
+        rock_height(p + vec3<f32>(0.0, e, 0.0), w) - h0,
+        rock_height(p + vec3<f32>(0.0, 0.0, e), w) - h0,
+    ) / e * 1.7;
+    let dhx = dot(gobj, dox);
+    let dhy = dot(gobj, doy);
+    let r1 = cross(dwy, n0);
+    let r2 = cross(n0, dwx);
+    let det = dot(dwx, r1);
+    var n = n0;
+    if (abs(det) > 1e-12) {
+        let grad = sign(det) * (dhx * r1 + dhy * r2);
+        // Heights scale with the rock (metres per object unit), so a
+        // boulder and a quarry are equally rough.
+        let metres = length(dwx) / max(length(dox), 1e-9);
+        n = normalize(abs(det) * n0 - grad * 0.06 * metres);
+    }
+    let mu = max(dot(n, i.view_dir), 0.0);
+
+    // Albedo: the rock's tint, mottled light and dark, darker in the pits,
+    // with pale flecks of mineral close up.
+    let mottle = fbm_aa(p * 1.3 + vec3<f32>(4.0), w * 1.3);
+    // Asteroids are dark: a fifth of the light or less comes back.
+    var base = i.color.rgb * 0.5 * (0.45 + 0.9 * mottle);
+    base = base * (0.6 + 0.7 * smoothstep(-0.1, 0.35, h0));
+    let fleck = step(0.9, noise(p * 30.0)) * (1.0 - smoothstep(0.1, 0.3, w * 30.0));
+    base = mix(base, vec3<f32>(0.62, 0.6, 0.55), fleck * 0.45);
+
+    let light_color = mix(vec3<f32>(1.0), g.star_color.rgb, 0.4);
+    let ndl = dot(n, i.light.xyz);
+    let lit = max(ndl, 0.0) * i.light.w;
+    // Faint fill from the sky so the dark side keeps its shape.
+    let fill = ambient_light(n) * 0.9;
+    // Grazing sunlight catches the edges facing it.
+    let edge = pow(1.0 - mu, 3.0) * smoothstep(-0.2, 0.3, ndl) * 0.25;
+    var color = base * (lit * light_color * 1.1 + fill) + edge * light_color * base * 2.0;
+    // Heat from the laser's work glows out of the cracks first, then
+    // spreads, dull red to orange; the rock stays rock.
+    let heat = clamp(i.params.y * 4.0, 0.0, 1.0);
+    let crack = 1.0 - smoothstep(0.0, 0.03, abs(fbm_aa(p * 2.2 + vec3<f32>(9.0), w * 2.2) - 0.5));
+    let glow = crack * smoothstep(0.0, 0.6, heat) + smoothstep(0.6, 1.0, heat) * 0.12;
+    let hot = mix(vec3<f32>(0.7, 0.12, 0.03), vec3<f32>(1.0, 0.45, 0.12), heat);
+    color = color + hot * glow * 1.1;
+    return color;
+}
+
 // Additive glows over the solid scene. light.w is how far through its
 // life the glow is (0..1); params.y its strength.
 @fragment
@@ -303,6 +395,28 @@ fn fs_glow(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32
         let edge = smoothstep(0.05, 0.35, mu);
         return vec4<f32>(c * heat * edge * fade * i.params.y, 1.0);
     }
+    if (mode == FLASH) {
+        // A rock breaking: a hot white core that cools to the ore's colour
+        // and thins to nothing at the edge, so it lights what's round it
+        // without hiding it.
+        let dust = smoothstep(0.3, 0.75, fbm(i.obj * 2.5 + vec3<f32>(i.params.z, 0.0, t * 0.5)));
+        let core = pow(mu, 6.0) * (1.0 - smoothstep(0.0, 0.5, k));
+        let puff = pow(mu, 1.5) * dust * 0.35;
+        let hot = mix(vec3<f32>(1.0, 0.92, 0.8), i.color.rgb, smoothstep(0.0, 0.35, k));
+        return vec4<f32>(hot * (core * 2.0 + puff) * fade * i.params.y, 1.0);
+    }
+    if (mode == CORONA) {
+        // A star's corona, on a shell params.w times the star's radius:
+        // light falling off from the limb, combed into faint streamers.
+        let b = sqrt(max(1.0 - mu * mu, 0.0)) * i.params.w;
+        if (b < 1.0) { discard; }
+        let h = b - 1.0;
+        let around = normalize(i.obj - i.view_dir * dot(i.obj, i.view_dir) + vec3<f32>(1e-5));
+        let streamers = 0.65 + 0.35 * fbm(around * 2.5 + vec3<f32>(i.params.z * 0.01));
+        let glow = (exp(-h * 9.0) * 0.8 + exp(-h * 2.2) * 0.2 * streamers) * streamers;
+        let edge = 1.0 - smoothstep(0.7, 1.0, b / i.params.w);
+        return vec4<f32>(i.color.rgb * glow * edge * i.params.y, 1.0);
+    }
     // RING: lit at the rim.
     let rim = pow(1.0 - mu, 2.0);
     return vec4<f32>(i.color.rgb * rim * fade * i.params.y, 1.0);
@@ -312,6 +426,12 @@ fn fs_glow(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32
 fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     let mode = u32(round(i.params.x));
     let fw = fwidth(i.obj * max(i.params.w, 0.0001));
+    // For bump-mapped rock: how object and world positions change across
+    // the pixel (taken here, in uniform control flow).
+    let dox = dpdx(i.obj);
+    let doy = dpdy(i.obj);
+    let dwx = dpdx(i.wpos);
+    let dwy = dpdy(i.wpos);
     // The pilot's own hull (seed < 0) is cut away round the target behind
     // it, like a cutaway on a technical drawing, so what you're shooting
     // at is never hidden (#123). The cut's edge is inked in amber, the
@@ -336,15 +456,25 @@ fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     if (mode == PLAIN) {
         return vec4<f32>(built(i, n, mu, fw), 1.0);
     }
+    if (mode == ROCK) {
+        return vec4<f32>(rock(i, n, dox, doy, dwx, dwy), 1.0);
+    }
 
     // Per-body offset into noise space (seed is an integer < 10000).
     let s = i.params.z;
     let p = i.obj + vec3<f32>(s % 97.0, (s / 97.0) % 89.0, s * 0.37 % 83.0);
 
     if (mode == STAR) {
-        let limb = 0.55 + 0.45 * pow(mu, 0.5);
-        let granules = 0.9 + 0.1 * fbm(p * 12.0 + vec3<f32>(g.misc.x * 0.02));
-        return vec4<f32>(i.color.rgb * i.params.y * limb * granules, 1.0);
+        // Limb darkening, redder toward the edge; granulation and a few
+        // faculae, faded out where the disc is too small to show them.
+        let limb = 0.35 + 0.65 * pow(mu, 0.6);
+        let fine = 1.0 - smoothstep(0.05, 0.3, max(fw.x, max(fw.y, fw.z)) * 12.0);
+        let cells = fbm(p * 18.0 + vec3<f32>(g.misc.x * 0.03));
+        let granules = 1.0 + (cells - 0.5) * 0.35 * fine;
+        let spots = smoothstep(0.7, 0.78, fbm(p * 3.0 + vec3<f32>(17.0))) * fine;
+        let warm = mix(vec3<f32>(1.0, 0.45, 0.2), vec3<f32>(1.0), smoothstep(0.0, 0.8, mu));
+        let disc = i.color.rgb * warm * limb * granules * (1.0 - 0.55 * spots);
+        return vec4<f32>(disc * i.params.y, 1.0);
     }
 
     var base = i.color.rgb * i.shade;

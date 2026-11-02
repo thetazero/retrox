@@ -1482,11 +1482,7 @@ impl World {
     /// hundred metres off. Returns whether there was one.
     pub fn park_in(&mut self, field: FieldId) -> bool {
         let rocks = rocks(&self.galaxy.fields[field]);
-        let Some(rock) = rocks
-            .iter()
-            .filter(|r| (12.0..40.0).contains(&r.radius_m))
-            .min_by(|a, b| rock_offset(a).length().total_cmp(&rock_offset(b).length()))
-        else {
+        let Some(rock) = parking_rock(&rocks) else {
             return false;
         };
         let at = rock_offset(rock);
@@ -1500,6 +1496,49 @@ impl World {
         self.cam_rot = self.ship.rot;
         self.target = Some(Place::Field(field));
         self.message = None;
+        self.update_field();
+        true
+    }
+
+    /// Start in the field whose sun looks biggest from it, parked with the
+    /// sun right behind the rock (`--sunward`, for screenshots of #156).
+    pub fn start_sunward(&mut self) -> bool {
+        let biggest = self.galaxy.fields.iter().max_by(|a, b| {
+            let size = |f: &retrox_sim::AsteroidField| {
+                let system = self.galaxy.bodies[f.belt].system;
+                let star = self.galaxy.systems[system].star;
+                let at = self.galaxy.orbit_position(system, &f.orbit, self.t_days());
+                let au = (at[0] * at[0] + at[1] * at[1] + at[2] * at[2]).sqrt();
+                star.radius_suns() / au.max(1e-3)
+            };
+            size(a.1).total_cmp(&size(b.1))
+        });
+        let Some((field, f)) = biggest else {
+            return false;
+        };
+        let system = self.galaxy.bodies[f.belt].system;
+        if system != self.system {
+            self.arrive_jump(system);
+        }
+        if !self.park_in(field) {
+            return false;
+        }
+        let across =
+            2.0 * (self.star_radius_m() / self.position(Place::Field(field)).length()).atan();
+        eprintln!("--sunward: the sun is {:.1}° across", across.to_degrees());
+        // Swing round the rock to its far side from the sun.
+        let rocks = rocks(&self.galaxy.fields[field]);
+        let Some(rock) = parking_rock(&rocks) else {
+            return false;
+        };
+        let centre = rock_offset(rock);
+        let sun = (-self.position(Place::Field(field))).normalize();
+        let off = (self.ship.rel - centre).length();
+        // A little above the line, so the rock sits low against the disc.
+        let back = (-sun + DVec3::Y * 0.15).normalize();
+        self.ship.rel = centre + back * off;
+        self.ship.rot = look_rotation(centre - self.ship.rel);
+        self.cam_rot = self.ship.rot;
         self.update_field();
         true
     }
@@ -1692,6 +1731,15 @@ impl World {
 /// Sim AU (system plane x/y) to client metres (system plane x/z, y up).
 pub fn to_metres(p: [f64; 3]) -> DVec3 {
     DVec3::new(p[0], p[2], p[1]) * AU
+}
+
+/// The rock [`World::park_in`] parks by: the mid-sized one nearest the
+/// field's centre.
+fn parking_rock(rocks: &[Rock]) -> Option<&Rock> {
+    rocks
+        .iter()
+        .filter(|r| (12.0..40.0).contains(&r.radius_m))
+        .min_by(|a, b| rock_offset(a).length().total_cmp(&rock_offset(b).length()))
 }
 
 pub fn rock_offset(rock: &Rock) -> DVec3 {

@@ -29,6 +29,9 @@ pub enum Surface {
     Ice = 5,
     Desert = 7,
     Barren = 8,
+    /// Bare rock: mottled and bump-mapped (asteroids). `emissive` is the
+    /// laser's heat.
+    Rock = 9,
     /// Glows, drawn additively after everything solid (see `fs_glow`): a
     /// shield bubble lit round a hit (`light.xyz`: the hit's direction in
     /// object space, `light.w`: 0..1 through its life).
@@ -37,6 +40,11 @@ pub enum Surface {
     Fire = 21,
     /// A rim-lit shell: shockwave rings, haloes.
     Ring = 22,
+    /// A rock breaking: a soft hot puff that cools to `color`, `light.w`
+    /// 0..1 through its life.
+    Flash = 23,
+    /// A star's corona, on a shell `detail` times the star's radius.
+    Corona = 24,
 }
 
 #[repr(C)]
