@@ -1,5 +1,4 @@
 {
-  "labels": ["approve"],
   "ci": true,
   "command": "gh pr merge {pr} --squash --delete-branch"
 }
