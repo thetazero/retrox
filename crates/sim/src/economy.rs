@@ -164,7 +164,23 @@ pub struct Facility {
     pub kind: FacilityKind,
     /// Units of the recipe run per day at full capacity.
     pub scale: f64,
+    /// How much of capacity it has been running at, averaged over about a
+    /// season. Long-idle facilities decay.
+    pub utilization: f64,
 }
+
+impl Facility {
+    pub const fn new(kind: FacilityKind, scale: f64) -> Self {
+        Self {
+            kind,
+            scale,
+            utilization: 1.0,
+        }
+    }
+}
+
+/// Days over which a facility's utilization is averaged.
+const UTILIZATION_DAYS: f64 = 90.0;
 
 /// Daily consumption per unit of population.
 pub const PER_CAPITA_DEMAND: [(Good, f64); 3] = [
@@ -179,6 +195,16 @@ pub const HULL_T_PER_RUN: f64 = 1.0;
 pub const HULL_STORAGE_DAYS: f64 = 120.0;
 /// What a tonne of finished hull sells for, in credits.
 pub const HULL_PRICE_PER_T: f64 = 60.0;
+
+/// A facility under construction: what it will be, and the materials it
+/// still needs.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Project {
+    pub kind: FacilityKind,
+    /// Scale added when finished.
+    pub scale: f64,
+    pub needs: GoodMap<f64>,
+}
 
 /// Daily consumption of `good` per unit of population.
 pub fn per_capita(good: Good) -> f64 {
@@ -245,6 +271,8 @@ pub struct LocalEconomy {
     pub hunger: f64,
     /// Whether the settlement is in famine.
     pub famine: bool,
+    /// The facility being built here, if any.
+    pub project: Option<Project>,
     /// Finished ship hull ready for sale, in tonnes. Built by shipyards.
     pub hull_t: f64,
     /// The settlement's money, in credits. Trade only moves money; nothing
@@ -265,6 +293,12 @@ impl LocalEconomy {
                 demand[good] += amount * facility.scale;
             }
         }
+        // A project wants its materials over the next month or so.
+        if let Some(project) = &self.project {
+            for good in Good::ALL {
+                demand[good] += project.needs[good] / crate::construction::BUILD_DAYS;
+            }
+        }
         self.market.demand = demand;
     }
 
@@ -273,7 +307,7 @@ impl LocalEconomy {
         let market = &mut self.market;
         market.shortfall = GoodMap::splat(0.0);
 
-        for facility in &self.facilities {
+        for facility in &mut self.facilities {
             let recipe = facility.kind.recipe();
             // Run as much of the recipe as inputs and storage allow.
             let mut rate: f64 = 1.0;
@@ -294,6 +328,7 @@ impl LocalEconomy {
                 rate = 0.0;
             }
             let rate = rate.clamp(0.0, 1.0);
+            facility.utilization += (rate - facility.utilization) / UTILIZATION_DAYS;
             for &(good, amount) in recipe.inputs {
                 let need = amount * facility.scale;
                 market.stock[good] -= need * rate;
