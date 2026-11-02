@@ -1615,6 +1615,25 @@ Decided while making mining in a belt look finished (issue #156):
   nearest, so a miner can find one. Every field has quarries (about one
   rock in ten is over 60 m), but rarely within 1.5 km of where fast
   travel stops, which read as "this belt has none".
+Decided while making a belt look like one (issue #182):
+
+- **Rocks are broken pieces, not eggs**: lumpy, stretched, with flat
+  fracture faces where pieces came off, craters and chips, in many
+  shapes. The shape the ship, laser and ore meet is the one drawn.
+- **Rock stays sharp at any distance**: finer meshes as it nears, and
+  its relief, craters and stone from its own size down to the pixel,
+  in metres, so a quarry up close has no straight edges or stretched
+  texture.
+- **Veins are seams of ore in the rock**, not lamps on it: a stained
+  patch the size of the laser's "on a vein" mark with stringers glowing
+  out of it, amber ore, pale blue ice, pulsing red if volatile.
+- **A belt is dense and deep**: gravel and boulders too small to mine
+  fill the space between the rocks, thinning toward the edge, and
+  sunlit dust veils the distance and glows round the sun. None of it
+  ever looks like a rock to mine: far boulders shrink away as the ship
+  nears, and gravel keeps its distance.
+- **Laser heat glows round the cut**, never over a whole quarry face.
+
 - **Loose ore** is a small diamond: filled while the tractor has it,
   hollow out of its reach, dim cream when the hold is full. The nearest
   piece out of reach says how far it is (*LOOSE ORE · 196 m*), or *HOLD
