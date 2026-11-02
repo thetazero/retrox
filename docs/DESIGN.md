@@ -1174,7 +1174,35 @@ Decided while bringing every screen into one style (issue #77):
   from screen to screen.
 - **Counts and estimates read as words:** "1 jump", "this system",
   "1 settlement"; an estimated trip is "about 39 d". Never "~": in the
-  mono face it reads as a minus sign.
+  mono face it reads as a minus sign. Nor "≈": the mono face has no such
+  glyph and draws "=" (so "ABOUT 0.6 T PER FRACTURE").
+- **NAVIGATION is a tree of where you go** (#119): the star, then each
+  body with what hangs off it, one step in per level: its cities, the
+  stations in orbit round it, then its moons with theirs. Stations round
+  the star follow under STATIONS; fields come last under FIELDS, since a
+  system can have a dozen and nobody docks at one. In the list and on the
+  markers in space a field or station drops the system's name (the
+  panel's own context) and a field drops "field": *Outer Belt A*. A
+  station under its body drops the body's name too (*Highport*), the
+  bracket says whose it is. Names that still don't fit are cut to the
+  pixel room left by the range and any tag, never to a fixed count.
+- **Text over the scene gets a backing** (#124): blocks of free-floating
+  text (the corner key strip, the readout on the rock under the reticle)
+  sit on a dark plate; single labels on markers and rocks get a dark drop
+  shadow, which keeps a crowded field light. The rock readout stands
+  beside the rock's brackets (which close round the rock as it looks on
+  screen), flipping to its left near the screen's edge, never over it.
+  HUD panels are near opaque, menu pages fully opaque: the surface blends
+  in linear light, so a bright station shows through far more than a
+  panel's alpha suggests.
+- **The message banner fits its text** (#120): one line up to 760 px,
+  wrapped only at spaces past that, centred under the top edge. It is
+  painted straight onto a layer, not laid out in an egui `Area`, whose
+  remembered width otherwise narrows the next message.
+- **Keys painted into a row stay inside it** (#125): a row's push key is
+  placed from the row's own rect, and the rest of the row shares out what
+  is left. Panels never use a centred horizontal layout, which stretches
+  to the panel's previous height and leaves a band of empty panel.
 
 ### 8.5 Sound
 
