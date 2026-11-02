@@ -16,7 +16,6 @@ pub enum Cue {
     Switch,
     /// A softer VFD beep: menu cursor, target cycling.
     Tick,
-    Confirm,
     Back,
     /// A small relay: course plotting, instrument steps.
     Relay,
@@ -79,10 +78,9 @@ pub enum Cue {
 }
 
 impl Cue {
-    pub const ALL: [Cue; 36] = [
+    pub const ALL: [Cue; 35] = [
         Cue::Switch,
         Cue::Tick,
-        Cue::Confirm,
         Cue::Back,
         Cue::Relay,
         Cue::Teletype,
@@ -135,7 +133,7 @@ impl Cue {
     pub fn gain(self) -> f32 {
         match self {
             Cue::Tick => 0.22,
-            Cue::Confirm | Cue::Back | Cue::Cooled => 0.25,
+            Cue::Back | Cue::Cooled => 0.25,
             Cue::Relay | Cue::Teletype => 0.3,
             Cue::Switch => 0.42,
             Cue::Comms => 0.38,
@@ -162,7 +160,7 @@ impl Cue {
     /// The share sent to the reverb: instruments dry, big events wet.
     pub fn wet(self) -> f32 {
         match self {
-            Cue::Tick | Cue::Confirm | Cue::Back | Cue::Switch | Cue::Relay | Cue::Teletype => 0.08,
+            Cue::Tick | Cue::Back | Cue::Switch | Cue::Relay | Cue::Teletype => 0.08,
             Cue::Comms => 0.05,
             Cue::Scan | Cue::Delivered | Cue::Clank => 0.5,
             Cue::Fracture | Cue::Blast | Cue::JumpArrive | Cue::Lost => 0.35,
@@ -335,7 +333,6 @@ fn render(cue: Cue, seed: u64, variant: usize) -> Vec<f32> {
             buf
         }
         Cue::Tick => beep(0.07, &[(0.0, 1320.0)], 0.4),
-        Cue::Confirm => beep(0.22, &[(0.0, 880.0), (0.075, 1320.0)], 0.4),
         Cue::Back => beep(0.18, &[(0.0, 1320.0), (0.065, 880.0)], 0.4),
         Cue::Relay => {
             let ring = 1700.0 + v * 260.0;

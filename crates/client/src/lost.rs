@@ -55,7 +55,7 @@ impl LostInfo {
             hull: world.player.ship.fit.hull().name,
             place: place.strip_prefix("in space ").unwrap_or(&place).to_owned(),
             date: world.date().to_string(),
-            by_raiders: world.combat.field.is_some(),
+            by_raiders: !world.combat.raiders.is_empty(),
             clock_s: world.clock_s,
             checkpoint,
         }
@@ -98,16 +98,6 @@ pub fn earlier(seconds: f64) -> String {
         format!("{hours:.0} h earlier")
     } else {
         format!("{:.0} min earlier", (s / 60.0).max(1.0))
-    }
-}
-
-fn truncate(s: &str, n: usize) -> String {
-    if s.chars().count() <= n {
-        s.to_owned()
-    } else {
-        let mut out: String = s.chars().take(n - 1).collect();
-        out.push('…');
-        out
     }
 }
 
@@ -163,7 +153,7 @@ pub fn card(ctx: &egui::Context, info: &LostInfo, t: f64) -> Option<Choice> {
     );
     // The ship's plate, riveted to the band beside the title. The name
     // alone when it already says what the hull is ("Courier no. 1").
-    let name = truncate(&info.ship.to_uppercase(), 26);
+    let name = widgets::truncate(&info.ship.to_uppercase(), 26);
     let plate_text = if name.contains(&info.hull.to_uppercase()) {
         name
     } else {
@@ -264,7 +254,7 @@ pub fn card(ctx: &egui::Context, info: &LostInfo, t: f64) -> Option<Choice> {
             painter.text(
                 Pos2::new(x, panel.top() + 76.0),
                 Align2::LEFT_TOP,
-                truncate(&place.to_uppercase(), 34),
+                widgets::truncate(&place.to_uppercase(), 34),
                 mono(14.0),
                 CREAM.gamma_multiply(a),
             );
@@ -641,7 +631,7 @@ pub fn rewind(ctx: &egui::Context, r: &Rewind) {
     painter.text(
         Pos2::new(panel.center().x, cy + 40.0),
         Align2::CENTER_TOP,
-        truncate(&r.place.to_uppercase(), 36),
+        widgets::truncate(&r.place.to_uppercase(), 36),
         mono(14.0),
         CREAM,
     );
@@ -654,19 +644,21 @@ pub fn rewind(ctx: &egui::Context, r: &Rewind) {
     );
     let rewinding = e < REWIND_S - 0.15;
     let blink = (e * 3.0).fract() < 0.6;
-    lamp(
+    widgets::lamp_at(
         &painter,
         Pos2::new(panel.center().x - 52.0, cy + 96.0),
         "◀◀",
         rewinding && blink,
         AMBER,
+        Some(40.0),
     );
-    lamp(
+    widgets::lamp_at(
         &painter,
         Pos2::new(panel.center().x + 12.0, cy + 96.0),
         "▶",
         !rewinding,
         VFD,
+        Some(40.0),
     );
 }
 
@@ -725,24 +717,6 @@ fn reel(painter: &egui::Painter, c: Pos2, r: f32, pack: f32, angle: f32) {
             Stroke::new(2.0, INK),
         );
     }
-}
-
-fn lamp(painter: &egui::Painter, at: Pos2, text: &str, lit: bool, color: Color32) {
-    let g = painter.layout_no_wrap(text.to_owned(), mono(13.0), color);
-    let rect = Rect::from_min_size(at, Vec2::new(40.0, g.size().y + 8.0));
-    if lit {
-        painter.rect_filled(rect.expand(3.0), 0.0, color.gamma_multiply(0.18));
-        painter.rect_filled(rect, 0.0, color);
-    } else {
-        painter.rect_stroke(
-            rect,
-            0.0,
-            Stroke::new(1.0, color.gamma_multiply(0.35)),
-            StrokeKind::Inside,
-        );
-    }
-    let text_color = if lit { INK } else { color.gamma_multiply(0.45) };
-    painter.galley_with_override_text_color(rect.center() - g.size() / 2.0, g, text_color);
 }
 
 /// Back at the checkpoint: the black lifts off the dock.

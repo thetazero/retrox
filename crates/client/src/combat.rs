@@ -389,7 +389,6 @@ impl Vessel {
             1.0
         };
         let firing = trigger && !self.locked && !self.guns.is_empty() && self.gun_power > 0.05;
-        self.firing = firing;
         let gun_heat: f64 = self.guns.iter().map(|g| g.heat_mw).sum::<f64>() * self.gun_power;
         let made = self.base.heat
             + self.engines.heat * burn
@@ -403,6 +402,9 @@ impl Vessel {
         if self.locked && self.heat <= capacity * UNLOCK_HEAT {
             self.locked = false;
         }
+        // The volley that reaches capacity locks the guns before it fires.
+        let firing = firing && !self.locked;
+        self.firing = firing;
         let mut fired = Vec::new();
         for (i, g) in self.guns.iter_mut().enumerate() {
             g.cooldown = (g.cooldown - dt).max(-1.0);
@@ -414,9 +416,6 @@ impl Vessel {
                 fired.push(i);
                 g.cooldown += 1.0 / (g.rate * self.gun_power.max(0.05));
             }
-        }
-        if self.locked {
-            self.firing = false;
         }
         fired
     }
@@ -670,8 +669,6 @@ pub struct Combat {
     pub since_scored: f64,
     pub since_shield_hit: f64,
     pub since_hull_hit: f64,
-    /// Which way the last hit on the player came from (ship space).
-    pub hit_from: DVec3,
     /// Running counts of what happened, for the sound to follow: the
     /// player's shells and pulses, everyone else's, hits on the player's
     /// shield and hull, and ships blown up.
@@ -680,9 +677,8 @@ pub struct Combat {
     kills: Vec<(u32, Crew)>,
     hits: Vec<(u32, bool)>,
     next_trader: u32,
-    /// Laser hits waiting to land this frame: who, how hard, where, which
-    /// way.
-    pending: Vec<(Side, f64, DVec3, DVec3)>,
+    /// Laser hits waiting to land this frame: who, how hard, where.
+    pending: Vec<(Side, f64, DVec3)>,
     said: Vec<String>,
     dropped: Vec<(DVec3, DVec3, Good, f64, u64)>,
     /// Nothing has happened since [`Combat::new`]: the ship is as a
@@ -709,7 +705,6 @@ impl Combat {
             since_scored: 10.0,
             since_shield_hit: 10.0,
             since_hull_hit: 10.0,
-            hit_from: DVec3::NEG_Z,
             tally: Tally::default(),
             rng: Rng::new(0x636f_6d62),
             kills: Vec::new(),
@@ -730,8 +725,13 @@ impl Combat {
         if self.fresh && self.player.fit == *fit && self.player.damage == *damage {
             return;
         }
-        let mut c = Combat::new(fit.clone(), damage.clone());
-        // The sound follows these counts; they only go up.
+        self.rebuild(fit.clone(), damage.clone());
+    }
+
+    /// A fresh fight for a changed ship (a refit, a repair, a rest). The
+    /// tally stays: the sound follows those counts, so they only go up.
+    pub fn rebuild(&mut self, fit: Loadout, damage: Damage) {
+        let mut c = Combat::new(fit, damage);
         c.tally = self.tally;
         *self = c;
     }
@@ -867,7 +867,7 @@ impl Combat {
     pub fn hit_raider(&mut self, id: u32, damage: f64, pilot: &Pilot) {
         if let Some(r) = self.raider(id) {
             let point = r.craft.pos;
-            self.land(Side::Raider(id), damage, point, DVec3::NEG_Z, pilot);
+            self.land(Side::Raider(id), damage, point, pilot);
         }
     }
 
@@ -891,8 +891,9 @@ impl Combat {
         self.target = next.map(|(_, id)| *id);
     }
 
-    /// The fight is somewhere else now: shells, flashes and the gang go.
-    /// (The world reports the fight to the sim first.)
+    /// The fight is somewhere else now: shells, flashes, wrecks and the
+    /// gang go (their positions are relative to the anchor). The world
+    /// reports the fight to the sim first.
     pub fn leave(&mut self) {
         self.field = None;
         self.gang = None;
@@ -1037,7 +1038,7 @@ impl Combat {
             s.life -= dt;
             let hit = self.strike(s.from, from, s.pos, dt, &pilot);
             if let Some((side, point, _)) = hit {
-                self.land(side, s.damage, point, s.vel, &pilot);
+                self.land(side, s.damage, point, &pilot);
                 return false;
             }
             s.life > 0.0
@@ -1045,8 +1046,8 @@ impl Combat {
         self.shots.extend(shots);
         // Lasers already landed in `fire`; apply what they did now.
         let pending = std::mem::take(&mut self.pending);
-        for (side, damage, point, dir) in pending {
-            self.land(side, damage, point, dir, &pilot);
+        for (side, damage, point) in pending {
+            self.land(side, damage, point, &pilot);
         }
         if self.target.is_none_or(|t| self.raider(t).is_none()) {
             self.target = None;
@@ -1090,7 +1091,6 @@ impl Combat {
     }
 
     /// Fire one gun.
-    #[allow(clippy::too_many_arguments)]
     fn fire(
         &mut self,
         side: Side,
@@ -1124,7 +1124,7 @@ impl Combat {
                 side,
             });
             if let Some((target, point, _)) = hit {
-                self.pending.push((target, gun.damage, point, dir));
+                self.pending.push((target, gun.damage, point));
             }
         } else {
             self.shots.push(Shot {
@@ -1182,7 +1182,7 @@ impl Combat {
 
     /// A shot lands on `side` at `point` (anchor-relative), travelling
     /// along `dir`.
-    fn land(&mut self, side: Side, damage: f64, point: DVec3, dir: DVec3, pilot: &Pilot) {
+    fn land(&mut self, side: Side, damage: f64, point: DVec3, pilot: &Pilot) {
         let (vessel, craft) = match side {
             Side::Player => {
                 if self.lost.is_some() {
@@ -1214,7 +1214,6 @@ impl Combat {
         let fit = vessel.fit.clone();
         match side {
             Side::Player => {
-                self.hit_from = (craft.rot.inverse() * -dir).normalize_or(DVec3::Z);
                 if hit == Hit::Shield {
                     self.since_shield_hit = 0.0;
                     self.tally.shield_hits += 1;
@@ -1345,8 +1344,6 @@ impl Combat {
         }
     }
 
-    /// A ship blows up: a fireball and its secondaries, a flash, plates
-    /// and embers flung out, and the wreck tumbling on.
     /// The player's ship goes up, whatever its hull has left (for
     /// screenshots).
     pub fn lose_player(&mut self, craft: Craft) {
@@ -1356,6 +1353,8 @@ impl Combat {
         self.lost = Some(0.0);
     }
 
+    /// A ship blows up: a fireball and its secondaries, a flash, plates
+    /// and embers flung out, and the wreck tumbling on.
     fn explode(&mut self, fit: &Loadout, craft: Craft, length: f64) {
         self.tally.blasts += 1;
         let r = (length * 1.6).max(14.0);

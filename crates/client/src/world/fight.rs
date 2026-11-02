@@ -8,7 +8,7 @@ use glam::DVec3;
 use retrox_sim::pirates::{self, Aim};
 
 use super::{Mode, Place, World, rock_offset};
-use crate::combat::{Combat, Craft, HOSTILE_RANGE, Pilot, REPAIR_PER_POINT};
+use crate::combat::{Craft, HOSTILE_RANGE, Pilot, REPAIR_PER_POINT};
 
 impl World {
     /// Where the fight is anchored: the field whose band is out, else
@@ -67,7 +67,7 @@ impl World {
         if self.combat.player.fit != self.player.ship.fit {
             self.end_fight();
             let lost = self.combat.lost;
-            self.combat = Combat::new(
+            self.combat.rebuild(
                 self.player.ship.fit.clone(),
                 self.player.ship.damage.clone(),
             );
@@ -281,7 +281,7 @@ impl World {
         if share >= 1.0 {
             *d = Default::default();
         }
-        self.combat = Combat::new(
+        self.combat.rebuild(
             self.player.ship.fit.clone(),
             self.player.ship.damage.clone(),
         );

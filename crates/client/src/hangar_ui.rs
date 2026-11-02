@@ -421,59 +421,61 @@ fn fleet(
         ui.label(RichText::new("none · ships you replace are kept here").color(CREAM_DIM));
         return;
     }
-    egui::Grid::new("stored")
-        .num_columns(3)
-        .spacing([10.0, 4.0])
-        .striped(true)
-        .show(ui, |ui| {
-            for (i, stored) in player.stored.iter().enumerate() {
-                ui.label(RichText::new(&stored.ship.name).color(CREAM));
-                let at_here = stored.at == here;
-                let place = if at_here {
-                    "here".to_owned()
-                } else {
-                    w.galaxy
-                        .settlements
-                        .get(stored.at)
-                        .map_or("lost".to_owned(), |s| s.name.clone())
-                };
-                ui.label(RichText::new(place).color(if at_here { VFD } else { CREAM_DIM }));
-                ui.horizontal(|ui| {
-                    if !at_here {
-                        return;
-                    }
-                    if push(
-                        ui,
-                        "BOARD",
-                        mono(12.0),
-                        Look::Tint(VFD),
-                        true,
-                        Vec2::new(0.0, 22.0),
-                    )
-                    .clicked()
-                    {
-                        actions.push(Action::Hangar(Job::Board(i)));
-                    }
-                    if services.shipyard {
-                        let refund = -hangar::quote(player, Job::SellShip(i)).unwrap_or(0.0);
-                        let text = format!("SELL {}", credits(refund));
-                        if push(
-                            ui,
-                            &text,
-                            mono(12.0),
-                            Look::Plain,
-                            true,
-                            Vec2::new(0.0, 22.0),
-                        )
-                        .clicked()
-                        {
-                            actions.push(Action::Hangar(Job::SellShip(i)));
-                        }
-                    }
-                });
-                ui.end_row();
+    for (i, stored) in player.stored.iter().enumerate() {
+        let at_here = stored.at == here;
+        let place = if at_here {
+            "here".to_owned()
+        } else {
+            w.galaxy
+                .settlements
+                .get(stored.at)
+                .map_or("lost".to_owned(), |s| s.name.clone())
+        };
+        // An instrument row (DESIGN §8.4): name, where it's kept, and the
+        // keys for what can be done with it here.
+        let (rect, _, _) = crate::widgets::list_row(ui, 30.0, false, false, AMBER);
+        let mut row = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(rect.shrink2(Vec2::new(10.0, 0.0)))
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        row.label(RichText::new(&stored.ship.name).color(CREAM));
+        row.add_space(10.0);
+        row.label(RichText::new(place).color(if at_here { VFD } else { CREAM_DIM }));
+        if !at_here {
+            continue;
+        }
+        row.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if services.shipyard {
+                let refund = -hangar::quote(player, Job::SellShip(i)).unwrap_or(0.0);
+                let text = format!("SELL {}", credits(refund));
+                if push(
+                    ui,
+                    &text,
+                    mono(12.0),
+                    Look::Tint(VFD),
+                    true,
+                    Vec2::new(0.0, 22.0),
+                )
+                .clicked()
+                {
+                    actions.push(Action::Hangar(Job::SellShip(i)));
+                }
+            }
+            if push(
+                ui,
+                "BOARD",
+                mono(12.0),
+                Look::Plain,
+                true,
+                Vec2::new(0.0, 22.0),
+            )
+            .clicked()
+            {
+                actions.push(Action::Hangar(Job::Board(i)));
             }
         });
+    }
 }
 
 /// Modules that fit a slot, with what each costs after selling the old one.

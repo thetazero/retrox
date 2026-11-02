@@ -72,15 +72,19 @@ pub fn trade(
         }
         let cost = buy_cost(market, model, good, amount);
         if cost > player.credits {
-            return Err(format!("Not enough credits: that costs {cost:.0} cr"));
+            return Err(format!(
+                "Not enough credits: that costs {}",
+                crate::hud::credits(cost)
+            ));
         }
         player.credits -= cost;
         player.cargo[good] += amount;
         economy.market.stock[good] -= amount;
         economy.treasury += cost;
         Ok(format!(
-            "Bought {amount:.0} t of {} for {cost:.0} cr",
-            good.name()
+            "Bought {amount:.0} t of {} for {}",
+            good.name(),
+            crate::hud::credits(cost)
         ))
     } else if amount < 0.0 {
         let amount = -amount;
@@ -100,8 +104,9 @@ pub fn trade(
         economy.market.stock[good] += amount;
         economy.treasury -= value;
         Ok(format!(
-            "Sold {amount:.0} t of {} for {value:.0} cr",
-            good.name()
+            "Sold {amount:.0} t of {} for {}",
+            good.name(),
+            crate::hud::credits(value)
         ))
     } else {
         Err("Nothing to trade".into())

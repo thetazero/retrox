@@ -101,7 +101,7 @@ fn hub(ctx: &egui::Context, w: &World, here: SettlementId, actions: &mut Vec<Act
             let contracts_note = match (w.board.len(), w.player.contracts.len()) {
                 (0, 0) => "nothing to haul today".to_owned(),
                 (0, n) => format!("{n} under way · nothing new today"),
-                (b, 0) => format!("{b} contracts to haul"),
+                (b, 0) => format!("{} to haul", crate::hud::count(b, "contract")),
                 (b, n) => format!("{b} to haul · {n} under way"),
             };
             let contracts_note = if bound_here > 0 {
@@ -213,11 +213,7 @@ pub(crate) fn menu_button(ui: &mut egui::Ui, title: &str, note: &str, enabled: b
     let (fill, text, sub) = match (enabled, hot) {
         (false, _) => (Color32::TRANSPARENT, RULE, RULE),
         (true, true) => (RED_DARK, CREAM, CREAM),
-        (true, false) => (
-            Color32::from_rgba_premultiplied(24, 18, 28, 200),
-            CREAM,
-            CREAM_DIM,
-        ),
+        (true, false) => (crate::widgets::CARD_FILL, CREAM, CREAM_DIM),
     };
     painter.rect_filled(rect, 0.0, fill);
     painter.rect_stroke(

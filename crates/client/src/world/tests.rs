@@ -580,31 +580,30 @@ fn a_planet_city_stop_takes_seconds_not_minutes() {
 
 #[test]
 fn fast_travel_flies_down_a_well_to_what_is_in_it() {
-    // Undocked from a station in a planet's well, the city below is a
-    // fast-travel hop, not a climb out and back.
+    // High in a city planet's well, the city below is a fast-travel hop,
+    // not a climb out and back (DESIGN §7.1.1). Seed 1 has no station
+    // inside a city planet's well, so the hop down is from open space in
+    // the well itself.
     let mut world = World::new(1);
-    let found = world.view.cities.iter().find_map(|&(_, body)| {
-        let planet = Place::Body(body);
-        world
-            .view
-            .stations
-            .iter()
-            .map(|&s| Place::Station(s))
-            .find(|&s| world.arrives_within(s, planet))
-            .map(|s| (s, planet))
-    });
-    let Some((station, planet)) = found else {
-        // This seed has no station inside a city planet's well; the
-        // rule is covered by the climb test either way.
-        return;
+    let Mode::Landed { body, .. } = world.mode else {
+        panic!("starts landed");
     };
+    let planet = Place::Body(body);
     world.mode = Mode::Normal;
-    world.ship.frame = station;
-    world.ship.rel = DVec3::X * 30e3;
+    world.ship.frame = planet;
+    world.ship.rel = DVec3::X * world.place_radius(planet) * 3.0;
     world.ship.vel = DVec3::ZERO;
+    assert_eq!(world.current_well(), Some(planet), "placed inside the well");
     world.target = Some(planet);
     assert_eq!(world.prompts().fast_travel, Some(planet));
     world.act(Action::FastTravel);
+    let Mode::FastTravel(trip) = world.mode else {
+        panic!("[J] flies down");
+    };
+    assert!(
+        !matches!(trip.leg, Leg::Climb { .. }),
+        "a hop within the well doesn't climb out first"
+    );
     real_seconds_until(&mut world, 15.0, |w| w.mode == Mode::Normal);
     assert!(world.prompts().land.is_some());
 }

@@ -702,19 +702,13 @@ fn contracts_hour(seed: u64) {
             b.w.act(Action::AcceptContract(i));
             b.go(to);
             if std::env::var("BENCH_DEBUG").is_ok() {
-                // Freight as `freight::board` prices it (hauler upkeep).
-                let freight = (o.amount * 0.02 + 2.0) * o.trip_days * (1.0 + o.shortage);
-                let planned = model(&b.w, o.to) == retrox_sim::EconomyModel::Planned;
                 println!(
-                    "    {:>3.0} t {:10} {} jumps, {:>4.1} days: fee {:>5.0} (freight {:>4.0}, {} {:>5.0}) on goods worth {:>4.0}; {:.1} min, {} days",
+                    "    {:>3.0} t {:10} {} jumps, {:>4.1} days: fee {:>5.0} (carriage) on goods worth {:>4.0}; {:.1} min, {} days",
                     o.amount,
                     o.good.name(),
                     o.jumps,
                     o.trip_days,
                     o.fee,
-                    freight,
-                    if planned { "premium" } else { "gap" },
-                    o.fee - freight,
                     o.value,
                     (b.real_s - t0) / 60.0,
                     b.w.galaxy.time.days() - d0
