@@ -301,7 +301,10 @@ pub fn run(
     }
     let cost = quote(player, job).ok_or("That doesn't fit")?;
     if cost > player.credits {
-        return Err(format!("Not enough credits: that costs {cost:.0} cr"));
+        return Err(format!(
+            "Not enough credits: that costs {}",
+            crate::hud::credits(cost)
+        ));
     }
     if -cost > economy.treasury {
         return Err("The settlement can't afford to buy that".into());

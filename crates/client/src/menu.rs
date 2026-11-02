@@ -574,7 +574,7 @@ fn save_row(ui: &mut egui::Ui, e: &Entry) -> bool {
         if hot {
             RED_DARK
         } else {
-            Color32::from_rgba_premultiplied(24, 18, 28, 200)
+            crate::widgets::CARD_FILL
         },
     );
     painter.rect_stroke(
@@ -948,11 +948,7 @@ fn entry(
             RULE,
         ),
         (true, true) => (RED_DARK, CREAM, CREAM),
-        (true, false) => (
-            Color32::from_rgba_premultiplied(24, 18, 28, 215),
-            CREAM,
-            CREAM_DIM,
-        ),
+        (true, false) => (crate::widgets::CARD_FILL, CREAM, CREAM_DIM),
     };
     painter.rect_filled(rect, 0.0, fill);
     painter.rect_stroke(
@@ -974,7 +970,7 @@ fn entry(
         display(34.0),
         text,
     );
-    let note = truncate(note, 52);
+    let note = crate::widgets::truncate(note, 52);
     painter.text(
         Pos2::new(rect.left() + 22.0, rect.bottom() - 6.0),
         Align2::LEFT_BOTTOM,
@@ -1187,16 +1183,6 @@ fn hgradient(painter: &egui::Painter, rect: Rect, left: Color32, right: Color32)
     mesh.add_triangle(0, 1, 2);
     mesh.add_triangle(0, 2, 3);
     painter.add(egui::Shape::mesh(mesh));
-}
-
-fn truncate(s: &str, n: usize) -> String {
-    if s.chars().count() <= n {
-        s.to_owned()
-    } else {
-        let mut out: String = s.chars().take(n - 1).collect();
-        out.push('…');
-        out
-    }
 }
 
 /// A seed from the clock, short enough to read out.

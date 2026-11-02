@@ -103,8 +103,8 @@ pub fn style(ctx: &egui::Context) {
     let w = &mut v.widgets;
     w.noninteractive.bg_stroke = Stroke::new(1.0, RULE);
     w.noninteractive.fg_stroke = Stroke::new(1.0, CREAM);
-    w.inactive.weak_bg_fill = Color32::from_rgb(30, 24, 34);
-    w.inactive.bg_fill = Color32::from_rgb(30, 24, 34);
+    w.inactive.weak_bg_fill = crate::widgets::FACE;
+    w.inactive.bg_fill = crate::widgets::FACE;
     w.inactive.bg_stroke = Stroke::new(1.0, RULE);
     w.inactive.fg_stroke = Stroke::new(1.0, CREAM);
     w.hovered.weak_bg_fill = RED_DARK;
@@ -266,7 +266,7 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
         .show(ctx, |ui| {
             // A faint backing keeps it legible over bright planets.
             let frame = egui::Frame::new()
-                .fill(Color32::from_rgba_premultiplied(9, 7, 14, 205))
+                .fill(crate::widgets::READOUT_FILL)
                 .inner_margin(Margin {
                     left: 18,
                     right: 14,
@@ -564,7 +564,7 @@ fn nav_list(ui: &mut egui::Ui, w: &World, actions: &mut Vec<Action>) {
         let name = painter.text(
             Pos2::new(glyph_x + 14.0, c.y),
             Align2::LEFT_CENTER,
-            truncate(&w.name(place), 28),
+            crate::widgets::truncate(&w.name(place), 28),
             mono(14.0),
             look.text(AMBER),
         );
@@ -685,7 +685,7 @@ fn lanes_list(ui: &mut egui::Ui, w: &World, open_space: bool, actions: &mut Vec<
         painter.text(
             Pos2::new(x, y),
             Align2::LEFT_CENTER,
-            truncate(&lane.name, 18),
+            crate::widgets::truncate(&lane.name, 18),
             mono(14.0),
             look.text(AMBER),
         );
@@ -1007,26 +1007,8 @@ pub(crate) fn lamp(ui: &mut egui::Ui, text: &str, lit: bool, color: Color32) {
     let galley = ui
         .painter()
         .layout_no_wrap(text.to_owned(), mono(13.0), color);
-    let size = galley.size() + Vec2::new(12.0, 6.0);
-    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
-    let painter = ui.painter();
-    if lit {
-        painter.rect_filled(rect.expand(2.0), 0.0, color.gamma_multiply(0.2));
-        painter.rect_filled(rect, 0.0, color);
-    } else {
-        painter.rect_stroke(
-            rect,
-            0.0,
-            Stroke::new(1.0, color.gamma_multiply(0.35)),
-            egui::StrokeKind::Inside,
-        );
-    }
-    let text_color = if lit { INK } else { color.gamma_multiply(0.45) };
-    painter.galley_with_override_text_color(
-        rect.center() - galley.size() / 2.0,
-        galley,
-        text_color,
-    );
+    let (rect, _) = ui.allocate_exact_size(galley.size() + Vec2::new(12.0, 6.0), Sense::hover());
+    crate::widgets::lamp_at(ui.painter(), rect.min, text, lit, color, None);
 }
 
 /// A small coloured tag, outlined.
@@ -1045,15 +1027,9 @@ pub(crate) fn tag(ui: &mut egui::Ui, text: &str, color: Color32) {
 /// A key, drawn as a cream keycap.
 pub(crate) fn keycap(ui: &mut egui::Ui, key: &str) {
     let galley = ui.painter().layout_no_wrap(key.to_owned(), mono(13.0), INK);
-    let size = Vec2::new((galley.size().x + 10.0).max(20.0), galley.size().y + 4.0);
-    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
-    ui.painter().rect_filled(rect, 2.0, CREAM);
-    ui.painter().line_segment(
-        [rect.left_bottom(), rect.right_bottom()],
-        Stroke::new(2.0, CREAM_DIM),
-    );
-    ui.painter()
-        .galley(rect.center() - galley.size() / 2.0, galley, INK);
+    let (rect, _) =
+        ui.allocate_exact_size(crate::widgets::keycap_size(galley.size()), Sense::hover());
+    crate::widgets::paint_keycap(ui.painter(), rect, galley);
 }
 
 /// A segmented VFD bar for a value in -1..=1 (negative lights from the left
@@ -1199,6 +1175,15 @@ fn contact_label(c: &crate::traffic::Contact, dist: f64) -> String {
     )
 }
 
+/// A count of hyperlane jumps, in words.
+pub fn jumps_text(jumps: u32) -> String {
+    match jumps {
+        0 => "this system".into(),
+        1 => "1 jump".into(),
+        n => format!("{n} jumps"),
+    }
+}
+
 pub fn credits(cr: f64) -> String {
     let n = cr.round() as i64;
     let digits = n.unsigned_abs().to_string();
@@ -1232,13 +1217,5 @@ fn speed_text(v: f64) -> String {
         format!("{:.1} km/s", v / 1e3)
     } else {
         format!("{:.2} c", v / C)
-    }
-}
-
-fn truncate(s: &str, n: usize) -> String {
-    if s.chars().count() <= n {
-        s.to_owned()
-    } else {
-        s.chars().take(n - 1).chain(['…']).collect()
     }
 }
