@@ -6,13 +6,16 @@
 //!
 //! Development flags skip the title and drop straight into a fresh game:
 //! `--seed N`, `--station`, `--undocked`, `--cities`, `--map`, `--course <jumps>`,
-//! `--ship <hull>`, `--screen <trade|hangar|shipyard|contracts>`,
+//! `--ship <hull>`, `--screen <trade|hangar|shipyard|contracts|bounties>`,
 //! `--combat` (by a raider band), `--brawl` (in a fight), `--behind-hull`
 //! (in a fight, the target hidden by your own hull), `--lost <s>`
 //! (the ship lost that long ago; with `--keys`, it has a checkpoint at a
 //! station to go back to), `--rewind` (rewinding to a checkpoint),
 //! `--arrival` (back at the checkpoint), `--harvesters <gas|ice>` (by a
-//! harvester at work), `--skim` (in a giant's clouds),
+//! harvester at work), `--skim` (in a giant's clouds), `--cities` (over a
+//! planet with two cities), `--interdict` (flying past a gang's lair until
+//! it interdicts), `--convoy` (alongside a trader fleet; with
+//! `--hostile-convoy`, its faction hostile),
 //! `--ship-view <deg>`, `--screenshot <path.ppm>`. `--menu <page>` opens a
 //! menu page instead (`title`, `new`, `load`, `settings`, `handbook[:chapter]`, or `pause` or `quit`
 //! over a fresh game), for screenshots. `--keys` plays a key script
@@ -87,6 +90,7 @@ struct Flags {
     interdict: bool,
     /// Alongside a trader fleet in its frame (and its faction hostile).
     convoy: bool,
+    /// With `convoy`: its faction counts the player hostile.
     hostile_convoy: bool,
     /// Start skimming a gas giant (`--skim`).
     skim: bool,
@@ -203,6 +207,8 @@ impl Flags {
                     || self.station
                     || self.field
                     || self.traffic
+                    || self.interdict
+                    || self.convoy
                     || self.harvesters.is_some()
                     || self.skim
                     || self.combat

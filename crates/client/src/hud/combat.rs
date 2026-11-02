@@ -12,19 +12,6 @@ use crate::combat::Tactic;
 use crate::widgets::shadowed_text;
 use crate::world::{Mode, World};
 
-/// A hostile's marker: a red diamond.
-fn diamond(painter: &egui::Painter, p: Pos2, r: f32, color: Color32) {
-    painter.add(egui::Shape::closed_line(
-        vec![
-            p + Vec2::new(0.0, -r),
-            p + Vec2::new(r, 0.0),
-            p + Vec2::new(0.0, r),
-            p + Vec2::new(-r, 0.0),
-        ],
-        Stroke::new(1.5, color),
-    ));
-}
-
 /// A thin two-tone bar: `value` of it lit.
 fn bar(painter: &egui::Painter, rect: Rect, value: f32, color: Color32) {
     // A dark edge, so the bar holds up over a sunlit hull.
@@ -89,7 +76,7 @@ pub fn draw(ctx: &egui::Context, h: &HudInput) {
         };
         let dist = (r.craft.pos - me.pos).length();
         if !targeted {
-            diamond(&painter, p, 5.0, ink);
+            super::diamond(&painter, p, 5.0, ink);
             if dist < 8000.0 {
                 painter.text(
                     p + Vec2::new(10.0, 0.0),

@@ -86,8 +86,7 @@ fn hub(ctx: &egui::Context, w: &World, here: SettlementId, actions: &mut Vec<Act
                 .count();
             let trade_note = match shortages {
                 0 => "buy and sell goods".to_owned(),
-                1 => "1 shortage here".to_owned(),
-                n => format!("{n} shortages here"),
+                n => format!("{} here", crate::hud::count(n, "shortage")),
             };
             if menu_button(ui, "Trade", &trade_note, true) {
                 actions.push(Action::Open(Screen::Trade));
@@ -115,8 +114,7 @@ fn hub(ctx: &egui::Context, w: &World, here: SettlementId, actions: &mut Vec<Act
             let warrants = crate::bounty_ui::wanted(w).len();
             let bounty_note = match warrants {
                 0 => "no warrants posted nearby".to_owned(),
-                1 => "1 gang wanted nearby".to_owned(),
-                n => format!("{n} gangs wanted nearby"),
+                n => format!("{} wanted nearby", crate::hud::count(n, "gang")),
             };
             if menu_button(ui, "Bounties", &bounty_note, true) {
                 actions.push(Action::Open(Screen::Bounties));

@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 pub const HOSTILE: f64 = -25.0;
 /// Below this, wary.
 const WARY: f64 = -5.0;
-/// At or above this, trusted; above [`HONOURED`], honoured.
+/// At or above this, trusted; at or above [`HONOURED`], honoured.
 const TRUSTED: f64 = 15.0;
 const HONOURED: f64 = 50.0;
 /// Points a day a grudge fades by, and a favour.
@@ -132,6 +132,11 @@ impl Standing {
         v.sort_by(|a, b| b.1.total_cmp(&a.1));
         v
     }
+}
+
+/// What the HUD says when standing crosses into a new rank.
+pub fn news(faction: &str, rank: Rank) -> String {
+    format!("The {faction} now count us {}", rank.name().to_lowercase())
 }
 
 #[cfg(test)]

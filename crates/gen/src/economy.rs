@@ -66,11 +66,7 @@ fn system_resources(state: &GalaxyState, system: SystemId) -> Resources {
 /// Facilities and starting markets for every settlement.
 pub fn seed(rng: &mut Rng, state: &mut GalaxyState) {
     let mut holdings: SecondaryMap<FactionId, usize> = SecondaryMap::new();
-    for s in state
-        .settlements
-        .values()
-        .filter(|s| !crate::highports::is_port(state, s))
-    {
+    for s in state.settlements.values().filter(|s| !state.is_port(s)) {
         *holdings.entry(s.owner).unwrap().or_default() += 1;
     }
     let ids: Vec<SettlementId> = state.settlements.keys().collect();
@@ -81,7 +77,7 @@ pub fn seed(rng: &mut Rng, state: &mut GalaxyState) {
         let settlement = &state.settlements[id];
         // A highport's rolls are its own, and the planet below does the
         // mining.
-        let port = crate::highports::is_port(state, settlement);
+        let port = state.is_port(settlement);
         let mut r = rng.fork(settlement.system.index() as u64 | u64::from(port) << 40);
         let res = if port {
             Resources {

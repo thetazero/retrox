@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use retrox_gen::{GalaxyConfig, generate, is_port};
+use retrox_gen::{GalaxyConfig, generate};
 use retrox_sim::{BodyId, Orbiting, Site};
 
 #[test]
@@ -22,7 +22,7 @@ fn most_city_planets_have_a_highport_inside_their_well() {
             && let Orbiting::Body(b) = orbit.parent
             && let Some(port) = planets.get_mut(&b)
         {
-            assert!(is_port(&state, s));
+            assert!(state.is_port(s));
             *port = Some(orbit.semi_major_au * 1.496e8 / state.bodies[b].radius_km);
             ports += 1;
         }
@@ -51,7 +51,7 @@ fn a_highport_belongs_to_the_city_below() {
     let port = state
         .settlements
         .values()
-        .find(|s| is_port(&state, s))
+        .find(|s| state.is_port(s))
         .expect("a port");
     let Site::Space(orbit) = port.site else {
         unreachable!()

@@ -295,10 +295,15 @@ impl Combat {
         }
     }
 
-    /// A peaceful convoy flies on out of the scene.
-    pub fn drop_convoy(&mut self, fleet: FleetKey) {
-        self.raiders
-            .retain(|r| r.hostile || r.trader_fleet() != Some(fleet));
+    /// A convoy the player has left flies on out of the scene: its
+    /// peaceful ships at once, its hostile ones once the player at `me`
+    /// is well past their leash (as for a gang), or all of them when
+    /// `all` (the player isn't flying).
+    pub fn drop_convoy(&mut self, fleet: FleetKey, me: DVec3, all: bool) {
+        self.raiders.retain(|r| {
+            r.trader_fleet() != Some(fleet)
+                || (!all && r.hostile && (r.home - me).length() <= LEASH * 2.0)
+        });
     }
 
     /// The trader fleets in the scene.

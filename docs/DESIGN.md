@@ -734,11 +734,13 @@ somewhere, live somewhere, and fly for real near the player.
   (interceptors, heavy fighters) to start, and a record: tonnes taken,
   last raid, and how much it has taken from each faction's traders.
   Every 80 t taken buys another ship, up to five; the fourth is a gunship.
-  150 days without a raid costs a ship; a gang with none is gone.
+  150 days without a raid costs a ship, and each further 75 another (at
+  the monthly reviews, so about one every three months); a gang with none
+  is gone.
   Founding, breaking up and bounties go in the history record.
 - **Raids, coarse tier.** A trader trip that starts or ends in a lair
   system (or a system next to one) may be robbed on arrival: 5% per gang
-  ship in the lair system, 2% next door, at most 40%. The gang takes up to
+  ship in the lair system, 2% next door, so at most 25%. The gang takes up to
   25 t per ship of the cargo, and one time in twenty a ship (much more
   often and replacement ships outrun the freight: the economy test's
   idle share goes past a fifth).
@@ -790,8 +792,9 @@ somewhere, live somewhere, and fly for real near the player.
 - **Standing** with each faction runs from −100 to +100, read as a rank:
   hostile (−25 and below), wary (below −5), neutral, trusted (15 and
   up), honoured (50 and up). It moves by: +3 for a ship with that
-  faction's warrant on it, +1 for any pirate destroyed in its space
-  (where it has the most people), +1 per delivery, −5 per failed
+  faction's warrant on it (paid or not: a broke treasury is still
+  glad), +1 for any pirate destroyed in its space (where it has the most
+  people; not on top of the +3 when it posted the warrant), +1 per delivery, −5 per failed
   contract; **−20 for opening fire on one of its peaceful ships**, −6 for
   each further hit (at most one per 1.5 s per fleet) and −30 for each of
   its ships destroyed. So one attack and a second burst make a faction
@@ -1175,7 +1178,13 @@ Decided while bringing every screen into one style (issue #77):
   off the body they're on the same way, one step further in. A city row
   carries no range (its planet's row has it). Where the hold's cargo is
   bound, the row is tagged CARGO in amber, as a pirate lair is tagged
-  RAIDERS in red.
+  RAIDERS in red. Under TRAFFIC, trader fleets are teal squares.
+- **Hostiles and standing** (audit 3, #137): anything hostile is alarm
+  red, and anything leaning that way is the same red dimmer: a pirate gang
+  about its own business is a dim red diamond (bright, and doubled, when
+  it's after the player), and a faction that counts you wary reads in dim
+  red. Neutral is dim cream, trusted and honoured teal. Amber stays for
+  paying, buying and selecting, so a rank never borrows it.
 - **Slot plates:** loadout slots carry a stencilled kind plate coloured by
   role (weapons red; engines, power and jump amber; shields, radar and RCS
   teal; radiators and cargo cream).
@@ -1188,7 +1197,10 @@ Decided while bringing every screen into one style (issue #77):
 - **Counts and estimates read as words:** "1 jump", "this system",
   "1 settlement"; an estimated trip is "about 39 d". Never "~": in the
   mono face it reads as a minus sign. Nor "≈": the mono face has no such
-  glyph and draws "=" (so "ABOUT 0.6 T PER FRACTURE").
+  glyph and draws "=" (so "ABOUT 0.6 T PER FRACTURE"). Every count goes
+  through `hud::count` (or `hud::count_as` for "cities"), every jump
+  count through `hud::jumps_text` and every distance through
+  `hud::distance`, so a near target reads in km, not "0.00 AU".
 - **NAVIGATION is a tree of where you go** (#119): the star, then each
   body with what hangs off it, one step in per level: its cities, the
   stations in orbit round it, then its moons with theirs. Stations round
