@@ -288,6 +288,9 @@ impl Bot {
             let t = t.floor();
             if t >= 1.0 {
                 self.w.act(Action::Trade(good, -t));
+                if std::env::var("BENCH_DEBUG").is_ok() {
+                    println!("    sell {t:.0} t {}: {:?}", good.name(), self.w.message);
+                }
             }
         }
     }
@@ -617,8 +620,11 @@ fn trading_hour(seed: u64) {
                     continue;
                 }
                 let dst = &b.w.galaxy.settlements[to].economy;
-                let value = crate::trade::sell_value(&dst.market, model(&b.w, to), good, n)
-                    .min(dst.treasury);
+                let value = crate::trade::sell_value(&dst.market, model(&b.w, to), good, n);
+                // A market that can't pay for the whole lot buys none of it.
+                if value > dst.treasury {
+                    continue;
+                }
                 let jumps =
                     b.w.route(b.w.galaxy.settlements[to].system)
                         .map_or(9, |r| r.len() - 1);
