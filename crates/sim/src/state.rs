@@ -43,6 +43,10 @@ pub struct GalaxyState {
     /// [`crate::haul::Board`].
     #[serde(default)]
     pub(crate) board: crate::haul::Board,
+    /// Systems with ships docked idle as of the start of the month, sorted;
+    /// see [`crate::haul`]'s company founding.
+    #[serde(default)]
+    pub(crate) idle_ports: Option<Vec<SystemId>>,
     /// Remembered lane distances; see [`crate::haul::ReachCache`].
     #[serde(skip)]
     pub reach_cache: crate::haul::ReachCache,

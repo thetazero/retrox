@@ -444,21 +444,28 @@ fn hardship(state: &GalaxyState, id: SettlementId) -> f64 {
 /// that grow, starve, or draw a bounty. Runs in the planning phase.
 pub fn review(state: &mut GalaxyState) {
     let day = state.time.days();
-    let cap = state.places() / SETTLEMENTS_PER_GANG + 3;
-    if !state.pirates.hulls.is_empty() && state.pirates.gangs.len() < cap {
-        let due: Vec<SettlementId> = state
-            .settlements
-            .iter()
-            .filter(|&(id, s)| {
-                (settlement_bits(id).wrapping_add(7)) % 30 == day % 30 && !state.is_port(s)
-            })
-            .map(|(id, _)| id)
-            .collect();
-        for id in due {
+    // Settled places bound how many gangs there are: a count over every
+    // settlement, so made only once someone is about to found one.
+    let mut cap: Option<usize> = None;
+    if !state.pirates.hulls.is_empty() {
+        // A settlement's crews think about it a week after its other
+        // reviews: a stride through the slots, not a test of each one.
+        let slots = state.settlements.slot_count();
+        for i in crate::settlement::review_slots(day, 7, slots) {
+            let Some(id) = state.settlements.key_at(i) else {
+                continue;
+            };
             crate::decisions::time(crate::decisions::Decision::Pirates, || {
+                if state.is_port(&state.settlements[id]) {
+                    return;
+                }
                 let p = BASE_CHANCE + HARDSHIP_CHANCE * hardship(state, id);
                 let mut rng = Rng::stream(state.seed, "gang-found", day, settlement_bits(id));
-                if rng.chance(p) && state.pirates.gangs.len() < cap {
+                if !rng.chance(p) {
+                    return;
+                }
+                let cap = *cap.get_or_insert_with(|| state.places() / SETTLEMENTS_PER_GANG + 3);
+                if state.pirates.gangs.len() < cap {
                     found(state, id, &mut rng);
                 }
             });
