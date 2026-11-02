@@ -1011,7 +1011,11 @@ impl Running {
     /// Flight controls and one-shot actions from the keyboard; `true` in
     /// the last place if Esc asks for the pause menu.
     fn controls(&mut self, dt: f64, keys: Vec<KeyCode>) -> (Controls, Vec<Action>, bool) {
-        let down = |k| self.keys.contains(&k);
+        // Typing in a text field (the star chart's search): keys spell the
+        // name, they don't fly the ship or close the chart.
+        let typing = self.egui_ctx.egui_wants_keyboard_input();
+        let keys = if typing { Vec::new() } else { keys };
+        let down = |k| !typing && self.keys.contains(&k);
         let axis = |pos, neg| f64::from(u8::from(down(pos))) - f64::from(u8::from(down(neg)));
 
         // The virtual stick springs back toward centre.
@@ -1395,7 +1399,8 @@ impl Running {
     ///   screenshot), `move:X:Y` just points there;
     /// - `scroll:X:Y:DY` turns the mouse wheel there;
     /// - `shot:PATH` saves this frame as a PPM;
-    /// - `info:PATH` writes where things stand, as text.
+    /// - `info:PATH` writes where things stand, as text;
+    /// - `type:TEXT` types into the text field that has the keyboard.
     fn run_script(&mut self) {
         self.holds.retain_mut(|(key, left)| {
             *left = left.saturating_sub(1);
@@ -1470,12 +1475,39 @@ impl Running {
                     ]);
                 }
             }
+            // Typed text, for a text field with the keyboard (lowercase, as
+            // every step is).
+            ["type", text @ ..] => {
+                self.pointer
+                    .push_back(vec![egui::Event::Text(text.join(":"))]);
+            }
             ["info", path @ ..] => {
                 if let Some(game) = &self.game {
                     let _ = std::fs::write(path.join(":"), remote_info(&game.world));
                 }
             }
-            [key] => self.just_pressed.extend(key_code(key)),
+            [key] => {
+                self.just_pressed.extend(key_code(key));
+                // Keys a text field listens to reach egui too, as a real
+                // key press does.
+                let egui_key = match *key {
+                    "enter" => Some(egui::Key::Enter),
+                    "esc" => Some(egui::Key::Escape),
+                    "backspace" => Some(egui::Key::Backspace),
+                    "slash" => Some(egui::Key::Slash),
+                    _ => None,
+                };
+                if let Some(k) = egui_key {
+                    let event = |pressed| egui::Event::Key {
+                        key: k,
+                        physical_key: Some(k),
+                        pressed,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    };
+                    self.pointer.push_back(vec![event(true), event(false)]);
+                }
+            }
             _ => {}
         }
         // The step after a key waits a frame for it to land.
@@ -2966,6 +2998,7 @@ fn key_code(name: &str) -> Option<KeyCode> {
         "esc" => Escape,
         "tab" => Tab,
         "space" => Space,
+        "slash" => Slash,
         "shift" => ShiftLeft,
         "ctrl" => ControlLeft,
         "backspace" => Backspace,

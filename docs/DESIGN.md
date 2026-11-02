@@ -888,6 +888,27 @@ Inspiration, not imitation — fictional throughout.
 - The course panel shows a **jump interlock** of lamps (course set, well
   clear, jump ready), so why a jump is unavailable reads at a glance.
 - Systems keep their faction colours: the chart is information first.
+- **What matters is lit, the rest is faint** (#192). At full strength:
+  where you are, the systems and lanes one jump away (what's in reach),
+  the course in amber, contracts' destinations (an amber diamond and a
+  CONTRACT tag, with a dashed amber way there when they aren't the
+  course), the shipyards in their panel, and what a search finds. Every
+  other system is a small faint dot and the rest of the lane web a faint
+  red mesh: still there to read, never competing. Only a few of the
+  faint systems near the middle are named. Pointing at any system lights
+  it and dashes the way there in cream.
+- The chart **plots on the plane level with its focus**, not on the
+  galactic plane: rings, spokes and height lines are drawn there, so
+  height lines stay short wherever the chart looks. Height lines are
+  drawn only for the systems that matter.
+- The chart **opens at a range that takes in what matters** (what's in
+  reach, the course, the contracts), not at a fixed range.
+- **FIND SYSTEM** under the chart drive: [/] or a click, then type part
+  of a name (case and accents ignored); matches light up on the chart
+  and list with their jumps; a click or [ENTER] plots a course and slews
+  the chart there, opening the range out to keep the ship in view. With
+  the box empty it lists the contracts' destinations. While a text field
+  has the keyboard, no game key acts.
 
 ### 8.3 Help for new pilots
 
