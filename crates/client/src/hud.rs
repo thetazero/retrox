@@ -9,7 +9,7 @@ use egui::{
 };
 use glam::{DVec3, Mat4, Vec4};
 use retrox_sim::economy::Good;
-use retrox_sim::{BodyKind, EconomyModel};
+use retrox_sim::{BodyKind, EconomyModel, SettlementId};
 
 mod combat;
 pub(crate) mod guide;
@@ -373,6 +373,15 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
                     w.name(Place::Body(body))
                 ),
             ));
+            // More than one city down there (issue #116): say how to pick.
+            let others = w.cities_on(body).count() - 1;
+            if others > 0 {
+                let plural = if others == 1 { "y" } else { "ies" };
+                lines.push((
+                    Some("T"),
+                    format!("{others} more cit{plural} here · pick one in NAVIGATION"),
+                ));
+            }
         }
     }
     if !lines.is_empty() {
@@ -557,12 +566,17 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
 }
 
 /// The system's places as a list of instrument rows: a glyph for what each
-/// is (moons hang off their planet), its name, and the range in VFD teal.
+/// is (moons hang off their planet, and cities off the body they're on),
+/// its name, and the range in VFD teal.
 fn nav_list(ui: &mut egui::Ui, w: &World, actions: &mut Vec<Action>) {
     ui.spacing_mut().item_spacing.y = 0.0;
-    let places = w.nav_places();
+    let rows = w.nav_entries();
+    let selected_row = w.nav_selected();
+    let is_moon =
+        |p: &Place| matches!(p, Place::Body(b) if w.galaxy.bodies[*b].kind == BodyKind::Moon);
+    let bound: Vec<SettlementId> = w.player.contracts.iter().map(|c| c.offer.to).collect();
     let mut heading: Option<&str> = None;
-    for (i, &place) in places.iter().enumerate() {
+    for (i, &(place, city)) in rows.iter().enumerate() {
         let group = match place {
             Place::Star | Place::Body(_) => None,
             Place::Field(_) => Some("Fields"),
@@ -575,51 +589,86 @@ fn nav_list(ui: &mut egui::Ui, w: &World, actions: &mut Vec<Action>) {
             ui.add_space(2.0);
             heading = group;
         }
-        let selected = w.target == Some(place);
+        let selected = selected_row == Some((place, city));
         let (rect, response, look) = crate::widgets::list_row(ui, 25.0, selected, true, AMBER);
         if response.clicked() {
-            actions.push(Action::Target(place));
+            actions.push(match city {
+                Some(c) => Action::TargetCity(c),
+                None => Action::Target(place),
+            });
         }
-        let moon = matches!(place, Place::Body(b) if w.galaxy.bodies[b].kind == BodyKind::Moon);
+        let moon = is_moon(&place);
+        // Moons sit one step in from planets, and cities one step in from
+        // the body they're on.
+        let depth = usize::from(moon) + usize::from(city.is_some());
         let painter = ui.painter();
-        let glyph_x = rect.left() + if moon { 32.0 } else { 16.0 };
+        let glyph_x = rect.left() + 16.0 + 16.0 * depth as f32;
         let c = Pos2::new(glyph_x, rect.center().y);
         let ink = if look.selected && !look.hot {
             AMBER
         } else {
             CREAM_DIM
         };
-        if moon {
-            // A bracket back to the planet above; continues if the next
-            // place is also a moon.
-            let next_moon = places.get(i + 1).is_some_and(
-                |p| matches!(p, Place::Body(b) if w.galaxy.bodies[*b].kind == BodyKind::Moon),
-            );
-            let x = rect.left() + 16.0;
-            let bottom = if next_moon { rect.bottom() } else { c.y };
-            let stroke = Stroke::new(1.0, RULE);
+        let stroke = Stroke::new(1.0, RULE);
+        // Is another moon of the same planet listed further down (past any
+        // cities in between)? Then the planet's bracket runs on through.
+        let moon_follows = rows[i + 1..]
+            .iter()
+            .take_while(|r| r.1.is_some() || is_moon(&r.0))
+            .any(|r| r.1.is_none());
+        let x = rect.left() + 16.0;
+        if moon && city.is_none() {
+            let bottom = if moon_follows { rect.bottom() } else { c.y };
             painter.line_segment([Pos2::new(x, rect.top()), Pos2::new(x, bottom)], stroke);
             painter.line_segment([Pos2::new(x, c.y), Pos2::new(c.x - 6.0, c.y)], stroke);
         }
-        place_glyph(painter, w, place, c, ink);
+        if city.is_some() {
+            if moon && moon_follows {
+                painter.line_segment([Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())], stroke);
+            }
+            // The city's own bracket, back to the body above.
+            let bx = glyph_x - 16.0;
+            let next_city = rows.get(i + 1).is_some_and(|r| r.1.is_some());
+            let bottom = if next_city { rect.bottom() } else { c.y };
+            painter.line_segment([Pos2::new(bx, rect.top()), Pos2::new(bx, bottom)], stroke);
+            painter.line_segment([Pos2::new(bx, c.y), Pos2::new(c.x - 6.0, c.y)], stroke);
+        }
+        match city {
+            Some(_) => city_glyph(painter, c, ink),
+            None => place_glyph(painter, w, place, c, ink),
+        }
+        let label = match city {
+            Some(c) => w.galaxy.settlements[c].name.clone(),
+            None => w.name(place),
+        };
         let name = painter.text(
             Pos2::new(glyph_x + 14.0, c.y),
             Align2::LEFT_CENTER,
-            crate::widgets::truncate(&w.name(place), 28),
+            crate::widgets::truncate(&label, 28 - 2 * depth),
             mono(14.0),
             look.text(AMBER),
         );
-        // Pirates are known where they lair.
-        if let Place::Field(f) = place
-            && w.gang_reported(f)
-        {
+        let tag = match (place, city) {
+            // Pirates are known where they lair.
+            (Place::Field(f), _) if w.gang_reported(f) => Some(("RAIDERS", ALARM)),
+            // Where the hold is bound for (issue #116).
+            (_, Some(s)) | (Place::Station(s), None) if bound.contains(&s) => {
+                Some(("CARGO", AMBER))
+            }
+            _ => None,
+        };
+        if let Some((tag, colour)) = tag {
             painter.text(
                 Pos2::new(name.right() + 8.0, c.y),
                 Align2::LEFT_CENTER,
-                "RAIDERS",
+                tag,
                 mono(11.0),
-                ALARM,
+                colour,
             );
+        }
+        // A city is as far as its planet: the range is on the planet's row.
+        if city.is_some() {
+            continue;
         }
         let range = if look.selected { AMBER } else { VFD };
         painter.text(
@@ -632,6 +681,20 @@ fn nav_list(ui: &mut egui::Ui, w: &World, actions: &mut Vec<Action>) {
             } else {
                 range.gamma_multiply(0.85)
             },
+        );
+    }
+}
+
+/// A city on the chart: a little skyline of three blocks.
+fn city_glyph(painter: &egui::Painter, c: Pos2, ink: Color32) {
+    for (dx, h) in [(-3.5, 5.0), (0.0, 8.0), (3.5, 6.0)] {
+        painter.rect_filled(
+            Rect::from_min_max(
+                Pos2::new(c.x + dx - 1.3, c.y + 4.0 - h),
+                Pos2::new(c.x + dx + 1.3, c.y + 4.0),
+            ),
+            0.0,
+            ink,
         );
     }
 }
