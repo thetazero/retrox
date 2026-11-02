@@ -1482,3 +1482,60 @@ fn the_start_shows_a_trade_run_or_the_way_to_one() {
     }
     assert!(market_starts > 0);
 }
+
+#[test]
+fn the_ship_stops_at_the_quarry_face_it_sees() {
+    // #155: a quarry stopped the ship at a sphere of its nominal radius,
+    // a hundred metres and more off its squashed face, so the ore it shed
+    // was out of the tractor's reach; and its bulges poked through the
+    // ship. Fly into one, from all round, slow and fast: the ship ends up
+    // against the face you see, never inside it.
+    let mut world = World::new(1);
+    assert!(world.start_at_field());
+    let (field, rocks) = world.field_rocks.clone().expect("in a field");
+    let quarry = rocks
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.radius_m > crate::mining::QUARRY_RADIUS)
+        .max_by(|a, b| a.1.radius_m.total_cmp(&b.1.radius_m))
+        .map(|(i, _)| i)
+        .expect("a field has a quarry");
+    let solid = |w: &World| {
+        w.mining
+            .solids(field, &rocks, w.clock_s)
+            .nth(quarry)
+            .expect("the quarry stands")
+    };
+    let dirs = [
+        DVec3::X,
+        DVec3::NEG_Y,
+        DVec3::Y,
+        DVec3::new(0.4, 0.3, -0.8).normalize(),
+    ];
+    for dir in dirs {
+        for throttle in [0.1, 0.4, 0.6] {
+            let s = solid(&world);
+            world.ship.frame = Place::Field(field);
+            world.ship.rel = s.pos + dir * (s.bound() + 200.0);
+            world.ship.vel = DVec3::ZERO;
+            world.ship.rot = look_rotation(-dir);
+            world.ship.throttle = throttle;
+            let mut closest = f64::MAX;
+            for _ in 0..60 * 40 {
+                world.update(1.0 / 60.0, Controls::default());
+                let s = solid(&world);
+                let gap = (world.ship.rel - s.pos).length() - s.surface_toward(world.ship.rel);
+                assert!(
+                    gap > 0.0,
+                    "{dir} at throttle {throttle}: the ship is {:.1} m inside the rock",
+                    -gap
+                );
+                closest = closest.min(gap);
+            }
+            assert!(
+                closest < 15.0,
+                "{dir} at throttle {throttle}: never got closer than {closest:.0} m to the face"
+            );
+        }
+    }
+}

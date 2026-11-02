@@ -5,9 +5,7 @@ use glam::{DQuat, DVec3};
 use retrox_sim::flight::{self, Goal, Kinematics};
 use retrox_sim::ship::ShipStats;
 
-use super::{
-    Controls, FastTravel, Leg, Mode, Place, REFERENCE, SECONDS_PER_DAY, World, rock_offset,
-};
+use super::{Controls, FastTravel, Leg, Mode, Place, REFERENCE, SECONDS_PER_DAY, World};
 
 /// Top of the fine-control range, m/s (throttle 0.5).
 pub const COMBAT_SPEED: f64 = 500.0;
@@ -390,14 +388,20 @@ impl World {
             ));
         }
         if let Some((field, rocks)) = &self.field_rocks {
+            // Rocks stop the ship at the surface you see, not at a sphere
+            // of their nominal radius (#155): the sphere kept it a hundred
+            // metres and more off a squashed quarry's face, out of the
+            // tractor's reach of the ore it shed, and let bulges poke
+            // through the ship.
             let center = self.position(Place::Field(*field));
-            for (i, rock) in rocks.iter().enumerate() {
-                if !self.mining.is_broken(*field, i) {
-                    solids.push((center + rock_offset(rock), rock.radius_m + 8.0));
+            let near = pos - center;
+            for rock in self.mining.solids(*field, rocks, self.clock_s) {
+                let margin = if rock.base { 8.0 } else { 4.0 };
+                if (near - rock.pos).length() > rock.bound() + margin {
+                    continue;
                 }
-            }
-            for (pos, radius) in self.mining.frag_solids(*field) {
-                solids.push((center + pos, radius + 4.0));
+                let radius = rock.surface_toward(near) + margin;
+                solids.push((center + rock.pos, radius));
             }
         }
         for (center, radius) in solids {
