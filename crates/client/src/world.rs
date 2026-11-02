@@ -124,7 +124,9 @@ pub enum Mode {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FastTravel {
     pub target: Place,
-    /// Start and end, in the star's frame.
+    /// Start and end, as offsets from the target. The ship flies in the
+    /// target's frame, so the target stays dead ahead while the time-lapse
+    /// carries it along its orbit.
     pub from: DVec3,
     pub to: DVec3,
     /// Galaxy clock at departure, and the trip's galaxy duration.
@@ -548,18 +550,13 @@ impl World {
     }
 
     fn start_fast_travel(&mut self, target: Place) {
-        let from = self.ship_position();
-        let distance = (self.position(target) - from).length();
+        let from = self.ship_position() - self.position(target);
+        let distance = from.length();
         let travel_s = distance * FAST_TRAVEL_SECONDS_PER_METRE;
-        // Aim for where the target will be on arrival, approaching from our side.
-        let now = self.clock_s;
-        self.clock_s += travel_s;
-        let arrive_at = self.position(target);
-        self.clock_s = now;
-        let approach = (from - arrive_at).normalize_or(DVec3::Z);
-        let to = arrive_at + approach * self.arrival_distance(target);
+        let approach = from.normalize_or(DVec3::Z);
+        let to = approach * self.arrival_distance(target);
         let duration = (2.0 + (distance / 1e7).max(1.0).log10() * 1.2).min(7.0) as f32;
-        self.ship.rot = look_rotation(to - from);
+        self.ship.rot = look_rotation(-approach);
         self.ship.vel = DVec3::ZERO;
         self.ship.spin = DVec3::ZERO;
         self.mode = Mode::FastTravel(FastTravel {
@@ -594,7 +591,7 @@ impl World {
                 let s = k * k * (3.0 - 2.0 * k);
                 let clock = trip.depart_s + trip.travel_s * k;
                 self.advance_clock(clock - self.clock_s);
-                self.ship.frame = Place::Star;
+                self.ship.frame = trip.target;
                 self.ship.rel = trip.from.lerp(trip.to, s);
                 if k >= 1.0 {
                     self.arrive_fast_travel(trip.target);
@@ -626,11 +623,8 @@ impl World {
     }
 
     fn arrive_fast_travel(&mut self, target: Place) {
-        let pos = self.ship_position();
+        // Already in the target's frame and facing it: nothing to snap.
         self.ship.frame = target;
-        self.ship.rel = pos - self.position(target);
-        self.ship.rot = look_rotation(-self.ship.rel);
-        self.cam_rot = self.ship.rot;
         self.ship.vel = DVec3::ZERO;
         self.ship.throttle = 0.0;
         self.mode = Mode::Normal;
@@ -927,6 +921,33 @@ mod tests {
                 world.name(target)
             );
             assert!(world.clock_s > before, "galaxy time must pass");
+        }
+    }
+
+    #[test]
+    fn fast_travel_keeps_the_target_dead_ahead() {
+        let mut world = World::new(1);
+        world.act(Action::Launch);
+        for target in world.nav_places().into_iter().filter(|p| *p != Place::Star) {
+            open_space(&mut world);
+            world.target = Some(target);
+            world.act(Action::FastTravel);
+            let start_rot = world.ship.rot;
+            while matches!(world.mode, Mode::FastTravel(_)) {
+                let ahead = world.ship.rot * DVec3::NEG_Z;
+                let to_target = (world.position(target) - world.ship_position()).normalize();
+                assert!(
+                    ahead.dot(to_target) > 0.9999,
+                    "{}: target drifted off the nose mid-trip",
+                    world.name(target)
+                );
+                world.update(1.0 / 60.0, Controls::default());
+            }
+            assert!(
+                world.ship.rot.dot(start_rot).abs() > 0.9999,
+                "{}: ship snapped on arrival",
+                world.name(target)
+            );
         }
     }
 
