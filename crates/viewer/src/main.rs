@@ -193,7 +193,10 @@ impl Viewer {
         ui.separator();
         ui.strong("Galaxy economy");
         let e = summarize(&self.state);
-        ui.label(format!("population {:.0}", e.population));
+        ui.label(format!(
+            "population {:.0} · money {:.0} cr",
+            e.population, e.money
+        ));
         egui::Grid::new("galaxy_econ").striped(true).show(ui, |ui| {
             for h in ["good", "stock", "short/d", "price", "#short"] {
                 ui.strong(h);
@@ -271,7 +274,10 @@ impl Viewer {
     }
 
     fn settlement_panel(&self, ui: &mut egui::Ui, s: &Settlement) {
-        ui.label(format!("population {:.1}", s.economy.population));
+        ui.label(format!(
+            "population {:.1} · treasury {:.0} cr",
+            s.economy.population, s.economy.treasury
+        ));
         for f in &s.economy.facilities {
             ui.label(format!("  {:?} ×{:.1}", f.kind, f.scale));
         }
