@@ -326,14 +326,12 @@ impl Renderer {
                 compilation_options: Default::default(),
                 buffers: &[Some(wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<SkyVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
+                    // One star per instance, drawn as a small quad.
+                    step_mode: wgpu::VertexStepMode::Instance,
                     attributes: &sky_attrs,
                 })],
             },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::PointList,
-                ..Default::default()
-            },
+            primitive: wgpu::PrimitiveState::default(),
             depth_stencil: depth(false),
             multisample: Default::default(),
             fragment: Some(wgpu::FragmentState {
@@ -622,7 +620,7 @@ impl Renderer {
             if let Some((buffer, count)) = &self.sky_buffer {
                 pass.set_pipeline(&self.sky_pipeline);
                 pass.set_vertex_buffer(0, buffer.slice(..));
-                pass.draw(0..*count, 0..1);
+                pass.draw(0..6, 0..*count);
             }
 
             if let (Some(vb), Some(ib)) = (&self.vertex_buffer, &self.index_buffer) {
