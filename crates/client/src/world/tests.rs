@@ -78,14 +78,13 @@ fn fast_travel_reaches_every_place_and_only_climbs_out_of_a_well() {
         real_seconds_until(&mut world, 30.0, |w| w.mode == Mode::Normal);
         // A field's trip stops by a rock at its edge (#122); anywhere
         // else at the place's arrival distance.
-        let (stop, expected) = match (target, world.field_stop) {
-            (Place::Field(f), Some((field, offset, standoff))) if f == field => {
-                (world.position(target) + offset, standoff)
-            }
+        let (offset, expected) = match (target, world.field_stop) {
+            (Place::Field(f), Some((field, offset, standoff))) if f == field => (offset, standoff),
             (Place::Field(_), _) => panic!("{}: no rock to stop by", world.name(target)),
-            _ => (world.position(target), world.arrival_distance(target)),
+            _ => (DVec3::ZERO, world.arrival_distance(target)),
         };
-        let d = (stop - world.ship_position()).length();
+        let stop = |w: &World| w.position(target) + offset;
+        let d = (stop(&world) - world.ship_position()).length();
         assert!(
             (d - expected).abs() < expected * 0.05 + 1.0,
             "{}: arrived {d:.3e} m away, expected {expected:.3e}",
@@ -96,7 +95,7 @@ fn fast_travel_reaches_every_place_and_only_climbs_out_of_a_well() {
         // sitting tail-first from the braking.
         let turn = real_seconds_until(&mut world, 8.0, |w| w.turn_over.is_none());
         let nose = world.ship.rot * DVec3::NEG_Z;
-        let to = (stop - world.ship_position()).normalize();
+        let to = (stop(&world) - world.ship_position()).normalize();
         let off = nose.angle_between(to).to_degrees();
         assert!(
             off < 1.0,
