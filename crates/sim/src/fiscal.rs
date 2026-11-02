@@ -166,15 +166,25 @@ pub(crate) fn settle(state: &mut GalaxyState, id: SettlementId) {
     };
     let welfare = faction.welfare;
     let reserve = reserve(state, id);
-    let tax = rate * (state.settlements[id].economy.treasury - reserve).max(0.0);
-    ledger::pay(state, Account::Settlement(id), Account::Faction(owner), tax);
-
     let economy = &state.settlements[id].economy;
-    let (population, treasury) = (economy.population, economy.treasury);
-    if welfare.claims > 0.0 {
-        let mine = claim(population, treasury, reserve, welfare.printing);
-        let pay = welfare.budget * mine / welfare.claims;
-        ledger::pay(state, Account::Faction(owner), Account::Settlement(id), pay);
+    let population = economy.population;
+    // The tax is always within what the settlement holds, so its treasury
+    // after tax is known before any money moves.
+    let tax = rate * (economy.treasury - reserve).max(0.0);
+    let treasury = economy.treasury - tax;
+    let benefit = if welfare.claims > 0.0 {
+        welfare.budget * claim(population, treasury, reserve, welfare.printing) / welfare.claims
+    } else {
+        0.0
+    };
+    // Tax and welfare settle as one transfer, whichever way it runs: the
+    // faction can pay the difference exactly when it could pay welfare
+    // out of its balance plus the tax.
+    let (settlement, faction) = (Account::Settlement(id), Account::Faction(owner));
+    if benefit >= tax {
+        ledger::pay(state, faction, settlement, benefit - tax);
+    } else {
+        ledger::pay(state, settlement, faction, tax - benefit);
     }
     let w = &mut state.factions[owner].welfare;
     w.staked_paying += claim(population, treasury, reserve, false);

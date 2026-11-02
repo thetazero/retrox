@@ -70,9 +70,10 @@ pub fn reviewing(
 /// their books. Arithmetic and ledger transfers only: nothing is searched
 /// for and nothing allocated.
 ///
-/// One thread: at tens of nanoseconds a settlement, rayon would cost more
-/// to start than it saves, and money moving through shared faction
-/// accounts keeps the order fixed.
+/// One walk, on one thread: money moves through shared faction accounts,
+/// which fixes the order, and splitting off the part each settlement does
+/// alone (production, population) to run on threads costs a second walk
+/// over every settlement, which on one core costs more than it saves.
 pub fn books(state: &mut GalaxyState) {
     for faction in state.factions.values_mut() {
         faction.welfare.counted = 0.0;
