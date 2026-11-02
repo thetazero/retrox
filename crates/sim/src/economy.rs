@@ -180,6 +180,14 @@ pub const HULL_STORAGE_DAYS: f64 = 120.0;
 /// What a tonne of finished hull sells for, in credits.
 pub const HULL_PRICE_PER_T: f64 = 60.0;
 
+/// Daily consumption of `good` per unit of population.
+pub fn per_capita(good: Good) -> f64 {
+    PER_CAPITA_DEMAND
+        .iter()
+        .find(|(g, _)| *g == good)
+        .map_or(0.0, |&(_, amount)| amount)
+}
+
 /// Markets aim to hold this many days of their own demand.
 pub const TARGET_DAYS: f64 = 30.0;
 /// Facilities stop producing a good once stock reaches this multiple of target.
@@ -232,6 +240,11 @@ pub struct LocalEconomy {
     pub population: f64,
     pub facilities: Vec<Facility>,
     pub market: Market,
+    /// Share of food demand going unmet, averaged over about a month; see
+    /// [`crate::demography`].
+    pub hunger: f64,
+    /// Whether the settlement is in famine.
+    pub famine: bool,
     /// Finished ship hull ready for sale, in tonnes. Built by shipyards.
     pub hull_t: f64,
     /// The settlement's money, in credits. Trade only moves money; nothing

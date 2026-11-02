@@ -3,9 +3,11 @@
 
 use crate::GalaxyState;
 
-/// Facilities consume inputs and produce outputs into stockpiles.
+/// Facilities consume inputs and produce outputs into stockpiles;
+/// populations eat, then grow or shrink.
 pub fn production(state: &mut GalaxyState) {
     crate::economy::production(state);
+    crate::demography::grow(state);
 }
 
 /// Faction AI: taxes and welfare now; plan quotas, fleet orders and

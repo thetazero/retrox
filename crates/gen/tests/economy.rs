@@ -126,3 +126,31 @@ fn shipyards_grow_the_fleet() {
     let end = economy::summarize(&state).ships;
     assert!(end > start, "fleet didn't grow: {start} -> {end}");
 }
+
+#[test]
+fn populations_change_and_stay_sane() {
+    let mut state = small();
+    let start: Vec<f64> = state
+        .settlements
+        .values()
+        .map(|s| s.economy.population)
+        .collect();
+    for _ in 0..360 * 2 {
+        tick(&mut state);
+    }
+    let end: Vec<f64> = state
+        .settlements
+        .values()
+        .map(|s| s.economy.population)
+        .collect();
+    assert!(end.iter().all(|p| p.is_finite() && *p >= 0.0));
+    let changed = start
+        .iter()
+        .zip(&end)
+        .filter(|(a, b)| (*a - *b).abs() > 1e-3 * a.max(1.0))
+        .count();
+    assert!(
+        changed * 2 > start.len(),
+        "only {changed} populations changed"
+    );
+}
