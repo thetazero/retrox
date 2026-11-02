@@ -331,6 +331,12 @@ Consequences:
   the time to match the goal's speed, and `a_busy_bubble_day_flies_few_steps`
   holds the busiest system to under 1,000 steps per flight-day.
   `retrox bench` reports the bubble's ms per day and steps per flight-day.
+  The player's fast travel follows the same rule (#109): a climb out of a
+  well heads for the edge facing the next target, which swings round as
+  the planet orbits, and its goal carries that swing. Before, the
+  autopilot chased the spot ~5 m/s off for over 100 galaxy days in its
+  start-of-trip rehearsal (a freeze on [J], and 94 s of every test run),
+  and the climb itself cost 18 hours of galaxy time instead of minutes.
 - **Not yet in the bubble:** colony ships, patrols. Harvesters fly in it
   (§5.4.2).
 - **Seen by the player:** the client carries each flight on between the
