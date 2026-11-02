@@ -46,6 +46,7 @@ The game opens on its title screen. Starting flags (`--seed`, `--station`,
 | `--screenshot PATH.ppm` | save the 90th frame and quit |
 | `--menu PAGE` | open a menu page: `title`, `new`, `load`, `settings`, or `pause` / `quit` over a fresh game |
 | `--keys K1,K2,…` | press these keys, one a frame (`waitN` waits N frames), then quit |
+| `--remote PATH` | play turn by turn from steps appended to PATH: keys, `hold:KEY:N`, `click:X:Y`, `scroll:X:Y:DY`, `shot:PATH.ppm`, `info:PATH`; the world waits between steps (for playtests) |
 
 ### Tools
 

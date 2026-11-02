@@ -1092,6 +1092,16 @@ retrox/
   fullscreen, interface size) persist in `$XDG_CONFIG_HOME/retrox/
   settings.json`. Development flags (`--seed`, `--station`, …) still skip
   the title; `--menu` and `--keys` drive menus for screenshots and checks.
+- **Playtests** (decided in #103): `--remote PATH` lets an agent play a
+  real game turn by turn. Steps appended to the file (keys, held keys,
+  clicks, the mouse wheel, `shot:` for a screenshot, `info:` for a text
+  readout of bearings, rocks and raiders) run as in `--keys`, and the
+  world stands still between them, so a slow player loses nothing. Run it
+  with `RETROX_DATA` pointed somewhere scratch, so its saves stay out of
+  the player's own. A playtest files each problem as its own issue, in
+  the player's words, labelled **blocks play** (a new player can't get
+  through the loop without outside knowledge, or loses work or money to
+  it) or **polish** (playable, but rough to look at or slow to feel).
 
 ## 10. Milestones (rough)
 

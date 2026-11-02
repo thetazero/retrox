@@ -15,7 +15,8 @@
 //! `--ship-view <deg>`, `--screenshot <path.ppm>`. `--menu <page>` opens a
 //! menu page instead (`title`, `new`, `load`, `settings`, `handbook[:chapter]`, or `pause` or `quit`
 //! over a fresh game), for screenshots. `--keys` plays a key script
-//! (see [`Flags::keys`]).
+//! (see [`Flags::keys`]), and `--remote <file>` plays turn by turn from
+//! steps appended to a file (see [`Running::run_script`]).
 
 mod audio;
 mod combat;
@@ -166,8 +167,7 @@ impl Flags {
                 .map(|k| k.split(',').map(|s| s.trim().to_lowercase()).collect())
                 .unwrap_or_default(),
             mute: has("--mute")
-                || (!has("--sound")
-                    && (has("--screenshot") || has("--keys") || has("--remote"))),
+                || (!has("--sound") && (has("--screenshot") || has("--keys") || has("--remote"))),
             remote: value("--remote").map(PathBuf::from),
         }
     }
@@ -2581,7 +2581,10 @@ fn remote_info(w: &World) -> String {
         let closing = w.ship.vel.dot(to.normalize_or_zero());
         let _ = writeln!(out, "target {}", w.name(t));
         let _ = writeln!(out, "distance_m {:.0}", to.length());
-        let _ = writeln!(out, "bearing yaw {yaw:.1} pitch {pitch:.1} (deg; +yaw right, +pitch up)");
+        let _ = writeln!(
+            out,
+            "bearing yaw {yaw:.1} pitch {pitch:.1} (deg; +yaw right, +pitch up)"
+        );
         let _ = writeln!(out, "closing_mps {closing:.0}");
     }
     let bearing = |to: glam::DVec3| {
