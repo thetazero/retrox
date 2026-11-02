@@ -1041,6 +1041,11 @@ somewhere, live somewhere, and fly for real near the player.
 - **Collect:** a tractor pulls loose chunks into the hold (as the market
   goods ore and ice) when you fly close; when the hold is full, they stay
   floating. Sell at any market.
+- **Mined lots aren't whole tonnes** (#175): chunks come in fractions, so
+  a hold can carry 2.1 t. Every screen shows cargo the same way, to a
+  tenth when it isn't whole ("2.1 t", "HOLD 2.1 / 12 t"). Markets take any
+  amount you carry: a sell key sells its step or what's left if less, and
+  SELL ALL empties the hold of that good. Buying stays in whole tonnes.
 - **Rock is solid where it's drawn** (#155): the ship stops against a
   rock's lumpy, squashed surface, not a sphere of its nominal size, and
   loose ore comes to rest on rock (2 m off it), never inside. Ore the

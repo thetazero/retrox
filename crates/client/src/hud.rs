@@ -1591,6 +1591,22 @@ pub fn jumps_text(jumps: u32) -> String {
     }
 }
 
+/// A mass of cargo: whole tonnes as "12 t", mined fractions to a tenth as
+/// "2.1 t" (issue #175), the same figure the MINING panel's hold shows.
+pub fn tonnes(t: f64) -> String {
+    format!("{} t", tonnage(t))
+}
+
+/// The number in [`tonnes`], for "2.1 / 12 t".
+pub fn tonnage(t: f64) -> String {
+    let tenths = (t * 10.0).round();
+    if tenths % 10.0 == 0.0 {
+        format!("{:.0}", tenths / 10.0)
+    } else {
+        format!("{:.1}", tenths / 10.0)
+    }
+}
+
 pub fn credits(cr: f64) -> String {
     let n = cr.round() as i64;
     let digits = n.unsigned_abs().to_string();

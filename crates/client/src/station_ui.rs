@@ -301,7 +301,7 @@ fn trade_screen(ctx: &egui::Context, w: &World, here: SettlementId, actions: &mu
                 ui.label(RichText::new("HOLD").color(CREAM_DIM));
                 glow_label(
                     ui,
-                    &format!("{carried:.0} / {capacity:.0} t"),
+                    &format!("{} / {capacity:.0} t", crate::hud::tonnage(carried)),
                     mono(18.0),
                     VFD,
                 );
@@ -359,7 +359,7 @@ fn runs_panel(ctx: &egui::Context, w: &World, here: SettlementId, actions: &mut 
             ui.spacing_mut().item_spacing.y = 6.0;
             let held: Vec<Good> = Good::ALL
                 .into_iter()
-                .filter(|&g| w.player.cargo[g] >= 1.0)
+                .filter(|&g| w.player.cargo[g] > trade::DUST_T)
                 .collect();
             if !held.is_empty() {
                 section(ui, "Your cargo sells at");
@@ -489,13 +489,13 @@ fn cargo_row(
     good: Good,
     actions: &mut Vec<Action>,
 ) {
-    let have = w.player.cargo[good].floor();
+    let have = w.player.cargo[good];
     let best = w.buyers(good, have, 1).into_iter().next();
     ui.horizontal(|ui| {
         ui.set_min_height(30.0);
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
         ui.label(
-            RichText::new(format!("{have:.0} t {}", good.name()))
+            RichText::new(format!("{} {}", crate::hud::tonnes(have), good.name()))
                 .font(mono(14.0))
                 .color(CREAM),
         );
@@ -779,13 +779,14 @@ fn market_table(
         }
         cell(
             COL_HOLD,
-            format!("{have:.0} t"),
-            if have > 0.0 { CREAM } else { RULE },
+            crate::hud::tonnes(have),
+            if have > trade::DUST_T { CREAM } else { RULE },
         );
         let max = trade::max_buy(&w.player, capacity, economy, model, good);
         let buys = [("+1", 1.0), ("+10", 10.0), ("MAX", max)].map(|(l, n)| (l, n.min(max)));
-        let sells =
-            [("−1", 1.0), ("−10", 10.0), ("ALL", have)].map(|(l, n)| (l, n.min(have).floor()));
+        // Sell keys take what's left when it's less than their step, so a
+        // mined fraction sells too (issue #175).
+        let sells = [("−1", 1.0), ("−10", 10.0), ("ALL", have)].map(|(l, n)| (l, n.min(have)));
         let bank_rect = |x: f32| {
             Rect::from_min_size(
                 Pos2::new(row.left() + x, row.top() + 7.0),
@@ -799,7 +800,7 @@ fn market_table(
         {
             actions.push(Action::Trade(good, buys[k].1));
         }
-        let keys = sells.map(|(l, n)| (l, n >= 1.0));
+        let keys = sells.map(|(l, n)| (l, n > trade::DUST_T));
         if let Some(k) = crate::widgets::bank(
             ui,
             bank_rect(COL_BANKS + BANK_W + 10.0),

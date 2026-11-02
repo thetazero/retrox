@@ -45,7 +45,7 @@ pub fn contracts_screen(
                 ui.label(RichText::new("HOLD").color(CREAM_DIM));
                 glow_label(
                     ui,
-                    &format!("{carried:.0} / {capacity:.0} t"),
+                    &format!("{} / {capacity:.0} t", crate::hud::tonnage(carried)),
                     mono(18.0),
                     VFD,
                 );
