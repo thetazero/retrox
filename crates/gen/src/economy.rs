@@ -1,46 +1,73 @@
 //! Resources, population and facilities at the start of history.
 //!
 //! Facilities are placed where they make sense (mines on ore, factories in
-//! populous systems), then each kind is scaled so the galaxy as a whole
-//! produces a little more than it consumes. Whether a given system is
+//! populous settlements), then each kind is scaled so the galaxy as a whole
+//! produces a little more than it consumes. Whether a given settlement is
 //! short is then up to the trade network.
 
 use retrox_sim::economy::{Facility, FacilityKind, Good, GoodMap, PER_CAPITA_DEMAND};
-use retrox_sim::{EconomyModel, GalaxyState, Resources, StarClass};
+use retrox_sim::{FactionId, GalaxyState, Resources, SettlementId, SystemId};
+use slotmap::SecondaryMap;
 
+use crate::factions::Territory;
 use crate::rng::Rng;
 
 /// Galaxy-wide production as a multiple of what consumption needs.
 const SURPLUS: f64 = 1.15;
 
-pub fn seed(rng: &mut Rng, state: &mut GalaxyState) {
-    let capitals: Vec<_> = state.factions.values().map(|f| f.capital).collect();
+/// Population per system: capitals large, claimed systems log-normal,
+/// a share of unclaimed systems small frontier outposts, the rest empty.
+pub fn population(rng: &mut Rng, state: &GalaxyState, territory: &Territory) -> Vec<f64> {
+    (0..state.systems.len())
+        .map(|i| {
+            let mut r = rng.fork(i as u64);
+            let system = SystemId::from_index(i as u32);
+            if territory.capitals.contains(&system) {
+                r.range(150.0, 300.0)
+            } else if territory.claim[i].is_some() {
+                // Log-normal-ish: most systems small, a few large.
+                8.0 * (r.f64() + r.f64() + r.f64() - 1.5).mul_add(1.6, 0.0).exp()
+            } else if r.chance(0.3) {
+                r.range(0.3, 2.0) // frontier outposts
+            } else {
+                0.0
+            }
+        })
+        .collect()
+}
 
-    for (id, system) in state.systems.iter_mut() {
-        let mut r = rng.fork(id.index() as u64);
-        system.resources = resources(&mut r, system.star);
-        system.economy.population = if capitals.contains(&id) {
-            r.range(150.0, 300.0)
-        } else if system.owner.is_some() {
-            // Log-normal-ish: most systems small, a few large.
-            8.0 * (r.f64() + r.f64() + r.f64() - 1.5).mul_add(1.6, 0.0).exp()
-        } else if r.chance(0.3) {
-            r.range(0.3, 2.0) // frontier outposts
-        } else {
-            0.0
-        };
+/// What a settlement can reach: the richest of each resource among its
+/// system's bodies.
+fn system_resources(state: &GalaxyState, system: SystemId) -> Resources {
+    state.systems[system]
+        .bodies
+        .iter()
+        .fold(Resources::default(), |acc, &b| {
+            let r = state.bodies[b].resources;
+            Resources {
+                ore: acc.ore.max(r.ore),
+                ice: acc.ice.max(r.ice),
+            }
+        })
+}
+
+/// Facilities and starting markets for every settlement.
+pub fn seed(rng: &mut Rng, state: &mut GalaxyState) {
+    let mut holdings: SecondaryMap<FactionId, usize> = SecondaryMap::new();
+    for s in state.settlements.values() {
+        *holdings.entry(s.owner).unwrap().or_default() += 1;
     }
+    let ids: Vec<SettlementId> = state.settlements.keys().collect();
 
     // Candidate facilities with relative weights; scaled below.
     let mut placed: Vec<(usize, FacilityKind, f64)> = Vec::new();
-    for (id, system) in state.systems.iter() {
-        let mut r = rng.fork(0x1000_0000 + id.index() as u64);
-        let (res, pop, owned) = (
-            system.resources,
-            system.economy.population,
-            system.owner.is_some(),
-        );
-        let i = id.index();
+    for (i, &id) in ids.iter().enumerate() {
+        let settlement = &state.settlements[id];
+        let mut r = rng.fork(settlement.system.index() as u64);
+        let res = system_resources(state, settlement.system);
+        let pop = settlement.economy.population;
+        // Independent outposts mine at half weight, as unclaimed space did.
+        let owned = holdings[settlement.owner] > 1;
         if res.ore > 0.25 {
             placed.push((
                 i,
@@ -78,28 +105,17 @@ pub fn seed(rng: &mut Rng, state: &mut GalaxyState) {
         let (good, per_scale) = kind.recipe().outputs[0];
         let scale_per_weight = required[good] / per_scale / total;
         for &(i, k, weight) in placed.iter().filter(|p| p.1 == kind) {
-            state.systems.as_mut_slice()[i]
-                .economy
-                .facilities
-                .push(Facility {
-                    kind: k,
-                    scale: weight * scale_per_weight,
-                });
+            state.settlements[ids[i]].economy.facilities.push(Facility {
+                kind: k,
+                scale: weight * scale_per_weight,
+            });
         }
     }
 
     // Start every market at its target stock and price.
-    let models: Vec<EconomyModel> = state
-        .systems
-        .as_slice()
-        .iter()
-        .map(|s| {
-            s.owner
-                .map_or(EconomyModel::Market, |f| state.factions[f].economy)
-        })
-        .collect();
-    for (system, model) in state.systems.as_mut_slice().iter_mut().zip(models) {
-        let economy = &mut system.economy;
+    for settlement in state.settlements.values_mut() {
+        let model = state.factions[settlement.owner].economy;
+        let economy = &mut settlement.economy;
         economy.refresh_demand();
         for good in Good::ALL {
             economy.market.stock[good] = economy.market.target(good);
@@ -107,31 +123,12 @@ pub fn seed(rng: &mut Rng, state: &mut GalaxyState) {
         economy.update_prices(model);
     }
 }
-
-fn resources(r: &mut Rng, star: StarClass) -> Resources {
-    use StarClass::*;
-    let ore_bias = match star {
-        O | B | Neutron | WhiteDwarf | BlackHole => 1.6,
-        _ => 1.0,
-    };
-    let ice_bias = match star {
-        K | M => 1.5,
-        O | B => 0.5,
-        _ => 1.0,
-    };
-    Resources {
-        ore: (r.f64().powi(2) * ore_bias).min(1.0),
-        ice: (r.f64().powi(2) * ice_bias).min(1.0),
-    }
-}
-
 /// Daily output of each good the galaxy needs, working back up the supply
 /// chain from what the population consumes.
 fn required_output(state: &GalaxyState) -> GoodMap<f64> {
     let population: f64 = state
-        .systems
-        .as_slice()
-        .iter()
+        .settlements
+        .values()
         .map(|s| s.economy.population)
         .sum();
     let mut need = GoodMap::splat(0.0);

@@ -130,22 +130,62 @@ fn stats(seed: u64) {
         .map(|s| s.name.as_str())
         .collect();
     println!("  names: {}", sample.join(", "));
+    print_bodies(&state);
     println!("  factions:");
-    for faction in state.factions.values() {
-        let systems = state
-            .systems
-            .as_slice()
-            .iter()
-            .filter(|s| {
-                s.owner
-                    .is_some_and(|o| state.factions[o].capital == faction.capital)
-            })
-            .count();
+    let mut independents = 0;
+    for (id, faction) in &state.factions {
+        let settlements = holdings(&state, id);
+        if settlements < 2 {
+            independents += 1;
+            continue;
+        }
+        let population: f64 = state
+            .settlements
+            .values()
+            .filter(|s| s.owner == id)
+            .map(|s| s.economy.population)
+            .sum();
         println!(
-            "    {:<32} {:?}  {systems} systems",
+            "    {:<32} {:?}  {settlements} settlements, population {population:.0}",
             faction.name, faction.economy
         );
     }
+    println!("    + {independents} independent one-settlement factions");
+}
+
+fn print_bodies(state: &retrox_sim::GalaxyState) {
+    use retrox_sim::BodyKind;
+    let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
+    for body in state.bodies.as_slice() {
+        let kind = match body.kind {
+            BodyKind::Planet(class) => format!("{class:?} planet"),
+            other => format!("{other:?}"),
+        };
+        *kinds.entry(kind).or_default() += 1;
+    }
+    let kinds: Vec<String> = kinds.iter().map(|(k, n)| format!("{k} {n}")).collect();
+    println!("  {} bodies: {}", state.bodies.len(), kinds.join(", "));
+    let divided = state
+        .bodies
+        .as_slice()
+        .iter()
+        .filter(|b| !b.regions.is_empty())
+        .count();
+    println!(
+        "  {} habitable worlds divided into {} regions; {} settlements",
+        divided,
+        state.regions.len(),
+        state.settlements.len()
+    );
+}
+
+/// How many settlements a faction holds.
+pub(crate) fn holdings(state: &retrox_sim::GalaxyState, faction: retrox_sim::FactionId) -> usize {
+    state
+        .settlements
+        .values()
+        .filter(|s| s.owner == faction)
+        .count()
 }
 
 fn simulate(seed: u64, years: u64, csv: Option<&str>) -> std::io::Result<()> {
@@ -157,7 +197,7 @@ fn simulate(seed: u64, years: u64, csv: Option<&str>) -> std::io::Result<()> {
             let mut file = std::io::BufWriter::new(std::fs::File::create(path)?);
             writeln!(
                 file,
-                "day,good,stock,demand,shortfall,mean_price,systems_short"
+                "day,good,stock,demand,shortfall,mean_price,markets_short"
             )?;
             Some(file)
         }
@@ -186,7 +226,7 @@ fn simulate(seed: u64, years: u64, csv: Option<&str>) -> std::io::Result<()> {
                     e.demand[good],
                     e.shortfall[good],
                     e.mean_price[good],
-                    e.systems_short[good]
+                    e.markets_short[good]
                 )?;
             }
         }
@@ -230,7 +270,7 @@ fn print_economy(state: &retrox_sim::GalaxyState) {
             e.demand[good],
             e.shortfall[good],
             e.mean_price[good],
-            e.systems_short[good]
+            e.markets_short[good]
         );
     }
 }

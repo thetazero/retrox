@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::GalaxyTime;
+use crate::settlement::SettlementId;
 use crate::state::FactionId;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -35,4 +36,9 @@ pub enum HistoryKind {
     Genesis { seed: u64 },
     /// A faction came into existence.
     FactionFounded { faction: FactionId },
+    /// A settlement was founded.
+    SettlementFounded {
+        settlement: SettlementId,
+        faction: FactionId,
+    },
 }

@@ -2741,6 +2741,7 @@ dependencies = [
  "rayon",
  "retrox-sim",
  "serde_json",
+ "slotmap",
 ]
 
 [[package]]

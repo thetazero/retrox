@@ -11,6 +11,7 @@ workspace = true
 [dependencies]
 retrox-sim.workspace = true
 rayon.workspace = true
+slotmap.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
