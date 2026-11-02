@@ -1293,7 +1293,7 @@ impl World {
     }
 
     /// In orbit of the first planet with two cities or more (this system's
-    /// or the nearest system's), with 12 t of food bound for the last of
+    /// or the nearest system's), with a contract for 12 t of food to the last of
     /// them and nothing targeted: the case of issue #116 (for testing).
     /// Returns the planet.
     pub fn start_by_cities(&mut self) -> Option<BodyId> {
@@ -1336,7 +1336,6 @@ impl World {
         self.target = None;
         self.landing = None;
         let amount = 12.0;
-        self.player.cargo[Good::Food] += amount;
         self.player.contracts.push(contracts::Contract {
             offer: Offer {
                 from: cities[0],
