@@ -17,6 +17,10 @@ const SURPLUS: f64 = 1.15;
 /// Settlements start with enough credits to buy this many days of their own
 /// demand at base prices.
 const STARTING_TREASURY_DAYS: f64 = 60.0;
+/// Daily metal and components per unit of population set aside for
+/// construction and colony ships.
+const BUILD_METAL_PER_CAPITA: f64 = 0.05;
+const BUILD_COMPONENTS_PER_CAPITA: f64 = 0.01;
 /// Settlements above this population with a factory get a shipyard.
 const SHIPYARD_MIN_POPULATION: f64 = 30.0;
 /// Tonnes of hull a day per unit of population.
@@ -164,6 +168,10 @@ fn required_output(state: &GalaxyState) -> GoodMap<f64> {
     for (good, per_capita) in PER_CAPITA_DEMAND {
         need[good] += per_capita * population;
     }
+    // Headroom for building: construction and colony ships need metal and
+    // components beyond what people consume.
+    need[Good::Metal] += BUILD_METAL_PER_CAPITA * population;
+    need[Good::Components] += BUILD_COMPONENTS_PER_CAPITA * population;
     for s in state.settlements.values() {
         for f in s
             .economy

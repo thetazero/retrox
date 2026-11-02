@@ -30,6 +30,9 @@ const COMPANY_TAX: f64 = 0.01;
 const WORKING_CAPITAL_HOLDS: f64 = 2.0;
 /// Rough value of a tonne of cargo at base prices, for working capital.
 const CARGO_VALUE_PER_T: f64 = 20.0;
+/// Share of a faction's remaining debt room it prints as welfare each day
+/// when its balance isn't positive.
+const WELFARE_DEBT_SHARE: f64 = 0.002;
 /// Share of a faction's positive balance paid out as welfare each day.
 const WELFARE_SHARE: f64 = 0.05;
 /// Delivery premium, as a share of the base price, at a completely empty
@@ -126,11 +129,20 @@ pub fn taxes_and_welfare(state: &mut GalaxyState) {
         let owner = state.settlements[id].owner;
         *totals.entry(owner).unwrap().or_default() += weight(state, id, reserve);
     }
+    // A faction pays out a share of a positive balance; a faction without
+    // one prints a little, within its debt limit, so its settlements
+    // aren't left with nothing.
     let budgets: SecondaryMap<FactionId, f64> = state
         .factions
         .iter()
-        .filter(|(_, f)| f.treasury > 0.0)
-        .map(|(id, f)| (id, f.treasury * WELFARE_SHARE))
+        .map(|(id, f)| {
+            let budget = if f.treasury > 0.0 {
+                f.treasury * WELFARE_SHARE
+            } else {
+                ledger::spendable(state, Account::Faction(id)) * WELFARE_DEBT_SHARE
+            };
+            (id, budget)
+        })
         .collect();
     for (&id, &reserve) in ids.iter().zip(&reserves) {
         let owner = state.settlements[id].owner;

@@ -6,6 +6,7 @@
 //! dependency upgrades.
 
 mod bodies;
+mod cradle;
 mod economy;
 mod factions;
 mod fields;
@@ -45,6 +46,9 @@ pub struct GalaxyConfig {
     /// Share of systems claimed by some faction at the start; the rest is
     /// unclaimed frontier.
     pub claimed_fraction: f64,
+    /// How many rival nations share the cradle world, at least and at most
+    /// (used by [`generate_cradle`]).
+    pub cradle_nations: (usize, usize),
 }
 
 impl Default for GalaxyConfig {
@@ -59,6 +63,7 @@ impl Default for GalaxyConfig {
             extra_lane_chance: 0.12,
             factions: 20,
             claimed_fraction: 0.6,
+            cradle_nations: (2, 4),
         }
     }
 }
@@ -75,6 +80,18 @@ pub fn generate(seed: u64, config: &GalaxyConfig) -> GalaxyState {
         &territory,
         &population,
     );
+    economy::seed(&mut Rng::derive(seed, "economy"), &mut state);
+    let classes = haulers::classes(&mut state);
+    haulers::seed(&mut Rng::derive(seed, "companies"), &mut state, &classes);
+    state
+}
+
+/// Generate the galaxy at the dawn of history (§4.2): the physical galaxy
+/// and one cradle world shared by a few rival nations, with everything
+/// else empty. Run the sim forward from here to get a galaxy with a past.
+pub fn generate_cradle(seed: u64, config: &GalaxyConfig) -> GalaxyState {
+    let mut state = generate_physical(seed, config);
+    cradle::found(&mut Rng::derive(seed, "cradle"), &mut state, config);
     economy::seed(&mut Rng::derive(seed, "economy"), &mut state);
     let classes = haulers::classes(&mut state);
     haulers::seed(&mut Rng::derive(seed, "companies"), &mut state, &classes);
