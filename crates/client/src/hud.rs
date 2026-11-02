@@ -15,6 +15,7 @@ mod combat;
 pub(crate) mod guide;
 mod map;
 mod mining;
+pub(crate) mod skim;
 
 pub(crate) use map::drum;
 
@@ -251,7 +252,12 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
         painter.circle_filled(c + s, 2.5, AMBER);
     }
 
-    mining::draw(ctx, &h);
+    // Over a gas giant the scoop's panel takes the mining panel's place.
+    if skim::showing(&h) {
+        skim::draw(ctx, &h);
+    } else {
+        mining::draw(ctx, &h);
+    }
     combat::draw(ctx, &h);
 
     // Top-left: where and when.

@@ -301,6 +301,8 @@ pub struct World {
     pub field_rocks: Option<(FieldId, Vec<Rock>)>,
     /// The mining laser and what it has done to every field.
     pub mining: Mining,
+    /// The gas scoop, near a gas giant (issue #68).
+    pub skim: crate::skim::Skim,
     /// The mining laser's beam this frame, as offsets from the ship's
     /// position: muzzle to where it stops.
     pub beam: Option<(DVec3, DVec3)>,
@@ -418,6 +420,7 @@ impl World {
             cam_rot,
             field_rocks: None,
             mining: Mining::default(),
+            skim: crate::skim::Skim::default(),
             beam: None,
             message: None,
             bump: 0.0,
@@ -564,6 +567,10 @@ impl World {
     /// Where fast travel to `place` stops, measured from its centre.
     pub fn arrival_distance(&self, place: Place) -> f64 {
         match place {
+            // Gas giants: just above the cloud deck, ready to skim.
+            Place::Body(b) if self.galaxy.bodies[b].kind == BodyKind::GasGiant => {
+                self.place_radius(place) + crate::skim::ARRIVAL_ALTITUDE_M
+            }
             Place::Body(b) if self.has_city(b) => self.place_radius(place) * APPROACH_RADII,
             Place::Star | Place::Body(_) => self.well_radius(place) * 1.05,
             Place::Field(_) => self.place_radius(place) + 10e3,
@@ -1000,13 +1007,72 @@ impl World {
         let trigger = controls.fire && self.mode == Mode::Normal && self.combat.lost.is_none();
         // Mid-fight the trigger is the guns' alone.
         let fighting = self.hostiles_near() > 0 && !self.combat.player.guns.is_empty();
-        self.mine(dt, trigger && !fighting);
+        // In a giant's skimming band the trigger opens the scoop instead.
+        let pass = self.skim_pass();
+        let skimming = pass.is_some_and(|p| crate::skim::density(p.altitude_m) > 0.0);
+        self.mine(dt, trigger && !fighting && !skimming);
+        self.skim(dt, pass, trigger && !fighting);
         self.fight(dt, trigger);
         self.repair_docked();
         self.update_camera(dt);
         let mut progress = std::mem::take(&mut self.player.progress);
         progress.observe(self);
         self.player.progress = progress;
+    }
+
+    /// The ship's pass over a gas giant, if it's within twice the arrival
+    /// height of one's cloud deck and flying.
+    pub fn skim_pass(&self) -> Option<crate::skim::Pass> {
+        if self.mode != Mode::Normal || self.combat.lost.is_some() {
+            return None;
+        }
+        let pos = self.ship_position();
+        let t = self.t_days();
+        self.view
+            .bodies
+            .iter()
+            .copied()
+            .filter(|&b| self.galaxy.bodies[b].kind == BodyKind::GasGiant)
+            .find_map(|b| {
+                let centre = self.position(Place::Body(b));
+                let d = pos - centre;
+                let altitude_m = d.length() - self.place_radius(Place::Body(b));
+                (altitude_m < 2.0 * crate::skim::ARRIVAL_ALTITUDE_M).then(|| {
+                    let vel = self.ship.vel + self.velocity_at(self.ship.frame, t)
+                        - self.velocity_at(Place::Body(b), t);
+                    let stats = self.stats();
+                    crate::skim::Pass {
+                        giant: b,
+                        altitude_m,
+                        vel,
+                        up: d.normalize_or(DVec3::Y),
+                        richness: self.galaxy.bodies[b].resources.gas,
+                        free_t: (stats.cargo_t - self.player.cargo_t()).max(0.0),
+                    }
+                })
+            })
+    }
+
+    /// One frame of the gas scoop: gas into the hold, the source strained by
+    /// it as NPC skimmers strain it, and the gas's drag and shoves.
+    fn skim(&mut self, dt: f64, pass: Option<crate::skim::Pass>, trigger: bool) {
+        let stats = self.stats();
+        let out = self.skim.update(dt, &stats, pass, trigger);
+        if out.gas_t > 0.0 {
+            self.player.cargo[Good::Gas] += out.gas_t;
+            self.mining.haul[Good::Gas] += out.gas_t;
+            if let Some(p) = pass {
+                retrox_sim::harvest::strain(
+                    &mut self.galaxy,
+                    retrox_sim::harvest::Source::Body(p.giant),
+                    out.gas_t,
+                );
+            }
+        }
+        self.ship.vel += out.kick;
+        if let Some(text) = out.message {
+            self.say(text);
+        }
     }
 
     /// The best price a tonne of `good` sells for in this system, and
@@ -1024,6 +1090,55 @@ impl World {
                 Some((price, s))
             })
             .max_by(|a, b| a.0.total_cmp(&b.0))
+    }
+
+    /// Skim the richest gas giant in this system (or the first system with
+    /// one): 15 km over its sunlit cloud deck, flying level at 300 m/s
+    /// (for testing). Returns whether it found one.
+    pub fn start_skimming(&mut self) -> bool {
+        let giants = |w: &Self, id: SystemId| -> Option<BodyId> {
+            w.galaxy.systems[id]
+                .bodies
+                .iter()
+                .copied()
+                .filter(|&b| w.galaxy.bodies[b].kind == BodyKind::GasGiant)
+                .max_by(|&a, &b| {
+                    let g = |x: BodyId| w.galaxy.bodies[x].resources.gas;
+                    g(a).total_cmp(&g(b))
+                })
+        };
+        if giants(self, self.system).is_none() {
+            let Some(system) = self
+                .galaxy
+                .systems
+                .iter()
+                .find_map(|(id, _)| giants(self, id).map(|_| id))
+            else {
+                return false;
+            };
+            self.arrive_jump(system);
+        }
+        let Some(giant) = giants(self, self.system) else {
+            return false;
+        };
+        let place = Place::Body(giant);
+        let centre = self.position(place);
+        // Over the dayside, a little off the line to the star.
+        let up = (-centre).normalize_or(DVec3::X);
+        let up = (up + up.cross(DVec3::Y) * 0.6 + DVec3::Y * 0.25).normalize();
+        let along = up.cross(DVec3::Y).normalize_or(DVec3::Z);
+        self.mode = Mode::Normal;
+        self.ship.frame = place;
+        self.ship.rel = up * (self.place_radius(place) + 15_000.0);
+        self.ship.vel = along * 300.0;
+        // Level: wings parallel to the cloud deck.
+        let right = along.cross(up).normalize();
+        self.ship.rot = DQuat::from_mat3(&glam::DMat3::from_cols(right, up, -along));
+        self.ship.throttle = 0.3;
+        self.ship.flight_assist = true;
+        self.cam_rot = self.ship.rot;
+        self.message = None;
+        true
     }
 
     /// Park in the first asteroid field of this system (or the nearest

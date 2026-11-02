@@ -21,6 +21,17 @@ fn hauling_conserves_goods() {
     for _ in 0..30 {
         tick(&mut state);
     }
+    // Harvesters bring new goods in from space (see tests/harvest.rs);
+    // trade itself only moves them.
+    let harvesters: Vec<_> = state
+        .companies
+        .iter()
+        .filter(|(_, c)| c.fleets.iter().any(|f| f.harvest.is_some()))
+        .map(|(k, _)| k)
+        .collect();
+    for k in harvesters {
+        state.companies.remove(k);
+    }
     let before = haul::total_goods(&state);
     haul::trade(&mut state);
     let after = haul::total_goods(&state);

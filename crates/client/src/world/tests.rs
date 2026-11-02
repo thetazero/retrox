@@ -633,3 +633,43 @@ fn climbing_out_is_a_real_flight_toward_the_next_target() {
     assert!(out.dot(sunward) > 0.95, "came out facing the star");
     assert_eq!(world.prompts().fast_travel, Some(Place::Star));
 }
+
+#[test]
+fn skimming_a_gas_giant_fills_the_hold_with_gas() {
+    use retrox_sim::harvest::{self, Source};
+    let mut world = World::new(1);
+    assert!(world.start_skimming(), "no gas giant to skim");
+    let pass = world.skim_pass().expect("over a gas giant");
+    let source = Source::Body(pass.giant);
+    let strain = |w: &World| w.galaxy.strain.get(source, w.galaxy.time);
+    let before = strain(&world);
+    let scoop = Controls {
+        fire: true,
+        ..Controls::default()
+    };
+    let dt = 1.0 / 60.0;
+    for _ in 0..(20.0 / dt) as usize {
+        world.update(dt, scoop);
+    }
+    let gas = world.player.cargo[Good::Gas];
+    assert!(gas > 0.5, "only {gas:.2} t of gas in 20 s");
+    assert!(world.player.cargo_t() <= world.stats().cargo_t + 1e-9);
+    assert!(strain(&world) > before, "the giant doesn't feel it");
+    assert!(harvest::effective_richness(&world.galaxy, source) > 0.0);
+}
+
+#[test]
+fn fast_travel_to_a_gas_giant_stops_over_its_clouds() {
+    let world = World::new(1);
+    let giant = world
+        .galaxy
+        .bodies
+        .iter()
+        .find(|(_, b)| b.kind == BodyKind::GasGiant)
+        .map(|(id, _)| id)
+        .expect("a gas giant");
+    let place = Place::Body(giant);
+    let above = world.arrival_distance(place) - world.place_radius(place);
+    assert!(above < crate::skim::BAND_M * 2.0, "{above} m up");
+    assert!(above > crate::skim::BAND_M, "arrives inside the band");
+}

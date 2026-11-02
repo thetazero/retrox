@@ -11,7 +11,7 @@
 //! (the ship lost that long ago; with `--keys`, it has a checkpoint at a
 //! station to go back to), `--rewind` (rewinding to a checkpoint),
 //! `--arrival` (back at the checkpoint), `--harvesters <gas|ice>` (by a
-//! harvester at work),
+//! harvester at work), `--skim` (in a giant's clouds),
 //! `--ship-view <deg>`, `--screenshot <path.ppm>`. `--menu <page>` opens a
 //! menu page instead (`title`, `new`, `load`, `settings`, `handbook[:chapter]`, or `pause` or `quit`
 //! over a fresh game), for screenshots. `--keys` plays a key script
@@ -34,6 +34,7 @@ mod mining;
 mod render;
 mod save;
 mod settings;
+mod skim;
 mod station_ui;
 mod title;
 mod trade;
@@ -75,6 +76,8 @@ struct Flags {
     field: bool,
     /// Start in space alongside a trader fleet.
     traffic: bool,
+    /// Start skimming a gas giant (`--skim`).
+    skim: bool,
     /// Start by a harvester at work: `gas` or `ice` (`--harvesters`).
     harvesters: Option<String>,
     /// Start in the nearest asteroid field with raiders, for them to find.
@@ -134,6 +137,7 @@ impl Flags {
             station: has("--station"),
             field: has("--field"),
             traffic: has("--traffic"),
+            skim: has("--skim"),
             harvesters: value("--harvesters").or_else(|| has("--harvesters").then(|| "gas".into())),
             combat: has("--combat") || has("--brawl") || has("--lost") || has("--rewind"),
             brawl: has("--brawl") || has("--lost") || has("--rewind"),
@@ -172,6 +176,7 @@ impl Flags {
                     || self.field
                     || self.traffic
                     || self.harvesters.is_some()
+                    || self.skim
                     || self.combat
                     || self.arrival
                     || self.contracts
@@ -238,6 +243,9 @@ impl Flags {
         }
         if self.traffic {
             world.start_by_traffic();
+        }
+        if self.skim && !world.start_skimming() {
+            eprintln!("--skim: no gas giant anywhere");
         }
         if let Some(good) = &self.harvesters {
             use retrox_sim::economy::Good;
@@ -1535,6 +1543,23 @@ fn scene(
                     [0.0, 1.0, 0.0, 1.0],
                 ),
             ));
+        }
+        // The gas scoop open in a giant's clouds: the same plume NPC
+        // skimmers trail.
+        if world.skim.open {
+            // Scaled down: the chase camera sits right behind it.
+            let length = world.stats().length_m as f32 * 0.3;
+            harvest_glow(
+                meshes,
+                retrox_sim::economy::Good::Gas,
+                pos,
+                rot,
+                length,
+                7,
+                world.clock_s,
+                cam,
+                &mut out,
+            );
         }
         // The mining laser.
         if let Some((from, to)) = world.beam {
