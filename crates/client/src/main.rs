@@ -1295,7 +1295,9 @@ impl Running {
     ///   `hold:r:30` for the trigger), without waiting for it;
     /// - `click:X:Y` clicks the UI at that pixel of the window (as in a
     ///   screenshot), `move:X:Y` just points there;
-    /// - `shot:PATH` saves this frame as a PPM.
+    /// - `scroll:X:Y:DY` turns the mouse wheel there;
+    /// - `shot:PATH` saves this frame as a PPM;
+    /// - `info:PATH` writes where things stand, as text.
     fn run_script(&mut self) {
         self.holds.retain_mut(|(key, left)| {
             *left = left.saturating_sub(1);
@@ -1356,6 +1358,25 @@ impl Running {
                 }
             }
             ["shot", path @ ..] => self.renderer.capture = Some(PathBuf::from(path.join(":"))),
+            ["scroll", x, y, dy] => {
+                if let (Some(pos), Ok(dy)) = (points(x, y), dy.parse::<f32>()) {
+                    self.pointer.push_back(vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            delta: egui::vec2(0.0, dy),
+                            phase: egui::TouchPhase::Move,
+                            source: egui::MouseWheelSource::Unknown,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ]);
+                }
+            }
+            ["info", path @ ..] => {
+                if let Some(game) = &self.game {
+                    let _ = std::fs::write(path.join(":"), remote_info(&game.world));
+                }
+            }
             [key] => self.just_pressed.extend(key_code(key)),
             _ => {}
         }
@@ -2536,4 +2557,32 @@ fn key_code(name: &str) -> Option<KeyCode> {
         "backspace" => Backspace,
         _ => return None,
     })
+}
+
+/// Where things stand, for a `--remote` player who can't see numbers in a
+/// screenshot: the target's bearing from the nose, closing speed and so on.
+fn remote_info(w: &World) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let ship = w.ship_position();
+    let _ = writeln!(out, "system {}", w.galaxy.systems[w.system].name);
+    let _ = writeln!(out, "mode {:?}", w.mode);
+    let _ = writeln!(out, "credits {:.0}", w.player.credits);
+    let _ = writeln!(out, "cargo_t {:.1}", w.player.cargo_t());
+    let _ = writeln!(out, "speed {:.0}", w.ship.vel.length());
+    let _ = writeln!(out, "hostiles_near {}", w.hostiles_near());
+    let _ = writeln!(out, "lost {:?}", w.combat.lost);
+    if let Some(t) = w.target {
+        let to = w.position(t) - ship;
+        let local = w.ship.rot.inverse() * to.normalize_or_zero();
+        // Ship space: x right, y up, -z forward.
+        let yaw = local.x.atan2(-local.z).to_degrees();
+        let pitch = local.y.asin().to_degrees();
+        let closing = w.ship.vel.dot(to.normalize_or_zero());
+        let _ = writeln!(out, "target {}", w.name(t));
+        let _ = writeln!(out, "distance_m {:.0}", to.length());
+        let _ = writeln!(out, "bearing yaw {yaw:.1} pitch {pitch:.1} (deg; +yaw right, +pitch up)");
+        let _ = writeln!(out, "closing_mps {closing:.0}");
+    }
+    out
 }
