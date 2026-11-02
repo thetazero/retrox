@@ -15,3 +15,4 @@ path = "src/main.rs"
 [dependencies]
 retrox-sim.workspace = true
 retrox-gen.workspace = true
+retrox-content.workspace = true
