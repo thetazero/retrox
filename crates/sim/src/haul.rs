@@ -13,7 +13,9 @@
 //! how money gets back to settlements that don't export.
 
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::{BinaryHeap, HashMap, HashSet};
+
+use rayon::prelude::*;
 
 use serde::{Deserialize, Serialize};
 use slotmap::new_key_type;
@@ -422,10 +424,11 @@ pub fn trade(state: &mut GalaxyState) {
     let now = state.time;
     let mut ctx = Ctx::new(state);
 
+    // Docked fleets sell, and maybe buy a ship; note who needs a plan.
+    let mut deciding: Vec<(CompanyId, usize, SettlementId)> = Vec::new();
     let keys: Vec<CompanyId> = state.companies.keys().collect();
-    for key in keys {
-        let fleets = state.companies[key].fleets.len();
-        for n in 0..fleets {
+    for &key in &keys {
+        for n in 0..state.companies[key].fleets.len() {
             let Location::Docked(here) = state.companies[key].fleets[n].at else {
                 continue;
             };
@@ -434,24 +437,70 @@ pub fn trade(state: &mut GalaxyState) {
             }
             sell(state, &ctx, key, n, here);
             buy_ship(state, key, n, here);
-            if state.companies[key].fleets[n].idle_until > now {
-                continue;
-            }
-            let plan = best_trip(
-                state,
-                &ctx,
-                &state.companies[key],
-                &state.companies[key].fleets[n],
-                here,
-            );
-            match plan {
-                Some(plan) => depart(state, &mut ctx, key, n, here, plan),
-                None => {
-                    state.companies[key].fleets[n].idle_until =
-                        GalaxyTime::from_days(now.days() + IDLE_DAYS);
-                }
+            if state.companies[key].fleets[n].idle_until <= now {
+                deciding.push((key, n, here));
             }
         }
+    }
+
+    // Plan every trip in parallel from the same snapshot...
+    let plans: Vec<Option<Plan>> = {
+        let state = &*state;
+        let ctx = &ctx;
+        deciding
+            .par_iter()
+            .map(|&(key, n, here)| {
+                let company = &state.companies[key];
+                best_trip(state, ctx, company, &company.fleets[n], here)
+            })
+            .collect()
+    };
+
+    // ...then carry them out in order. A plan that an earlier departure
+    // this tick could have changed (same port, same destination and good,
+    // or same company's money) is made again from the current state.
+    let mut ports: HashSet<SettlementId> = HashSet::new();
+    let mut deliveries: HashSet<(SettlementId, Good)> = HashSet::new();
+    let mut claims: HashSet<SettlementId> = HashSet::new();
+    let mut spenders: HashSet<CompanyId> = HashSet::new();
+    for (&(key, n, here), plan) in deciding.iter().zip(plans) {
+        let loaded = state.companies[key].fleets[n].cargo.is_some();
+        let stale = spenders.contains(&key)
+            || (!loaded && ports.contains(&here))
+            || plan.as_ref().is_some_and(|p| {
+                if p.amount > 0.0 || loaded {
+                    deliveries.contains(&(p.to, p.good))
+                } else {
+                    claims.contains(&p.to)
+                }
+            });
+        let plan = if stale {
+            let company = &state.companies[key];
+            best_trip(state, &ctx, company, &company.fleets[n], here)
+        } else {
+            plan
+        };
+        match plan {
+            Some(plan) => {
+                if plan.amount > 0.0 || loaded {
+                    deliveries.insert((plan.to, plan.good));
+                } else {
+                    claims.insert(plan.to);
+                }
+                if !loaded && plan.amount > 0.0 {
+                    ports.insert(here);
+                }
+                spenders.insert(key);
+                depart(state, &mut ctx, key, n, here, plan);
+            }
+            None => {
+                state.companies[key].fleets[n].idle_until =
+                    GalaxyTime::from_days(now.days() + IDLE_DAYS);
+            }
+        }
+    }
+
+    for key in keys {
         pay_upkeep(state, key);
     }
     found_companies(state);
