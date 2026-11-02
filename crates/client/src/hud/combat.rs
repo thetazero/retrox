@@ -48,31 +48,7 @@ fn edge_glow(painter: &egui::Painter, screen: Rect, color: Color32, strength: f3
     }
     let depth = screen.height() * 0.07;
     let outer = color.gamma_multiply(strength.min(1.0));
-    let inner = Color32::TRANSPARENT;
-    let o = [
-        screen.left_top(),
-        screen.right_top(),
-        screen.right_bottom(),
-        screen.left_bottom(),
-    ];
-    let i = [
-        screen.left_top() + Vec2::new(depth, depth),
-        screen.right_top() + Vec2::new(-depth, depth),
-        screen.right_bottom() + Vec2::new(-depth, -depth),
-        screen.left_bottom() + Vec2::new(depth, -depth),
-    ];
-    let mut mesh = egui::Mesh::default();
-    for k in 0..4 {
-        let n = (k + 1) % 4;
-        let base = mesh.vertices.len() as u32;
-        mesh.colored_vertex(o[k], outer);
-        mesh.colored_vertex(o[n], outer);
-        mesh.colored_vertex(i[n], inner);
-        mesh.colored_vertex(i[k], inner);
-        mesh.add_triangle(base, base + 1, base + 2);
-        mesh.add_triangle(base, base + 2, base + 3);
-    }
-    painter.add(egui::Shape::mesh(mesh));
+    crate::widgets::edge_fade(painter, screen, outer, Vec2::splat(depth));
 }
 
 /// Markers and effects over the view while flying.

@@ -992,6 +992,97 @@ fn fast_travel_to_a_gas_giant_stops_over_its_clouds() {
     assert!(above > crate::skim::BAND_M, "arrives inside the band");
 }
 
+/// At the nearest gang's field, with the gang out and closing.
+fn among_raiders() -> World {
+    let mut world = World::new(1);
+    assert!(world.start_by_raiders());
+    world.update(0.02, Controls::default());
+    assert!(world.hostiles_near() > 0, "the gang comes out");
+    world
+}
+
+fn said(world: &World) -> &str {
+    world.message.as_ref().map_or("", |m| m.0.as_str())
+}
+
+#[test]
+fn with_hostiles_near_the_trigger_fires_the_guns_and_not_the_mining_laser() {
+    let mut world = among_raiders();
+    let fire = Controls {
+        fire: true,
+        ..Default::default()
+    };
+    let shells = world.combat.tally.fired;
+    for _ in 0..30 {
+        world.update(1.0 / 60.0, fire);
+        assert!(!world.mining.firing, "the laser stands down");
+        assert!(world.beam.is_none());
+    }
+    assert!(world.combat.tally.fired > shells, "the guns fire");
+
+    // Once they're gone the trigger is the laser's again.
+    world.combat.leave();
+    assert_eq!(world.hostiles_near(), 0);
+    let mut lasing = false;
+    for _ in 0..30 {
+        world.update(1.0 / 60.0, fire);
+        lasing |= world.mining.firing;
+    }
+    assert!(lasing, "with nobody near, the trigger cuts rock");
+}
+
+#[test]
+fn no_jump_with_hostiles_near() {
+    // Hostiles are checked before anything else, gravity wells included.
+    let mut world = among_raiders();
+    let system = world.system;
+    let lane = world.lanes()[0].clone();
+    world.act(Action::Jump(lane.to));
+    assert_eq!(said(&world), "Can't jump: hostiles within 20 km");
+    run(&mut world, 3.0);
+    assert_eq!(world.system, system, "the jump never started");
+    assert!(world.jump_start_s.is_none());
+
+    // With them gone, out in open space, the same jump goes.
+    world.combat.leave();
+    open_space(&mut world);
+    world.act(Action::Jump(lane.to));
+    assert!(world.jump_start_s.is_some(), "{}", said(&world));
+}
+
+#[test]
+fn repairs_cost_three_credits_a_point_paid_to_the_settlement() {
+    let mut world = World::new(1);
+    world.start_at_station();
+    let here = world.docked_at().expect("docked");
+    let treasury = |w: &World| w.galaxy.settlements[here].economy.treasury;
+
+    // Enough money: all of it, at 3 cr a point.
+    world.player.ship.damage.sections = vec![100.0];
+    world.player.credits = 1000.0;
+    let before = treasury(&world);
+    world.repair_docked();
+    assert_eq!(world.player.ship.damage.total(), 0.0);
+    assert!((world.player.credits - 700.0).abs() < 1e-9);
+    assert!((treasury(&world) - before - 300.0).abs() < 1e-9);
+
+    // Short of it: as much as the money buys, and the rest stays.
+    world.player.ship.damage.sections = vec![100.0];
+    world.player.credits = 120.0;
+    let before = treasury(&world);
+    world.repair_docked();
+    assert!((world.player.ship.damage.total() - 60.0).abs() < 1e-9);
+    assert_eq!(world.player.credits, 0.0);
+    assert!((treasury(&world) - before - 120.0).abs() < 1e-9);
+    assert!(said(&world).starts_with("Hull partly repaired"));
+
+    // Broke: nothing changes hands.
+    let before = treasury(&world);
+    world.repair_docked();
+    assert!((world.player.ship.damage.total() - 60.0).abs() < 1e-9);
+    assert_eq!(treasury(&world), before);
+}
+
 /// A world in orbit of a body with two cities or more (issue #116), with
 /// cargo bound for the last of them.
 fn above_a_two_city_planet() -> (World, BodyId, Vec<SettlementId>) {

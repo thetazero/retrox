@@ -386,30 +386,7 @@ fn vignette(painter: &egui::Painter, screen: Rect, k: f32) {
     painter.rect_filled(screen, 0.0, Color32::from_black_alpha((110.0 * k) as u8));
     let depth = screen.height() * 0.32;
     let outer = Color32::from_black_alpha((200.0 * k) as u8);
-    let o = [
-        screen.left_top(),
-        screen.right_top(),
-        screen.right_bottom(),
-        screen.left_bottom(),
-    ];
-    let i = [
-        screen.left_top() + Vec2::new(depth, depth * 0.7),
-        screen.right_top() + Vec2::new(-depth, depth * 0.7),
-        screen.right_bottom() + Vec2::new(-depth, -depth * 0.7),
-        screen.left_bottom() + Vec2::new(depth, -depth * 0.7),
-    ];
-    let mut mesh = egui::Mesh::default();
-    for k in 0..4 {
-        let n = (k + 1) % 4;
-        let base = mesh.vertices.len() as u32;
-        mesh.colored_vertex(o[k], outer);
-        mesh.colored_vertex(o[n], outer);
-        mesh.colored_vertex(i[n], Color32::TRANSPARENT);
-        mesh.colored_vertex(i[k], Color32::TRANSPARENT);
-        mesh.add_triangle(base, base + 1, base + 2);
-        mesh.add_triangle(base, base + 2, base + 3);
-    }
-    painter.add(Shape::mesh(mesh));
+    widgets::edge_fade(painter, screen, outer, Vec2::new(depth, depth * 0.7));
 }
 
 /// The rewind to a checkpoint, under way.

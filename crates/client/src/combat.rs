@@ -34,7 +34,16 @@
 //! Positions are relative to the fight's *anchor*: the field (or, outside
 //! one, wherever the player's ship is framed). Metres, y up.
 
-use std::f64::consts::{PI, TAU};
+mod effects;
+mod geom;
+mod raider;
+mod vessel;
+
+pub use effects::{Blast, Debris, Flash, FlashKind, PULSE_LIFE, Pulse, Wreck};
+pub(crate) use geom::random_dir;
+pub use geom::{lead_point, segment_ellipsoid};
+pub use raider::{Crew, Raider, TRADER_IDS, Tactic};
+pub use vessel::{Damage, Gun, Hit, Vessel};
 
 use glam::{DQuat, DVec3};
 use retrox_gen::Rng;
@@ -43,10 +52,10 @@ use retrox_sim::FieldId;
 use retrox_sim::bubble::FleetKey;
 use retrox_sim::economy::Good;
 use retrox_sim::pirates::GangId;
-use retrox_sim::ship::{Function, Loadout, ShipStats};
-use serde::{Deserialize, Serialize};
+use retrox_sim::ship::Loadout;
 
-use crate::world::{STRAFE_SPEED, assist, handling, look_rotation, steer};
+use crate::world::look_rotation;
+use geom::{aim, scatter};
 
 /// Autocannon shells leave the muzzle this fast, m/s, on top of the
 /// ship's velocity.
@@ -57,10 +66,6 @@ pub const GIMBAL: f64 = 0.07;
 pub const HOSTILE_RANGE: f64 = 20e3;
 /// Seconds after the last hit before shields start to come back.
 pub const SHIELD_DELAY: f64 = 3.0;
-/// Locked-out guns come back once heat falls to this share of capacity.
-const UNLOCK_HEAT: f64 = 0.5;
-/// How long a wreck drifts before it's lost from view, seconds.
-const WRECK_LIFE: f64 = 180.0;
 /// Raiders give up the chase once the player is this far from their home.
 pub const LEASH: f64 = 16e3;
 /// Raiders spawn this far from the ship that comes to their field.
@@ -73,371 +78,6 @@ pub const REPAIR_PER_POINT: f64 = 3.0;
 pub enum Side {
     Player,
     Raider(u32),
-}
-
-/// Hull damage, per fitted section (nose to tail) and to the frame. The
-/// player's is saved with their ship; shields and heat recover on their
-/// own and aren't.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct Damage {
-    pub sections: Vec<f64>,
-    pub frame: f64,
-}
-
-impl Damage {
-    /// Structure points to repair.
-    pub fn total(&self) -> f64 {
-        self.sections.iter().sum::<f64>() + self.frame
-    }
-}
-
-/// A fitted section, as a place hits land.
-#[derive(Clone, Debug)]
-pub struct Part {
-    pub mount: usize,
-    pub name: &'static str,
-    /// Where it starts (toward the nose, -Z) and ends, in ship space.
-    pub front: f64,
-    pub back: f64,
-    pub structure: f64,
-}
-
-/// A gun, where it sits and what it does.
-#[derive(Clone, Debug)]
-pub struct Gun {
-    /// The muzzle, in ship space (nose toward -Z).
-    pub muzzle: DVec3,
-    pub damage: f64,
-    pub rate: f64,
-    pub range: f64,
-    pub power_mw: f64,
-    pub heat_mw: f64,
-    pub laser: bool,
-    cooldown: f64,
-}
-
-/// Power (MW) and heat (MW) of a group of running modules.
-#[derive(Clone, Copy, Debug, Default)]
-struct Draw {
-    power: f64,
-    heat: f64,
-}
-
-impl Draw {
-    fn add(&mut self, power: f64, heat: f64) {
-        self.power += power;
-        self.heat += heat;
-    }
-}
-
-/// What a hit did.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Hit {
-    Shield,
-    Hull,
-    /// A section was wrecked (by index into [`Vessel::parts`]).
-    Wrecked(usize),
-    Destroyed,
-}
-
-/// A ship as a fight sees it: its fit, what's left of it, and its gauges.
-#[derive(Clone, Debug)]
-pub struct Vessel {
-    pub fit: Loadout,
-    /// What still works: the fit without the modules of wrecked sections.
-    pub stats: ShipStats,
-    pub parts: Vec<Part>,
-    pub frame_max: f64,
-    pub damage: Damage,
-    pub shield: f64,
-    pub since_hit: f64,
-    pub guns: Vec<Gun>,
-    /// Heat in the sections, MJ, against `stats.heat_capacity_mj`.
-    pub heat: f64,
-    /// The guns are locked out, venting heat.
-    pub locked: bool,
-    /// Share of the guns' power they're getting, 0..1.
-    pub gun_power: f64,
-    /// The guns fired this frame.
-    pub firing: bool,
-    base: Draw,
-    engines: Draw,
-    shields: Draw,
-}
-
-impl Vessel {
-    pub fn new(fit: Loadout, damage: Damage) -> Self {
-        let mut parts = Vec::new();
-        let total: f64 = fit
-            .mounts()
-            .filter_map(|(_, s)| s)
-            .map(|s| s.section.length_m)
-            .sum();
-        let mut front = -total / 2.0;
-        for (mount, (_, section)) in fit.mounts().enumerate() {
-            let Some(s) = section else { continue };
-            let len = s.section.length_m;
-            parts.push(Part {
-                mount,
-                name: s.section.name,
-                front,
-                back: front + len,
-                structure: s.section.structure,
-            });
-            front += len;
-        }
-        let mut damage = damage;
-        damage.sections.resize(parts.len(), 0.0);
-        let frame_max = fit.hull().frame_structure;
-        let mut v = Self {
-            stats: fit.stats(),
-            fit,
-            parts,
-            frame_max,
-            damage,
-            shield: 0.0,
-            since_hit: SHIELD_DELAY,
-            guns: Vec::new(),
-            heat: 0.0,
-            locked: false,
-            gun_power: 1.0,
-            firing: false,
-            base: Draw::default(),
-            engines: Draw::default(),
-            shields: Draw::default(),
-        };
-        v.refit();
-        v.shield = v.stats.shield;
-        v
-    }
-
-    pub fn wrecked(&self, part: usize) -> bool {
-        let p = &self.parts[part];
-        self.damage.sections[part] >= p.structure
-    }
-
-    /// Rebuild what works from the fit and the damage.
-    fn refit(&mut self) {
-        let mut live = self.fit.clone();
-        for (i, part) in self.parts.iter().enumerate() {
-            if self.damage.sections[i] >= part.structure {
-                let slots = live
-                    .mounts()
-                    .nth(part.mount)
-                    .and_then(|(_, s)| s)
-                    .map_or(0, |s| s.slots().count());
-                for slot in 0..slots {
-                    live.remove(part.mount, slot);
-                }
-            }
-        }
-        self.stats = live.stats();
-        self.shield = self.shield.min(self.stats.shield);
-        let old: Vec<f64> = self.guns.iter().map(|g| g.cooldown).collect();
-        self.guns.clear();
-        self.base = Draw::default();
-        self.engines = Draw::default();
-        self.shields = Draw::default();
-        let sections: Vec<_> = live.mounts().filter_map(|(_, s)| s).collect();
-        for (part, section) in self.parts.iter().zip(sections) {
-            let centre = (part.front + part.back) / 2.0;
-            for (slot, module) in section.slots() {
-                let Some(m) = module else { continue };
-                let [x, y, z] = slot.position_m;
-                match m.function {
-                    Function::Weapon {
-                        damage,
-                        fire_rate_hz,
-                        range_km,
-                    } => self.guns.push(Gun {
-                        muzzle: DVec3::new(x, y, centre - z - 0.8),
-                        damage,
-                        rate: fire_rate_hz,
-                        range: range_km * 1000.0,
-                        power_mw: m.power_mw,
-                        heat_mw: m.heat_mw,
-                        laser: m.id.contains("laser"),
-                        cooldown: 0.0,
-                    }),
-                    Function::Engine { .. } => self.engines.add(m.power_mw, m.heat_mw),
-                    Function::Shield { .. } => self.shields.add(m.power_mw, m.heat_mw),
-                    // Mining lasers keep their own gauge; jump drives only
-                    // draw in the lanes.
-                    Function::MiningLaser { .. } | Function::JumpDrive { .. } => {}
-                    _ => self.base.add(m.power_mw, m.heat_mw),
-                }
-            }
-        }
-        for (g, c) in self.guns.iter_mut().zip(old) {
-            g.cooldown = c;
-        }
-    }
-
-    /// Half the ship's length, metres.
-    pub fn half_length(&self) -> f64 {
-        (self.stats.length_m / 2.0).max(3.0)
-    }
-
-    /// The shield bubble's semi-axes (across, along), ship space.
-    pub fn bubble(&self) -> (f64, f64) {
-        let along = self.half_length() * 1.15 + 1.5;
-        (along * 0.5, along)
-    }
-
-    /// The hull's semi-axes, roughly: a slim ellipsoid along the ship.
-    fn hull_shape(&self) -> (f64, f64) {
-        let along = self.half_length();
-        ((along * 0.32).max(1.6), along)
-    }
-
-    pub fn shield_max(&self) -> f64 {
-        self.stats.shield
-    }
-
-    /// Structure left, 0..1, the way a pilot reads it: the section in the
-    /// worst state, or the frame if that's worse.
-    pub fn hull_left(&self) -> f64 {
-        let worst = self
-            .parts
-            .iter()
-            .zip(&self.damage.sections)
-            .map(|(p, d)| 1.0 - d / p.structure.max(1.0))
-            .fold(1.0, f64::min);
-        let frame = if self.frame_max > 0.0 {
-            1.0 - self.damage.frame / self.frame_max
-        } else {
-            1.0
-        };
-        worst.min(frame).max(0.0)
-    }
-
-    pub fn destroyed(&self) -> bool {
-        if self.frame_max > 0.0 {
-            self.damage.frame >= self.frame_max || (0..self.parts.len()).all(|i| self.wrecked(i))
-        } else {
-            (0..self.parts.len()).any(|i| self.wrecked(i))
-        }
-    }
-
-    /// Take `amount` of damage at `local` (ship space).
-    pub fn hit(&mut self, amount: f64, local: DVec3) -> Hit {
-        self.since_hit = 0.0;
-        let mut amount = amount;
-        if self.shield > 0.0 {
-            let absorbed = self.shield.min(amount);
-            self.shield -= absorbed;
-            amount -= absorbed;
-            if amount <= 1e-9 {
-                return Hit::Shield;
-            }
-        }
-        if self.parts.is_empty() {
-            return Hit::Hull;
-        }
-        let part = self
-            .parts
-            .iter()
-            .position(|p| local.z < p.back)
-            .unwrap_or(self.parts.len() - 1);
-        let mut result = Hit::Hull;
-        if self.wrecked(part) {
-            self.damage.frame += amount;
-        } else {
-            let structure = self.parts[part].structure;
-            self.damage.sections[part] += amount;
-            let over = self.damage.sections[part] - structure;
-            if over >= 0.0 {
-                if self.frame_max > 0.0 {
-                    self.damage.frame += over;
-                }
-                self.damage.sections[part] = structure;
-                self.refit();
-                result = Hit::Wrecked(part);
-            }
-        }
-        if self.destroyed() {
-            Hit::Destroyed
-        } else {
-            result
-        }
-    }
-
-    /// Run the ship's systems for a frame: the reactor feeds base systems,
-    /// then the engines (at `burn`, 0..1), then the shields, then the guns;
-    /// heat builds and sheds. Returns which guns fire this frame.
-    pub fn systems(&mut self, dt: f64, burn: f64, trigger: bool) -> Vec<usize> {
-        self.since_hit += dt;
-        let supply = self.stats.power_supply_mw;
-        let mut left = supply - self.base.power - self.engines.power * burn;
-        let charging = self.shield < self.stats.shield && self.since_hit >= SHIELD_DELAY;
-        let mut shield_load = 0.0;
-        if charging {
-            let share = if self.shields.power > 0.0 {
-                (left / self.shields.power).clamp(0.0, 1.0)
-            } else {
-                1.0
-            };
-            self.shield =
-                (self.shield + self.stats.shield_regen_per_s * share * dt).min(self.stats.shield);
-            left -= self.shields.power * share;
-            shield_load = share;
-        }
-        let gun_draw: f64 = self.guns.iter().map(|g| g.power_mw).sum();
-        self.gun_power = if gun_draw > 0.0 {
-            (left / gun_draw).clamp(0.0, 1.0)
-        } else {
-            1.0
-        };
-        let firing = trigger && !self.locked && !self.guns.is_empty() && self.gun_power > 0.05;
-        let gun_heat: f64 = self.guns.iter().map(|g| g.heat_mw).sum::<f64>() * self.gun_power;
-        let made = self.base.heat
-            + self.engines.heat * burn
-            + self.shields.heat * shield_load
-            + if firing { gun_heat } else { 0.0 };
-        let capacity = self.stats.heat_capacity_mj.max(1.0);
-        self.heat = (self.heat + (made - self.stats.heat_dissipation_mw) * dt).clamp(0.0, capacity);
-        if firing && self.heat >= capacity {
-            self.locked = true;
-        }
-        if self.locked && self.heat <= capacity * UNLOCK_HEAT {
-            self.locked = false;
-        }
-        // The volley that reaches capacity locks the guns before it fires.
-        let firing = firing && !self.locked;
-        self.firing = firing;
-        let mut fired = Vec::new();
-        for (i, g) in self.guns.iter_mut().enumerate() {
-            g.cooldown = (g.cooldown - dt).max(-1.0);
-            if !firing {
-                g.cooldown = g.cooldown.max(0.0);
-                continue;
-            }
-            if g.cooldown <= 0.0 {
-                fired.push(i);
-                g.cooldown += 1.0 / (g.rate * self.gun_power.max(0.05));
-            }
-        }
-        fired
-    }
-
-    /// Heat as a share of capacity, 0..1.
-    pub fn heat_share(&self) -> f64 {
-        self.heat / self.stats.heat_capacity_mj.max(1.0)
-    }
-
-    /// The longest reach of its guns, metres.
-    pub fn gun_range(&self) -> f64 {
-        self.guns.iter().map(|g| g.range).fold(0.0, f64::max)
-    }
-
-    /// The speed its first gun's shells fly at (lasers: instant).
-    fn shot_speed(&self) -> Option<f64> {
-        match self.guns.first() {
-            Some(g) if g.laser => None,
-            Some(_) => Some(SHELL_SPEED),
-            None => Some(SHELL_SPEED),
-        }
-    }
 }
 
 /// Where and how a ship moves.
@@ -455,67 +95,6 @@ impl Craft {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Tactic {
-    /// Closing on the target.
-    Attack,
-    /// Overshot: flying out along a direction before coming round again.
-    Extend(DVec3),
-    /// Badly hurt: running.
-    Flee,
-    /// The target left: heading back to the field.
-    Return,
-}
-
-/// Whose a ship in the fight is.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Crew {
-    /// One of the gang's.
-    Pirate,
-    /// One of a trader fleet's, flying for `faction`.
-    Trader { fleet: FleetKey, faction: FactionId },
-}
-
-/// Ids from here up are traders' ships; below, the gang's.
-pub const TRADER_IDS: u32 = 1000;
-
-/// A ship in the fight other than the player's: a pirate, or a trader
-/// caught up in it.
-#[derive(Clone, Debug)]
-pub struct Raider {
-    pub id: u32,
-    pub vessel: Vessel,
-    pub craft: Craft,
-    /// How hard its engines burn, 0..1.
-    pub burn: f64,
-    pub tactic: Tactic,
-    timer: f64,
-    /// 0..1: aim, nerve and reactions.
-    skill: f64,
-    rng: Rng,
-    /// Evasive strafe and lift, and how long until it changes.
-    jink: DVec3,
-    jink_t: f64,
-    /// Seconds left in the current burst of fire (negative: pause).
-    burst: f64,
-    /// What it guards and comes back to, anchor-relative.
-    pub home: DVec3,
-    pub crew: Crew,
-    /// Fighting the player. A peaceful ship holds its place in its convoy.
-    pub hostile: bool,
-    /// A peaceful trader's place in its convoy: where, and how fast.
-    pub slot: Option<(DVec3, DVec3)>,
-}
-
-impl Raider {
-    pub fn trader_fleet(&self) -> Option<FleetKey> {
-        match self.crew {
-            Crew::Trader { fleet, .. } => Some(fleet),
-            Crew::Pirate => None,
-        }
-    }
-}
-
 /// A shell in flight.
 #[derive(Clone, Copy, Debug)]
 pub struct Shot {
@@ -524,89 +103,6 @@ pub struct Shot {
     pub life: f64,
     pub damage: f64,
     pub from: Side,
-}
-
-/// A laser pulse, drawn for a moment.
-#[derive(Clone, Copy, Debug)]
-pub struct Pulse {
-    pub from: DVec3,
-    pub to: DVec3,
-    pub age: f64,
-    pub side: Side,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum FlashKind {
-    Muzzle,
-    /// A shell or pulse striking bare hull.
-    Spark,
-    /// A hit on a shield: the bubble lights round `dir` (ship space).
-    Shield {
-        ship: Side,
-        dir: DVec3,
-    },
-}
-
-/// A short-lived point of light.
-#[derive(Clone, Copy, Debug)]
-pub struct Flash {
-    pub pos: DVec3,
-    pub vel: DVec3,
-    pub kind: FlashKind,
-    pub size: f64,
-    pub age: f64,
-    pub life: f64,
-}
-
-/// An explosion's fireball.
-#[derive(Clone, Copy, Debug)]
-pub struct Blast {
-    pub pos: DVec3,
-    pub vel: DVec3,
-    pub radius: f64,
-    /// Starts negative for a delayed secondary.
-    pub age: f64,
-    pub life: f64,
-    pub seed: f64,
-    /// Throws a shockwave ring (the main blast only).
-    pub ring: bool,
-}
-
-/// A piece of a ship flung off: a plate of hull, or a glowing ember.
-#[derive(Clone, Copy, Debug)]
-pub struct Debris {
-    pub pos: DVec3,
-    pub vel: DVec3,
-    pub axis: DVec3,
-    pub rate: f64,
-    pub size: DVec3,
-    pub age: f64,
-    pub life: f64,
-    pub ember: bool,
-}
-
-impl Debris {
-    pub fn rot(&self) -> DQuat {
-        DQuat::from_axis_angle(self.axis, self.rate * self.age % TAU)
-    }
-}
-
-/// What's left of a destroyed ship, tumbling.
-#[derive(Clone, Debug)]
-pub struct Wreck {
-    pub fit: Loadout,
-    pub pos: DVec3,
-    pub vel: DVec3,
-    pub rot0: DQuat,
-    pub axis: DVec3,
-    pub rate: f64,
-    pub age: f64,
-}
-
-impl Wreck {
-    pub fn rot(&self) -> DQuat {
-        DQuat::from_axis_angle(self.axis, self.rate * self.age % TAU) * self.rot0
-    }
 }
 
 /// Running counts of events (see [`Combat::tally`]).
@@ -767,33 +263,22 @@ impl Combat {
         for &(pos, vel, rot) in slots {
             let id = self.next_trader;
             self.next_trader += 1;
-            let armed = !Vessel::new(fit.clone(), Damage::default()).guns.is_empty();
-            self.raiders.push(Raider {
-                id,
-                vessel: Vessel::new(fit.clone(), Damage::default()),
-                craft: Craft {
-                    pos,
-                    vel,
-                    rot,
-                    spin: DVec3::ZERO,
-                },
-                burn: 0.0,
-                tactic: if hostile && !armed {
-                    Tactic::Flee
-                } else {
-                    Tactic::Attack
-                },
-                timer: 0.0,
-                skill: rng.range(0.25, 0.55),
-                rng: Rng::new(rng.next_u64()),
-                jink: DVec3::ZERO,
-                jink_t: 0.0,
-                burst: rng.range(-1.0, 0.5),
-                home: pos,
-                crew: Crew::Trader { fleet, faction },
-                hostile,
-                slot: (!hostile).then_some((pos, vel)),
-            });
+            let vessel = Vessel::new(fit.clone(), Damage::default());
+            let armed = !vessel.guns.is_empty();
+            let craft = Craft {
+                pos,
+                vel,
+                rot,
+                spin: DVec3::ZERO,
+            };
+            let crew = Crew::Trader { fleet, faction };
+            let mut r = Raider::new(id, vessel, craft, crew, pos, (0.25, 0.55), &mut rng);
+            if hostile && !armed {
+                r.tactic = Tactic::Flee;
+            }
+            r.hostile = hostile;
+            r.slot = (!hostile).then_some((pos, vel));
+            self.raiders.push(r);
         }
     }
 
@@ -946,28 +431,22 @@ impl Combat {
                 + side * spread
                 + DVec3::Y * rng.range(-300.0, 300.0);
             let to_player = (player.pos - pos).normalize_or(DVec3::Z);
-            self.raiders.push(Raider {
-                id: *id,
-                vessel: Vessel::new(fit, Damage::default()),
-                craft: Craft {
-                    pos,
-                    vel: player.vel + to_player * 150.0,
-                    rot: look_rotation(to_player),
-                    spin: DVec3::ZERO,
-                },
-                burn: 0.0,
-                tactic: Tactic::Attack,
-                timer: 0.0,
-                skill: rng.range(0.45, 0.9),
-                rng: Rng::new(rng.next_u64()),
-                jink: DVec3::ZERO,
-                jink_t: 0.0,
-                burst: rng.range(-1.0, 0.5),
+            let craft = Craft {
+                pos,
+                vel: player.vel + to_player * 150.0,
+                rot: look_rotation(to_player),
+                spin: DVec3::ZERO,
+            };
+            let vessel = Vessel::new(fit, Damage::default());
+            self.raiders.push(Raider::new(
+                *id,
+                vessel,
+                craft,
+                Crew::Pirate,
                 home,
-                crew: Crew::Pirate,
-                hostile: true,
-                slot: None,
-            });
+                (0.45, 0.9),
+                &mut rng,
+            ));
             out += 1;
         }
         (out > 0).then(|| {
@@ -1062,34 +541,9 @@ impl Combat {
         out.hits.append(&mut self.hits);
         out
     }
+}
 
-    fn age_effects(&mut self, dt: f64) {
-        for p in &mut self.pulses {
-            p.age += dt;
-        }
-        self.pulses.retain(|p| p.age < PULSE_LIFE);
-        for f in &mut self.flashes {
-            f.age += dt;
-            f.pos += f.vel * dt;
-        }
-        self.flashes.retain(|f| f.age < f.life);
-        for b in &mut self.blasts {
-            b.age += dt;
-            b.pos += b.vel * dt;
-        }
-        self.blasts.retain(|b| b.age < b.life);
-        for d in &mut self.debris {
-            d.age += dt;
-            d.pos += d.vel * dt;
-        }
-        self.debris.retain(|d| d.age < d.life);
-        for w in &mut self.wrecks {
-            w.age += dt;
-            w.pos += w.vel * dt;
-        }
-        self.wrecks.retain(|w| w.age < WRECK_LIFE);
-    }
-
+impl Combat {
     /// Fire one gun.
     fn fire(
         &mut self,
@@ -1200,8 +654,7 @@ impl Combat {
                 }
                 match self.raiders.iter_mut().find(|r| r.id == id) {
                     Some(r) => {
-                        // Being shot rattles them.
-                        r.jink_t = r.jink_t.min(0.2);
+                        r.rattle();
                         (&mut r.vessel, r.craft)
                     }
                     None => return,
@@ -1327,100 +780,7 @@ impl Combat {
             }
         }
     }
-
-    fn embers(&mut self, at: DVec3, vel: DVec3, n: usize, speed: f64, life: f64) {
-        for _ in 0..n {
-            let d = random_dir(&mut self.rng);
-            self.debris.push(Debris {
-                pos: at,
-                vel: vel + d * speed * self.rng.range(0.3, 1.0),
-                axis: DVec3::Y,
-                rate: 0.0,
-                size: DVec3::splat(self.rng.range(0.12, 0.3)),
-                age: 0.0,
-                life: life * self.rng.range(0.6, 1.4),
-                ember: true,
-            });
-        }
-    }
-
-    /// The player's ship goes up, whatever its hull has left (for
-    /// screenshots).
-    pub fn lose_player(&mut self, craft: Craft) {
-        let fit = self.player.fit.clone();
-        let length = self.player.stats.length_m;
-        self.explode(&fit, craft, length);
-        self.lost = Some(0.0);
-    }
-
-    /// A ship blows up: a fireball and its secondaries, a flash, plates
-    /// and embers flung out, and the wreck tumbling on.
-    fn explode(&mut self, fit: &Loadout, craft: Craft, length: f64) {
-        self.tally.blasts += 1;
-        let r = (length * 1.6).max(14.0);
-        let seed = self.rng.range(0.0, 100.0);
-        self.blasts.push(Blast {
-            pos: craft.pos,
-            vel: craft.vel,
-            radius: r * 1.1,
-            age: 0.0,
-            life: 1.8,
-            seed,
-            ring: true,
-        });
-        for k in 0..3 {
-            let off = random_dir(&mut self.rng) * r * 0.4;
-            self.blasts.push(Blast {
-                pos: craft.pos + off,
-                vel: craft.vel + off * 0.5,
-                radius: r * self.rng.range(0.4, 0.7),
-                age: -0.15 - 0.2 * k as f64,
-                life: 1.3,
-                seed: seed + 10.0 + k as f64,
-                ring: false,
-            });
-        }
-        self.flashes.push(Flash {
-            pos: craft.pos,
-            vel: craft.vel,
-            kind: FlashKind::Spark,
-            size: r * 0.9,
-            age: 0.0,
-            life: 0.3,
-        });
-        for _ in 0..14 {
-            let d = random_dir(&mut self.rng);
-            let s = r * 0.08;
-            self.debris.push(Debris {
-                pos: craft.pos + d * r * 0.2,
-                vel: craft.vel + d * self.rng.range(15.0, 70.0),
-                axis: random_dir(&mut self.rng),
-                rate: self.rng.range(1.0, 5.0),
-                size: DVec3::new(
-                    s * self.rng.range(0.5, 2.0),
-                    s * self.rng.range(0.1, 0.3),
-                    s * self.rng.range(0.6, 2.5),
-                ),
-                age: 0.0,
-                life: self.rng.range(25.0, 50.0),
-                ember: false,
-            });
-        }
-        self.embers(craft.pos, craft.vel, 40, 120.0, 2.0);
-        self.wrecks.push(Wreck {
-            fit: fit.clone(),
-            pos: craft.pos,
-            vel: craft.vel * 0.4 + random_dir(&mut self.rng) * 5.0,
-            rot0: craft.rot,
-            axis: random_dir(&mut self.rng),
-            rate: self.rng.range(0.1, 0.35),
-            age: 0.0,
-        });
-    }
 }
-
-/// How long a laser pulse shows, seconds.
-pub const PULSE_LIFE: f64 = 0.09;
 
 fn vessel_bubble(player: &Vessel, raiders: &[Raider], side: Side) -> (f64, f64) {
     match side {
@@ -1430,275 +790,6 @@ fn vessel_bubble(player: &Vessel, raiders: &[Raider], side: Side) -> (f64, f64) 
             .find(|r| r.id == id)
             .map_or((5.0, 10.0), |r| r.vessel.bubble()),
     }
-}
-
-impl Raider {
-    /// One frame of flying and fighting toward `target` (the player, if
-    /// alive). Returns the guns it fires: the gun, its muzzle, and which
-    /// way.
-    fn think(
-        &mut self,
-        dt: f64,
-        target: Option<Craft>,
-        solids: &[(DVec3, f64)],
-    ) -> Vec<(Gun, DVec3, DVec3)> {
-        let c = self.craft;
-        let range = self.vessel.gun_range().max(1500.0);
-        let mut fire = false;
-        let mut aim_at = None;
-        // (direction to fly, speed, strafe/lift)
-        let (dir, speed) = match (self.tactic, target) {
-            (_, None) => {
-                self.tactic = Tactic::Return;
-                (self.home - c.pos, 120.0)
-            }
-            (Tactic::Return, Some(_)) if self.crew != Crew::Pirate => {
-                // A trader that has lost the player keeps running.
-                self.tactic = Tactic::Flee;
-                (c.vel, 600.0)
-            }
-            (Tactic::Return, Some(t)) => {
-                if (t.pos - self.home).length() < LEASH * 0.8 {
-                    self.tactic = Tactic::Attack;
-                }
-                if (c.pos - self.home).length() < 3000.0 {
-                    (t.pos - c.pos, 60.0)
-                } else {
-                    (self.home - c.pos, 350.0)
-                }
-            }
-            (Tactic::Flee, Some(t)) => (c.pos - t.pos, 600.0),
-            (Tactic::Extend(d), Some(_)) => {
-                self.timer -= dt;
-                if self.timer <= 0.0 {
-                    self.tactic = Tactic::Attack;
-                }
-                (d, 480.0)
-            }
-            (Tactic::Attack, Some(t)) => {
-                let to = t.pos - c.pos;
-                let dist = to.length();
-                if (t.pos - self.home).length() > LEASH {
-                    self.tactic = Tactic::Return;
-                } else if self.vessel.hull_left() < 0.3 && self.rng.chance(dt * (1.2 - self.skill))
-                {
-                    self.tactic = Tactic::Flee;
-                } else if dist < 260.0 + self.vessel.half_length() * 4.0 {
-                    // Overshot: break away to one side and come round.
-                    let side = to.cross(DVec3::Y).normalize_or(DVec3::X)
-                        * if self.rng.chance(0.5) { 1.0 } else { -1.0 };
-                    let out = (-to.normalize_or(DVec3::Z) * 0.4
-                        + side
-                        + DVec3::Y * self.rng.range(-0.5, 0.5))
-                    .normalize_or(DVec3::X);
-                    self.tactic = Tactic::Extend(out);
-                    self.timer = self.rng.range(2.0, 3.5);
-                }
-                let lead = lead_point(c.pos, c.vel, t.pos, t.vel, self.vessel.shot_speed());
-                aim_at = Some(lead);
-                let along = t.vel.dot(to.normalize_or(DVec3::Z));
-                let speed = if dist > 2500.0 {
-                    480.0
-                } else {
-                    (along + 60.0 + dist * 0.05).clamp(140.0, 450.0)
-                };
-                let off = c
-                    .forward()
-                    .angle_between((lead - c.pos).normalize_or(DVec3::Z));
-                let cone = 0.035 + (1.0 - self.skill) * 0.04;
-                fire = dist < range * 0.92 && off < cone;
-                (lead - c.pos, speed)
-            }
-        };
-
-        // Rocks ahead: steer round them.
-        let mut dir = dir.normalize_or(c.forward());
-        let look = c.vel.length() * 1.5 + 150.0;
-        for &(p, r) in solids {
-            let to = p - c.pos;
-            let along = to.dot(c.forward());
-            if along < 0.0 || along > look + r {
-                continue;
-            }
-            let off = to - c.forward() * along;
-            let clear = r + self.vessel.half_length() + 30.0;
-            if off.length() < clear {
-                dir = (dir - off.normalize_or(DVec3::Y) * 1.5).normalize_or(dir);
-            }
-        }
-
-        // Jink when someone is on our tail.
-        self.jink_t -= dt;
-        if self.jink_t <= 0.0 {
-            self.jink_t = self.rng.range(0.5, 1.3);
-            let threatened = target.is_some_and(|t| {
-                let from = c.pos - t.pos;
-                from.length() < 2500.0
-                    && t.forward().angle_between(from.normalize_or(DVec3::Z)) < 0.35
-            });
-            self.jink = if threatened {
-                DVec3::new(
-                    if self.rng.chance(0.5) { 1.0 } else { -1.0 },
-                    self.rng.range(-1.0, 1.0),
-                    0.0,
-                )
-            } else {
-                DVec3::ZERO
-            };
-        }
-
-        let stick = stick_toward(c.rot, dir);
-        let (thrust, turn) = handling(&self.vessel.stats);
-        steer(&mut self.craft.rot, &mut self.craft.spin, stick, turn, dt);
-        let local = DVec3::new(
-            self.jink.x * STRAFE_SPEED,
-            self.jink.y * STRAFE_SPEED,
-            -speed,
-        );
-        self.burn = assist(
-            &mut self.craft.vel,
-            self.craft.rot,
-            local,
-            false,
-            thrust,
-            dt,
-        );
-        if self.vessel.stats.thrust_kn <= 0.0 {
-            // No engines left: drifting.
-            self.burn = 0.0;
-        }
-        self.craft.pos += self.craft.vel * dt;
-        for &(p, r) in solids {
-            let d = self.craft.pos - p;
-            let clear = r + self.vessel.half_length();
-            let len = d.length();
-            if len < clear && len > 0.0 {
-                let n = d / len;
-                self.craft.pos += n * (clear - len);
-                let into = self.craft.vel.dot(n);
-                if into < 0.0 {
-                    self.craft.vel -= n * into * 1.3;
-                }
-            }
-        }
-
-        // Bursts: fire for a moment, pause, fire again.
-        self.burst -= dt;
-        if self.burst < -self.rng.range(0.6, 1.4) {
-            self.burst = self.rng.range(0.8, 1.6);
-        }
-        let trigger = fire && self.burst > 0.0;
-        let fired = self.vessel.systems(dt, self.burn, trigger);
-        let c = self.craft;
-        let spread = 0.004 + (1.0 - self.skill) * 0.016;
-        fired
-            .into_iter()
-            .map(|i| {
-                let gun = self.vessel.guns[i].clone();
-                let muzzle = c.pos + c.rot * gun.muzzle;
-                let dir = aim(c.forward(), muzzle, aim_at, GIMBAL);
-                let dir = scatter(&mut self.rng, dir, spread);
-                (gun, muzzle, dir)
-            })
-            .collect()
-    }
-}
-
-/// Where to aim from `pos` (moving at `vel`) to hit something at `tpos`
-/// moving at `tvel` with shots at `speed` (on top of the shooter's
-/// velocity; `None` for lasers).
-pub fn lead_point(pos: DVec3, vel: DVec3, tpos: DVec3, tvel: DVec3, speed: Option<f64>) -> DVec3 {
-    let Some(speed) = speed else {
-        return tpos;
-    };
-    let rel = tvel - vel;
-    let mut t = (tpos - pos).length() / speed;
-    for _ in 0..4 {
-        t = (tpos + rel * t - pos).length() / speed;
-    }
-    tpos + rel * t
-}
-
-/// The direction to fire: along `forward`, or swung toward `lead` if it's
-/// within `gimbal` radians of it.
-fn aim(forward: DVec3, muzzle: DVec3, lead: Option<DVec3>, gimbal: f64) -> DVec3 {
-    match lead {
-        Some(l) => {
-            let to = (l - muzzle).normalize_or(forward);
-            if forward.angle_between(to) < gimbal {
-                to
-            } else {
-                forward
-            }
-        }
-        None => forward,
-    }
-}
-
-fn scatter(rng: &mut Rng, dir: DVec3, sigma: f64) -> DVec3 {
-    let a = dir.any_orthonormal_vector();
-    let b = dir.cross(a);
-    let (r, t) = (rng.f64().max(1e-9), rng.f64());
-    // Box–Muller: a normal spread around the line.
-    let g = (-2.0 * r.ln()).sqrt() * sigma;
-    let th = t * TAU;
-    (dir + a * g * th.cos() + b * g * th.sin()).normalize()
-}
-
-fn random_dir(rng: &mut Rng) -> DVec3 {
-    let z = rng.range(-1.0, 1.0);
-    let a = rng.range(0.0, TAU);
-    let r = (1.0 - z * z).sqrt();
-    DVec3::new(r * a.cos(), z, r * a.sin())
-}
-
-/// Stick input that turns a ship with rotation `rot` toward `dir`:
-/// pitch and yaw at the target, rolling to bring it overhead when it's
-/// well off the nose (ships pitch faster than they yaw).
-pub fn stick_toward(rot: DQuat, dir: DVec3) -> DVec3 {
-    let l = rot.inverse() * dir.normalize_or(DVec3::NEG_Z);
-    let pitch = l.y.atan2(-l.z);
-    let yaw = l.x.atan2(-l.z);
-    let off = (-l.z).clamp(-1.0, 1.0).acos();
-    let roll = if off > 0.25 && (l.x * l.x + l.y * l.y) > 1e-6 {
-        let r = l.x.atan2(l.y);
-        // Never roll more than a right angle: past that, pitch down.
-        let r = if r.abs() > PI / 2.0 {
-            r - PI * r.signum()
-        } else {
-            r
-        };
-        (r * 1.2).clamp(-1.0, 1.0)
-    } else {
-        0.0
-    };
-    DVec3::new(
-        (pitch * 3.0).clamp(-1.0, 1.0),
-        (yaw * 3.0).clamp(-1.0, 1.0),
-        roll,
-    )
-}
-
-/// Where along `a`→`b` (0..1) a segment first enters an ellipsoid at the
-/// origin with semi-axes `axes`.
-pub fn segment_ellipsoid(a: DVec3, b: DVec3, axes: DVec3) -> Option<f64> {
-    let (a, b) = (a / axes, b / axes);
-    let d = b - a;
-    let dd = d.length_squared();
-    if a.length_squared() <= 1.0 {
-        return Some(0.0);
-    }
-    if dd < 1e-12 {
-        return None;
-    }
-    let bq = a.dot(d);
-    let c = a.length_squared() - 1.0;
-    let disc = bq * bq - dd * c;
-    if disc < 0.0 {
-        return None;
-    }
-    let t = (-bq - disc.sqrt()) / dd;
-    (0.0..=1.0).contains(&t).then_some(t)
 }
 
 #[cfg(test)]

@@ -328,3 +328,33 @@ pub(crate) fn paint_keycap(
     );
     painter.galley(cap.center() - galley.size() / 2.0, galley, INK);
 }
+
+/// A colour fading in from the screen's edges: `outer` at the rim, clear
+/// `depth` in (across, down). The HUD's hit glow and the ship-lost
+/// vignette.
+pub(crate) fn edge_fade(painter: &egui::Painter, screen: Rect, outer: Color32, depth: Vec2) {
+    let o = [
+        screen.left_top(),
+        screen.right_top(),
+        screen.right_bottom(),
+        screen.left_bottom(),
+    ];
+    let i = [
+        screen.left_top() + Vec2::new(depth.x, depth.y),
+        screen.right_top() + Vec2::new(-depth.x, depth.y),
+        screen.right_bottom() + Vec2::new(-depth.x, -depth.y),
+        screen.left_bottom() + Vec2::new(depth.x, -depth.y),
+    ];
+    let mut mesh = egui::Mesh::default();
+    for k in 0..4 {
+        let n = (k + 1) % 4;
+        let base = mesh.vertices.len() as u32;
+        mesh.colored_vertex(o[k], outer);
+        mesh.colored_vertex(o[n], outer);
+        mesh.colored_vertex(i[n], Color32::TRANSPARENT);
+        mesh.colored_vertex(i[k], Color32::TRANSPARENT);
+        mesh.add_triangle(base, base + 1, base + 2);
+        mesh.add_triangle(base, base + 2, base + 3);
+    }
+    painter.add(egui::Shape::mesh(mesh));
+}
