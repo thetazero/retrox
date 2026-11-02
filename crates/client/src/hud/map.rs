@@ -383,7 +383,7 @@ fn chart(
         let stroke = if lane.a == w.system || lane.b == w.system {
             Stroke::new(1.5, CREAM_DIM)
         } else {
-            Stroke::new(1.0, Color32::from_rgba_unmultiplied(196, 44, 34, 80))
+            Stroke::new(1.0, RED.gamma_multiply(80.0 / 255.0))
         };
         painter.line_segment(seg, stroke);
     }
@@ -855,8 +855,17 @@ fn readouts(painter: &egui::Painter, canvas: Rect, view: &View, on_ship: bool) {
         y += 36.0;
     }
     y += 8.0;
-    let lx = lamp_at(painter, Pos2::new(x, y), "SLEW", view.goal.is_some(), AMBER).right() + 8.0;
-    lamp_at(painter, Pos2::new(lx, y), "ON SHIP", on_ship, VFD);
+    let lx = crate::widgets::lamp_at(
+        painter,
+        Pos2::new(x, y),
+        "SLEW",
+        view.goal.is_some(),
+        AMBER,
+        None,
+    )
+    .right()
+        + 8.0;
+    crate::widgets::lamp_at(painter, Pos2::new(lx, y), "ON SHIP", on_ship, VFD, None);
 }
 
 /// A sub-heading painted straight onto a panel, with a rule to `right`.
@@ -960,30 +969,6 @@ pub(crate) fn drum(
         shade(painter, rect);
     }
     whole
-}
-
-/// An indicator lamp painted at `at`: lit (filled) or dark (outlined).
-fn lamp_at(painter: &egui::Painter, at: Pos2, text: &str, lit: bool, color: Color32) -> Rect {
-    let galley = painter.layout_no_wrap(text.to_owned(), mono(13.0), color);
-    let rect = Rect::from_min_size(at, galley.size() + Vec2::new(12.0, 6.0));
-    if lit {
-        painter.rect_filled(rect.expand(2.0), 0.0, color.gamma_multiply(0.2));
-        painter.rect_filled(rect, 0.0, color);
-    } else {
-        painter.rect_stroke(
-            rect,
-            0.0,
-            Stroke::new(1.0, color.gamma_multiply(0.35)),
-            egui::StrokeKind::Inside,
-        );
-    }
-    let text_color = if lit { INK } else { color.gamma_multiply(0.45) };
-    painter.galley_with_override_text_color(
-        rect.center() - galley.size() / 2.0,
-        galley,
-        text_color,
-    );
-    rect
 }
 
 /// The controls, as keycaps along the bottom of the console.
@@ -1093,9 +1078,9 @@ fn sidebar(
                 Some(dest) => {
                     ui.label(
                         RichText::new(format!(
-                            "{} · {} jumps · {:.0} d in transit",
+                            "{} · {} · {:.0} d in transit",
                             w.galaxy.systems[dest].name,
-                            route.len().saturating_sub(1),
+                            jumps_text(route.len().saturating_sub(1) as u32),
                             w.route_days(route)
                         ))
                         .color(AMBER),
@@ -1131,7 +1116,10 @@ fn sidebar(
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 if let Some(next) = next_hop {
-                    let text = format!("JUMP · {}", truncate(&w.galaxy.systems[next].name, 14));
+                    let text = format!(
+                        "JUMP · {}",
+                        crate::widgets::truncate(&w.galaxy.systems[next].name, 14)
+                    );
                     if crate::widgets::push(
                         ui,
                         &text.to_uppercase(),
@@ -1196,10 +1184,10 @@ fn system_info(ui: &mut egui::Ui, w: &World, s: SystemId) {
         .map(|(_, st)| st.economy.population)
         .sum();
     let mut facts = format!(
-        "{} star · {} lanes · {} settlements",
+        "{} star · {} · {}",
         star_name(system.star),
-        system.lanes.len(),
-        system.settlements.len()
+        count(system.lanes.len(), "lane"),
+        count(system.settlements.len(), "settlement")
     );
     if population > 0.0 {
         facts += &format!(" · pop {population:.1}k");
@@ -1211,9 +1199,9 @@ fn system_info(ui: &mut egui::Ui, w: &World, s: SystemId) {
     } else {
         match w.route(s) {
             Some(route) => format!(
-                "{:.0} ly away · {} jumps · {:.0} d",
+                "{:.0} ly away · {} · {:.0} d",
                 here.distance(system.position),
-                route.len() - 1,
+                jumps_text(route.len() as u32 - 1),
                 w.route_days(&route)
             ),
             None => format!(

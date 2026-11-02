@@ -9,8 +9,10 @@ use crate::hud::{CREAM, CREAM_DIM, INK, RED, RED_DARK, RED_HOT, RULE, mono};
 
 /// The dark plate behind cards and list rows.
 pub(crate) const CARD_FILL: Color32 = Color32::from_rgba_premultiplied(24, 18, 28, 200);
+/// The dark backing behind a block of live VFD readouts.
+pub(crate) const READOUT_FILL: Color32 = Color32::from_rgba_premultiplied(9, 7, 14, 205);
 /// A plain button's face.
-const FACE: Color32 = Color32::from_rgb(30, 24, 34);
+pub(crate) const FACE: Color32 = Color32::from_rgb(30, 24, 34);
 
 /// How a list row is lit, for the caller to colour what it paints on it.
 #[derive(Clone, Copy)]
@@ -249,15 +251,10 @@ pub(crate) fn bank(
 /// Draws one keycap with its label after it, starting at `at` (the keycap's
 /// left edge, vertically centred), and returns where the next should start.
 pub(crate) fn legend_item(painter: &egui::Painter, at: Pos2, key: &str, what: &str) -> f32 {
-    let galley = painter.layout_no_wrap(key.to_owned(), mono(12.0), INK);
-    let size = Vec2::new((galley.size().x + 10.0).max(20.0), galley.size().y + 4.0);
-    let cap = Rect::from_min_size(Pos2::new(at.x, at.y - size.y / 2.0), size);
-    painter.rect_filled(cap, 2.0, CREAM);
-    painter.line_segment(
-        [cap.left_bottom(), cap.right_bottom()],
-        Stroke::new(2.0, CREAM_DIM),
-    );
-    painter.galley(cap.center() - galley.size() / 2.0, galley, INK);
+    let galley = painter.layout_no_wrap(key.to_owned(), mono(13.0), INK);
+    let cap = Rect::from_min_size(Pos2::new(at.x, at.y), keycap_size(galley.size()));
+    let cap = cap.translate(Vec2::new(0.0, -cap.height() / 2.0));
+    paint_keycap(painter, cap, galley);
     let r = painter.text(
         Pos2::new(cap.right() + 6.0, cap.center().y),
         Align2::LEFT_CENTER,
@@ -266,4 +263,68 @@ pub(crate) fn legend_item(painter: &egui::Painter, at: Pos2, key: &str, what: &s
         CREAM_DIM,
     );
     r.right() + 18.0
+}
+
+/// An indicator lamp with its legend, painted at `at`: lit, it is a solid
+/// block of `color` with a soft halo and ink text; dark, an outline with dim
+/// text. `width` fixes the lamp's width (for a row of equal lamps); `None`
+/// fits it to the text. Returns the lamp's rect.
+pub(crate) fn lamp_at(
+    painter: &egui::Painter,
+    at: Pos2,
+    text: &str,
+    lit: bool,
+    color: Color32,
+    width: Option<f32>,
+) -> Rect {
+    let galley = painter.layout_no_wrap(text.to_owned(), mono(13.0), color);
+    let fit = galley.size() + Vec2::new(12.0, 6.0);
+    let rect = Rect::from_min_size(at, Vec2::new(width.unwrap_or(fit.x), fit.y));
+    if lit {
+        painter.rect_filled(rect.expand(2.0), 0.0, color.gamma_multiply(0.2));
+        painter.rect_filled(rect, 0.0, color);
+    } else {
+        painter.rect_stroke(
+            rect,
+            0.0,
+            Stroke::new(1.0, color.gamma_multiply(0.35)),
+            StrokeKind::Inside,
+        );
+    }
+    let text_color = if lit { INK } else { color.gamma_multiply(0.45) };
+    painter.galley_with_override_text_color(
+        rect.center() - galley.size() / 2.0,
+        galley,
+        text_color,
+    );
+    rect
+}
+
+/// `s` cut to at most `n` characters, ending in an ellipsis if it was cut.
+pub(crate) fn truncate(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_owned()
+    } else {
+        s.chars().take(n.saturating_sub(1)).chain(['…']).collect()
+    }
+}
+
+/// The size of a keycap round a key's legend of `text` size.
+pub(crate) fn keycap_size(text: Vec2) -> Vec2 {
+    Vec2::new((text.x + 10.0).max(20.0), text.y + 4.0)
+}
+
+/// A cream keycap with a darker lip, its legend in ink. The corner key
+/// strip, the hints and every key legend use this one cap.
+pub(crate) fn paint_keycap(
+    painter: &egui::Painter,
+    cap: Rect,
+    galley: std::sync::Arc<egui::Galley>,
+) {
+    painter.rect_filled(cap, 2.0, CREAM);
+    painter.line_segment(
+        [cap.left_bottom(), cap.right_bottom()],
+        Stroke::new(2.0, CREAM_DIM),
+    );
+    painter.galley(cap.center() - galley.size() / 2.0, galley, INK);
 }

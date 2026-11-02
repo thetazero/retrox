@@ -21,7 +21,7 @@ use crate::{EconomyModel, GalaxyState, Resources, SettlementId};
 pub const BUILD_DAYS: f64 = 30.0;
 /// A project still short of materials after this many days is cut
 /// short at whatever share of it has been built.
-const PATIENCE_DAYS: u64 = 180;
+pub const PATIENCE_DAYS: u64 = 180;
 /// Materials per unit of scale added.
 const METAL_PER_SCALE: f64 = 20.0;
 const COMPONENTS_PER_SCALE: f64 = 3.0;
@@ -247,6 +247,10 @@ pub(crate) fn progress(state: &mut GalaxyState, id: SettlementId) {
         used += got;
     }
     let done = Good::ALL.iter().all(|&g| project.needs[g] <= 1e-9);
+    if project.started == Project::UNKNOWN_START {
+        // Loaded from a save made before projects recorded their start.
+        project.started = today;
+    }
     let started = project.started;
     if used > 0.0 && state.factions[owner].economy == EconomyModel::Planned {
         let wages = used * WAGE_PER_UNIT * crate::fiscal::thrift(state, owner);

@@ -301,7 +301,10 @@ pub fn run(
     }
     let cost = quote(player, job).ok_or("That doesn't fit")?;
     if cost > player.credits {
-        return Err(format!("Not enough credits: that costs {cost:.0} cr"));
+        return Err(format!(
+            "Not enough credits: that costs {}",
+            crate::hud::credits(cost)
+        ));
     }
     if -cost > economy.treasury {
         return Err("The settlement can't afford to buy that".into());
@@ -406,7 +409,11 @@ pub fn run(
             let message = if sold.is_empty() {
                 format!("Fitted a {}", section.name)
             } else {
-                format!("Fitted a {} and sold {} modules", section.name, sold.len())
+                format!(
+                    "Fitted a {} and sold {}",
+                    section.name,
+                    crate::hud::count(sold.len(), "module")
+                )
             };
             Done {
                 message,
