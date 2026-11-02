@@ -544,42 +544,6 @@ Inspiration, not imitation — fictional throughout.
 - **Audio:** analog-synth score, radio static and crackle on comms, heavy
   mechanical sounds for docking, switches, and hull stress.
 
-### 8.2 Sound
-
-Decided while building the soundscape (#76):
-
-- **All synthesized, no samples.** Every sound is made in code from
-  oscillators, noise, filters and resonators (`client/src/audio/`), so
-  the whole game shares one analog character, nothing needs licensing,
-  and cues can be retuned like any other code. One-shot cues render once
-  at startup; continuous sounds run live on the audio thread through
-  kira.
-- **The score is generative**: a small analog ensemble — detuned-saw
-  string pad, filtered bass, sequencer arpeggio through a ping-pong tape
-  delay, a theremin-like lead with blooming vibrato, glassy FM bells, a
-  soft rhythm box — with tape wow on everything. It plays progressions in
-  D Dorian / Aeolian (hopeful, with melancholy), a section at a time.
-  Moods crossfade by situation: *title* (the full theme), *space*
-  (sparse, and it rests in silence now and then), *station* (warmer,
-  with the rhythm box), *transit* (fast travel and jumps: the sequencer
-  driving).
-- **The palette:** heavy mechanisms for anything physical — docking
-  clamps then airlock hiss, the jump drive's breaker, the star chart's
-  motors and relays, bakelite toggles for every switch and button, hull
-  plates groaning on impacts and in transit; radio static with crackle
-  and a squelch tail whenever a message comes over comms; VFD-panel beeps
-  for instruments (menu cursor, targeting, the prospector's sonar ping).
-  Engines are a low roar plus a turbine note that rise with acceleration
-  rather than speed, so cruising is quiet and burns are loud.
-- **The sound follows the game**, not the other way round: the client
-  watches the world each frame and turns what changed into cues and loop
-  levels. Game code only reports what the sound can't see (the speed of a
-  collision).
-- **Volume:** master, music and effects sliders in Settings, heard while
-  dragging. Pausing silences the ship but not the music. Screenshot and
-  scripted runs are silent unless `--sound`; `--mute` silences any run.
-  No audio device means silence, never an error.
-
 ### 8.1 Ship models and liveries
 
 Decided while hand-building every hull (PR #86):
@@ -645,6 +609,67 @@ player.
 - The suggested first run is a freight contract: it pays for sure and
   walks the player through launching, the galaxy map, a jump, fast travel
   and docking. Mining and trade are offered as the other ways in.
+### 8.4 Screens and controls
+
+Decided while bringing every screen into one style (issue #77):
+
+- **No stock widgets.** Every list, button and table is painted from the
+  shared kit in `crates/client/src/widgets.rs` (and the HUD helpers in
+  `hud.rs`): lists are **instrument rows** with a hairline under each, a
+  red wash and tab on hover, an amber wash and tab on the selected row;
+  buttons are **push keys** with a darker lip that sink when pressed (red
+  for the one primary action, dark enamel otherwise, outlined in a colour
+  where the colour means something).
+- **Colour carries meaning, consistently:** amber is what you pay, buy,
+  target or have selected; teal is live readings and what you're paid or
+  sell for; red is the primary action and alarms; cream is names.
+  So trade has an amber bank of buy keys and a teal bank of sell keys.
+- **Joined key banks** (`+1 +10 MAX`) rather than loose buttons for steps
+  of one action, like a row of switches on a panel.
+- **Chart symbols** in lists of places: a rayed star, ringed gas giants,
+  stations as teal diamonds, fields as scattered dots; moons hang off their
+  planet on a bracket.
+- **Slot plates:** loadout slots carry a stencilled kind plate coloured by
+  role (weapons red; engines, power and jump amber; shields, radar and RCS
+  teal; radiators and cargo cream).
+- **Key legends** (the corner strip from §8.3, the star chart's legend)
+  are cream keycaps with the action in uppercase mono beside them.
+
+### 8.5 Sound
+
+Decided while building the soundscape (#76):
+
+- **All synthesized, no samples.** Every sound is made in code from
+  oscillators, noise, filters and resonators (`client/src/audio/`), so
+  the whole game shares one analog character, nothing needs licensing,
+  and cues can be retuned like any other code. One-shot cues render once
+  at startup; continuous sounds run live on the audio thread through
+  kira.
+- **The score is generative**: a small analog ensemble — detuned-saw
+  string pad, filtered bass, sequencer arpeggio through a ping-pong tape
+  delay, a theremin-like lead with blooming vibrato, glassy FM bells, a
+  soft rhythm box — with tape wow on everything. It plays progressions in
+  D Dorian / Aeolian (hopeful, with melancholy), a section at a time.
+  Moods crossfade by situation: *title* (the full theme), *space*
+  (sparse, and it rests in silence now and then), *station* (warmer,
+  with the rhythm box), *transit* (fast travel and jumps: the sequencer
+  driving).
+- **The palette:** heavy mechanisms for anything physical — docking
+  clamps then airlock hiss, the jump drive's breaker, the star chart's
+  motors and relays, bakelite toggles for every switch and button, hull
+  plates groaning on impacts and in transit; radio static with crackle
+  and a squelch tail whenever a message comes over comms; VFD-panel beeps
+  for instruments (menu cursor, targeting, the prospector's sonar ping).
+  Engines are a low roar plus a turbine note that rise with acceleration
+  rather than speed, so cruising is quiet and burns are loud.
+- **The sound follows the game**, not the other way round: the client
+  watches the world each frame and turns what changed into cues and loop
+  levels. Game code only reports what the sound can't see (the speed of a
+  collision).
+- **Volume:** master, music and effects sliders in Settings, heard while
+  dragging. Pausing silences the ship but not the music. Screenshot and
+  scripted runs are silent unless `--sound`; `--mute` silences any run.
+  No audio device means silence, never an error.
 
 ## 9. Technical architecture
 

@@ -167,7 +167,8 @@ pub fn yard_output_t_per_day(economy: &LocalEconomy) -> f64 {
         .iter()
         .filter(|f| f.kind == FacilityKind::Shipyard)
         .map(|f| f.scale * HULL_T_PER_RUN)
-        .sum()
+        // Not `sum`: an empty float sum is -0.0, shown as "-0".
+        .fold(0.0, |a, b| a + b)
 }
 
 pub fn can_build(economy: &LocalEconomy, offer: &Offer) -> bool {

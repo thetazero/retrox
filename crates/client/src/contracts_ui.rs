@@ -223,16 +223,19 @@ fn offer_card(
                 cargo_lines(ui, w, o, &route);
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let button =
-                    egui::Button::new(RichText::new("ACCEPT").font(display(22.0)).color(CREAM))
-                        .fill(if refusal.is_none() { RED } else { RULE })
-                        .min_size(Vec2::new(96.0, 40.0));
-                let response = ui.add_enabled(refusal.is_none(), button);
+                let response = crate::widgets::push(
+                    ui,
+                    "ACCEPT",
+                    display(22.0),
+                    crate::widgets::Look::Primary,
+                    refusal.is_none(),
+                    Vec2::new(96.0, 40.0),
+                );
                 if response.clicked() {
                     actions.push(Action::AcceptContract(i));
                 }
                 if let Some(why) = &refusal {
-                    response.on_disabled_hover_text(why);
+                    response.on_hover_text(why);
                 }
                 ui.add_space(8.0);
                 ui.vertical(|ui| {
@@ -327,12 +330,16 @@ fn active_card(ui: &mut egui::Ui, w: &World, i: usize, c: &Contract, actions: &m
         let row = Vec2::new(ui.available_width(), 24.0);
         let right = egui::Layout::right_to_left(egui::Align::Center);
         ui.allocate_ui_with_layout(row, right, |ui| {
-            let label = if confirming {
-                RichText::new(format!("FORFEIT {} DEPOSIT?", credits(o.value))).color(ALARM)
+            let (label, look) = if confirming {
+                (
+                    format!("FORFEIT {} DEPOSIT?", credits(o.value)),
+                    crate::widgets::Look::Tint(ALARM),
+                )
             } else {
-                RichText::new("ABANDON").color(CREAM_DIM)
+                ("ABANDON".to_owned(), crate::widgets::Look::Plain)
             };
-            let abandon = ui.add(egui::Button::new(label).min_size(Vec2::new(130.0, 0.0)));
+            let abandon =
+                crate::widgets::push(ui, &label, mono(13.0), look, true, Vec2::new(130.0, 26.0));
             if abandon.clicked() {
                 if confirming {
                     actions.push(Action::AbandonContract(i));
@@ -345,11 +352,15 @@ fn active_card(ui: &mut egui::Ui, w: &World, i: usize, c: &Contract, actions: &m
             }
             let system = w.galaxy.settlements[o.to].system;
             let plotted = w.course == Some(system);
-            let course = egui::Button::new(if plotted { "COURSE SET" } else { "PLOT COURSE" })
-                .min_size(Vec2::new(130.0, 0.0));
-            if ui
-                .add_enabled(!plotted && system != w.system, course)
-                .clicked()
+            if crate::widgets::push(
+                ui,
+                if plotted { "COURSE SET" } else { "PLOT COURSE" },
+                mono(13.0),
+                crate::widgets::Look::Tint(AMBER),
+                !plotted && system != w.system,
+                Vec2::new(130.0, 26.0),
+            )
+            .clicked()
             {
                 actions.push(Action::PlotCourse(Some(system)));
             }

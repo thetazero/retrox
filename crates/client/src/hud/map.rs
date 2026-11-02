@@ -992,25 +992,7 @@ fn legend(painter: &egui::Painter, canvas: Rect) {
         ("DBL-CLICK", "slew to"),
         ("M", "close"),
     ] {
-        let galley = painter.layout_no_wrap(key.to_owned(), mono(12.0), INK);
-        let cap = Rect::from_min_size(
-            Pos2::new(x, y),
-            Vec2::new((galley.size().x + 10.0).max(20.0), galley.size().y + 4.0),
-        );
-        painter.rect_filled(cap, 2.0, CREAM);
-        painter.line_segment(
-            [cap.left_bottom(), cap.right_bottom()],
-            Stroke::new(2.0, CREAM_DIM),
-        );
-        painter.galley(cap.center() - galley.size() / 2.0, galley, INK);
-        let r = painter.text(
-            Pos2::new(cap.right() + 6.0, cap.center().y),
-            Align2::LEFT_CENTER,
-            what.to_uppercase(),
-            mono(12.0),
-            CREAM_DIM,
-        );
-        x = r.right() + 18.0;
+        x = crate::widgets::legend_item(painter, Pos2::new(x, y + 9.0), key, what);
     }
 }
 
@@ -1143,29 +1125,35 @@ fn sidebar(
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 if let Some(next) = next_hop {
-                    let jump = egui::Button::new(
-                        RichText::new(format!(
-                            "JUMP · {}",
-                            truncate(&w.galaxy.systems[next].name, 14)
-                        ))
-                        .font(display(20.0))
-                        .color(CREAM),
+                    let text = format!("JUMP · {}", truncate(&w.galaxy.systems[next].name, 14));
+                    if crate::widgets::push(
+                        ui,
+                        &text.to_uppercase(),
+                        display(20.0),
+                        crate::widgets::Look::Primary,
+                        open_space,
+                        Vec2::new(0.0, 30.0),
                     )
-                    .fill(RED)
-                    .min_size(Vec2::new(0.0, 28.0));
-                    if ui.add_enabled(open_space, jump).clicked() {
+                    .clicked()
+                    {
                         actions.push(Action::Jump(next));
                     }
                 }
+                let plain = crate::widgets::Look::Plain;
                 if w.course.is_some()
-                    && ui
-                        .add(egui::Button::new("CLEAR").min_size(Vec2::new(0.0, 28.0)))
-                        .clicked()
+                    && crate::widgets::push(
+                        ui,
+                        "CLEAR",
+                        mono(14.0),
+                        plain,
+                        true,
+                        Vec2::new(0.0, 30.0),
+                    )
+                    .clicked()
                 {
                     actions.push(Action::PlotCourse(None));
                 }
-                if ui
-                    .add(egui::Button::new("CENTRE").min_size(Vec2::new(0.0, 28.0)))
+                if crate::widgets::push(ui, "CENTRE", mono(14.0), plain, true, Vec2::new(0.0, 30.0))
                     .clicked()
                 {
                     view.goal = Some(galaxy_point(w.galaxy.systems[w.system].position));
