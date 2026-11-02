@@ -971,3 +971,91 @@ fn fast_travel_to_a_gas_giant_stops_over_its_clouds() {
     assert!(above < crate::skim::BAND_M * 2.0, "{above} m up");
     assert!(above > crate::skim::BAND_M, "arrives inside the band");
 }
+
+/// A world in orbit of a body with two cities or more (issue #116).
+fn above_a_two_city_planet() -> (World, BodyId, Vec<SettlementId>) {
+    let mut world = World::new(1);
+    let (system, body) = world
+        .galaxy
+        .systems
+        .iter()
+        .find_map(|(id, _)| {
+            let view = SystemView::new(&world.galaxy, id);
+            view.cities
+                .iter()
+                .map(|&(_, b)| b)
+                .find(|&b| view.cities.iter().filter(|&&(_, o)| o == b).count() >= 2)
+                .map(|b| (id, b))
+        })
+        .expect("a planet with two cities somewhere");
+    world.system = system;
+    world.view = SystemView::new(&world.galaxy, system);
+    world.mode = Mode::Normal;
+    world.target = None;
+    let r = world.place_radius(Place::Body(body));
+    world.ship.frame = Place::Body(body);
+    world.ship.rel = DVec3::new(0.0, 0.0, r * 1.25);
+    world.ship.vel = DVec3::ZERO;
+    let cities = world.cities_on(body).collect();
+    (world, body, cities)
+}
+
+#[test]
+fn every_city_on_a_planet_can_be_landed_at() {
+    let (mut world, body, cities) = above_a_two_city_planet();
+    assert_eq!(world.prompts().land, Some((cities[0], body)));
+    for &city in &cities {
+        world.act(Action::TargetCity(city));
+        assert_eq!(world.target, Some(Place::Body(body)));
+        assert_eq!(world.prompts().land, Some((city, body)), "[L] lands where picked");
+    }
+    let last = *cities.last().unwrap();
+    world.act(Action::Land);
+    assert!(
+        matches!(world.mode, Mode::Landed { city, .. } if city == last),
+        "landed at the city picked: {:?}",
+        world.mode
+    );
+}
+
+#[test]
+fn the_landing_prompt_offers_where_the_cargo_is_bound() {
+    let (mut world, body, cities) = above_a_two_city_planet();
+    let to = *cities.last().unwrap();
+    world.player.contracts.push(crate::contracts::Contract {
+        offer: retrox_sim::freight::Offer {
+            from: cities[0],
+            to,
+            good: retrox_sim::economy::Good::Food,
+            amount: 12.0,
+            jumps: 0,
+            trip_days: 1.0,
+            deadline: world.galaxy.time,
+            value: 100.0,
+            fee: 10.0,
+            shortage: 0.5,
+            urgent: false,
+        },
+        accepted: world.galaxy.time,
+    });
+    assert_eq!(world.prompts().land, Some((to, body)));
+    // The hint names the planet the city is on, until it's picked.
+    let hint = crate::guide::hint(&world).expect("a hint");
+    let planet = world.name(Place::Body(body));
+    assert!(hint.contains(&format!("on {planet}")), "{hint}");
+    world.act(Action::TargetCity(to));
+    let hint = crate::guide::hint(&world).expect("a hint");
+    assert!(hint.contains("[L] to land at"), "{hint}");
+}
+
+#[test]
+fn t_cycles_through_cities_under_their_planet() {
+    let (mut world, body, cities) = above_a_two_city_planet();
+    world.act(Action::Target(Place::Body(body)));
+    for &city in &cities {
+        world.act(Action::CycleTarget);
+        assert_eq!(world.nav_selected(), Some((Place::Body(body), Some(city))));
+    }
+    world.act(Action::CycleTarget);
+    assert_eq!(world.landing.filter(|c| cities.contains(c)), None);
+}
