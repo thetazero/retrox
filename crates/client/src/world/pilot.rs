@@ -102,20 +102,34 @@ impl World {
         }
         let place = leg.frame();
         let centre = self.position_at(place, t);
+        let centre_vel = self.velocity_at(place, t);
         let up = (ship - centre).normalize_or(DVec3::Z);
-        let (side, distance) = match leg {
-            Leg::To(_) | Leg::Intercept(_) => (up, self.arrival_distance(place)),
+        // The side of the place the goal is on, and how fast that side
+        // turns, in 1/s.
+        let (side, turn, distance) = match leg {
+            Leg::To(_) | Leg::Intercept(_) => (up, DVec3::ZERO, self.arrival_distance(place)),
             Leg::Climb { well, toward } => {
-                let side = toward.map_or(up, |next| {
-                    (self.position_at(next, t) - centre).normalize_or(up)
+                let distance = self.well_radius(well) * 1.05;
+                let to_next = toward.map(|next| {
+                    let r = self.position_at(next, t) - centre;
+                    (r, self.velocity_at(next, t) - centre_vel)
                 });
-                (side, self.well_radius(well) * 1.05)
+                match to_next {
+                    Some((r, v)) if r.length() > 0.0 => {
+                        // The side facing the next place swings round as the
+                        // well orbits: the goal moves with it, and must say
+                        // so, or the ship chases it and never matches speed
+                        // closely enough to arrive (issue #109).
+                        let side = r / r.length();
+                        (side, (v - side * side.dot(v)) / r.length(), distance)
+                    }
+                    _ => (up, DVec3::ZERO, distance),
+                }
             }
         };
-        let pos = centre + side * distance;
         Goal {
-            pos: pos.to_array(),
-            vel: self.velocity_at(place, t).to_array(),
+            pos: (centre + side * distance).to_array(),
+            vel: (centre_vel + turn * distance).to_array(),
         }
     }
 
