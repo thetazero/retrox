@@ -25,10 +25,12 @@ pub enum Good {
     Food,
     Fuel,
     Components,
+    /// Skimmed from gas giants and refined into fuel (issue #68).
+    Gas,
 }
 
 impl Good {
-    pub const COUNT: usize = 6;
+    pub const COUNT: usize = 7;
     pub const ALL: [Good; Self::COUNT] = [
         Good::Ore,
         Good::Ice,
@@ -36,6 +38,7 @@ impl Good {
         Good::Food,
         Good::Fuel,
         Good::Components,
+        Good::Gas,
     ];
 
     /// The reference price, in credits per unit. Planned economies sell at
@@ -48,6 +51,7 @@ impl Good {
             Good::Food => 15.0,
             Good::Fuel => 20.0,
             Good::Components => 80.0,
+            Good::Gas => 10.0,
         }
     }
 
@@ -59,6 +63,7 @@ impl Good {
             Good::Food => "food",
             Good::Fuel => "fuel",
             Good::Components => "components",
+            Good::Gas => "gas",
         }
     }
 }
@@ -110,10 +115,13 @@ pub enum FacilityKind {
     /// Builds ship hulls: its output goes to [`LocalEconomy::hull_t`], not
     /// the market.
     Shipyard,
+    /// Refines skimmed gas into fuel: cheaper to run than cracking ice in a
+    /// [`FacilityKind::FuelPlant`], but its gas comes from harvesters.
+    GasPlant,
 }
 
 impl FacilityKind {
-    pub const ALL: [FacilityKind; 7] = [
+    pub const ALL: [FacilityKind; 8] = [
         FacilityKind::Mine,
         FacilityKind::IceHarvester,
         FacilityKind::Refinery,
@@ -121,6 +129,7 @@ impl FacilityKind {
         FacilityKind::FuelPlant,
         FacilityKind::Factory,
         FacilityKind::Shipyard,
+        FacilityKind::GasPlant,
     ];
 
     pub const fn recipe(self) -> &'static Recipe {
@@ -149,6 +158,10 @@ impl FacilityKind {
             FacilityKind::Factory => &Recipe {
                 inputs: &[(Metal, 1.0), (Fuel, 0.5)],
                 outputs: &[(Components, 1.0)],
+            },
+            FacilityKind::GasPlant => &Recipe {
+                inputs: &[(Gas, 1.0)],
+                outputs: &[(Fuel, 1.4)],
             },
             // One tonne of hull per run; see `HULL_T_PER_RUN`.
             FacilityKind::Shipyard => &Recipe {
@@ -195,8 +208,11 @@ pub const HULL_T_PER_RUN: f64 = 1.0;
 /// whatever hull captains have asked for and couldn't get
 /// ([`LocalEconomy::hull_wanted`]): beyond that, nobody is buying.
 pub const HULL_STORAGE_DAYS: f64 = 30.0;
-/// What a tonne of finished hull sells for, in credits.
-pub const HULL_PRICE_PER_T: f64 = 60.0;
+/// What a tonne of finished hull sells for, in credits: about twice what
+/// goes into it (a tonne of metal, 0.3 t of components, 0.1 t of fuel, 56
+/// cr at base prices), the same mark-up a factory puts on components. It
+/// prices every ship and part (DESIGN §7.8).
+pub const HULL_PRICE_PER_T: f64 = 120.0;
 
 /// A facility under construction: what it will be, and the materials it
 /// still needs.

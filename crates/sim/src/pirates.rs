@@ -62,26 +62,30 @@ pub const RAID_T_PER_SHIP: f64 = 25.0;
 pub const STARVE_DAYS: u64 = 150;
 /// How far from their position a gang in the bubble spots prey.
 pub const HUNT_M: f64 = 0.4 * METRES_PER_AU;
+/// A gang this close to its prey has caught it.
+const CATCH_M: f64 = 2e7;
+/// A day of hunting is flown in stretches this long, seconds.
+const HUNT_STRETCH_S: f64 = 600.0;
 /// A hunt that hasn't caught its prey in this many days is given up.
 const HUNT_DAYS: u64 = 3;
 /// A gang just out of a fight with the player keeps away from them for
 /// this many days.
 pub const REST_DAYS: u64 = 3;
 /// A bounty per ship starts here...
-const BOUNTY_BASE: f64 = 2_500.0;
+const BOUNTY_BASE: f64 = 2_000.0;
 /// ...rises this much per tonne the gang has taken...
 const BOUNTY_PER_T: f64 = 15.0;
 /// ...and stops here.
-const BOUNTY_MAX: f64 = 9_000.0;
+const BOUNTY_MAX: f64 = 8_000.0;
 /// A gunship is worth this many times a fighter's bounty.
 const GUNSHIP_BOUNTY: f64 = 2.0;
 /// Chance a month that a settlement doing fine loses a crew to piracy...
-const BASE_CHANCE: f64 = 0.004;
+const BASE_CHANCE: f64 = 0.002;
 /// ...plus this much per unit of hardship (the share of its food and fuel
 /// demand going unmet).
 const HARDSHIP_CHANCE: f64 = 0.25;
 /// At most one gang per this many settlements, plus a few.
-const SETTLEMENTS_PER_GANG: usize = 6;
+const SETTLEMENTS_PER_GANG: usize = 15;
 
 /// A hull pirates fly, registered by generation from the ship content.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -809,13 +813,33 @@ pub(crate) fn step(state: &mut GalaxyState) {
                     state.pirates.prowls.insert(id, next);
                     continue;
                 };
+                // Flown in short stretches, so the day stops where the gang
+                // catches up (the autopilot creeps in tiny steps once it's
+                // on top of a moving goal).
                 let gang = &state.pirates.gangs[id];
-                let caught = flight::fly(&mut next.ship, accel, SECONDS_PER_DAY, |t, _| {
-                    prowl_goal(state, gang, &prowl, Some(prey), t, t0 + t / SECONDS_PER_DAY)
+                let mut caught = false;
+                let mut t = 0.0;
+                while t < SECONDS_PER_DAY && !caught {
+                    let from = t;
+                    let stretch = HUNT_STRETCH_S.min(SECONDS_PER_DAY - t);
+                    let arrived = flight::fly(&mut next.ship, accel, stretch, |s, _| {
+                        let at = from + s;
+                        prowl_goal(
+                            state,
+                            gang,
+                            &prowl,
+                            Some(prey),
+                            at,
+                            t0 + at / SECONDS_PER_DAY,
+                        )
                         .expect("a hunt has a goal")
-                });
-                let close = flight::length(flight::sub(next.ship.pos, prey.pos)) < 2e7;
-                if caught.is_some() || close {
+                    });
+                    t += stretch;
+                    let prey_now = flight::add(prey.pos, flight::scale(prey.vel, t));
+                    caught = arrived.is_some()
+                        || flight::length(flight::sub(next.ship.pos, prey_now)) < CATCH_M;
+                }
+                if caught {
                     if let Some(n) = haul::fleet_index(state, key.0, key.1)
                         && let Some(&haul::Location::Flying { to }) =
                             state.companies.get(key.0).map(|c| &c.fleets[n].at)

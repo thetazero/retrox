@@ -83,6 +83,7 @@ pub fn generate(seed: u64, config: &GalaxyConfig) -> GalaxyState {
     economy::seed(&mut Rng::derive(seed, "economy"), &mut state);
     let classes = haulers::classes(&mut state);
     haulers::seed(&mut Rng::derive(seed, "companies"), &mut state, &classes);
+    haulers::seed_harvesters(&mut Rng::derive(seed, "harvesters"), &mut state, &classes);
     haulers::raider_hulls(&mut state);
     // Until prehistory grows them, some crews have already gone over.
     retrox_sim::pirates::seed(&mut state, PIRATE_SHARE);
@@ -91,7 +92,7 @@ pub fn generate(seed: u64, config: &GalaxyConfig) -> GalaxyState {
 
 /// Share of the starting galaxy's settlements that have lost a crew to
 /// piracy (DESIGN §7.2.2).
-const PIRATE_SHARE: f64 = 0.12;
+const PIRATE_SHARE: f64 = 0.06;
 
 /// Generate the galaxy at the dawn of history (§4.2): the physical galaxy
 /// and one cradle world shared by a few rival nations, with everything
@@ -102,6 +103,7 @@ pub fn generate_cradle(seed: u64, config: &GalaxyConfig) -> GalaxyState {
     economy::seed(&mut Rng::derive(seed, "economy"), &mut state);
     let classes = haulers::classes(&mut state);
     haulers::seed(&mut Rng::derive(seed, "companies"), &mut state, &classes);
+    haulers::seed_harvesters(&mut Rng::derive(seed, "harvesters"), &mut state, &classes);
     haulers::raider_hulls(&mut state);
     state
 }

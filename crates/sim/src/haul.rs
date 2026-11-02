@@ -82,6 +82,10 @@ pub struct Fleet {
     /// carry are sold for scrap (see [`SLACK_REVIEWS`]).
     #[serde(default)]
     pub slack: u32,
+    /// Set for harvesters, which gather goods instead of buying them; see
+    /// [`crate::harvest`].
+    #[serde(default)]
+    pub harvest: Option<crate::harvest::Harvest>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -295,8 +299,8 @@ const MIN_PROFIT_PER_DAY: f64 = 1.0;
 const FUEL_PER_SHIP_DAY: f64 = 0.5;
 const FUEL_PER_CARGO_T_DAY: f64 = 0.002;
 /// Crew upkeep per ship per day, in credits, paid monthly.
-const UPKEEP_PER_SHIP_DAY: f64 = 2.0;
-const UPKEEP_PER_CARGO_T_DAY: f64 = 0.02;
+pub(crate) const UPKEEP_PER_SHIP_DAY: f64 = 2.0;
+pub(crate) const UPKEEP_PER_CARGO_T_DAY: f64 = 0.02;
 /// A buyer spends at most this share of its treasury on one delivery.
 const MAX_SPEND_SHARE: f64 = 0.5;
 /// A company spends at most this share of its credits on one cargo.
@@ -471,7 +475,7 @@ fn capacity(state: &GalaxyState, fleet: &Fleet) -> f64 {
     state.ship_classes[fleet.class].cargo_t * f64::from(fleet.ships)
 }
 
-fn fuel_per_day(state: &GalaxyState, fleet: &Fleet) -> f64 {
+pub(crate) fn fuel_per_day(state: &GalaxyState, fleet: &Fleet) -> f64 {
     f64::from(fleet.ships) * FUEL_PER_SHIP_DAY + capacity(state, fleet) * FUEL_PER_CARGO_T_DAY
 }
 
@@ -532,6 +536,7 @@ pub fn trade(state: &mut GalaxyState) {
     crate::bubble::step(state, &contracts, &board);
     crate::pirates::step(state);
     found_companies(state);
+    crate::harvest::found(state);
     crate::economy::update_all_prices(state);
 }
 
@@ -556,6 +561,7 @@ fn arrive(state: &mut GalaxyState, contracts: &Contracts, board: &Board, key: Co
     if jumps && !roll_losses(state, key, n, to) {
         return;
     }
+    crate::harvest::fill(state, key, n);
     dock(state, contracts, board, key, n, to, false);
 }
 
@@ -588,6 +594,14 @@ pub(crate) fn dock(
     buy_ship(state, key, n, to, full);
     let review_due = state.companies[key].fleets[n].review_due;
     if review_due && retire(state, key, n, to) {
+        return;
+    }
+    if crate::harvest::is_harvester(state, key, n) {
+        if replan || review_due {
+            state.companies[key].fleets[n].review_due = false;
+            crate::harvest::review(state, key, n, to);
+        }
+        crate::harvest::run(state, key, n, to);
         return;
     }
     if replan || review_due {
@@ -728,6 +742,11 @@ fn review(state: &mut GalaxyState, contracts: &Contracts, board: &Board, key: Co
         }
         Location::Docked(here) => {
             if retire(state, key, n, here) {
+                return;
+            }
+            if crate::harvest::is_harvester(state, key, n) {
+                crate::harvest::review(state, key, n, here);
+                crate::harvest::run(state, key, n, here);
                 return;
             }
             choose_route(state, contracts, board, key, n, here);
@@ -961,7 +980,7 @@ fn run_route(
 }
 
 /// Buy fuel for the trip and set off; schedule the arrival.
-fn depart(
+pub(crate) fn depart(
     state: &mut GalaxyState,
     key: CompanyId,
     n: usize,
@@ -1127,6 +1146,12 @@ fn retire(state: &mut GalaxyState, key: CompanyId, n: usize, here: SettlementId)
     true
 }
 
+/// Crew upkeep for a fleet, in credits a day.
+pub(crate) fn upkeep_per_day(state: &GalaxyState, fleet: &Fleet) -> f64 {
+    let class = &state.ship_classes[fleet.class];
+    f64::from(fleet.ships) * (UPKEEP_PER_SHIP_DAY + class.cargo_t * UPKEEP_PER_CARGO_T_DAY)
+}
+
 /// A month of crew upkeep for one fleet, paid at home.
 fn pay_upkeep(state: &mut GalaxyState, key: CompanyId, n: usize) {
     let company = &state.companies[key];
@@ -1237,6 +1262,7 @@ fn found_companies(state: &mut GalaxyState) {
                     idle: false,
                     loaded: false,
                     slack: 0,
+                    harvest: None,
                 }],
                 next_fleet: 0,
             },
@@ -1258,7 +1284,7 @@ fn found_companies(state: &mut GalaxyState) {
 /// nearest settlement in trading reach with the hull for it (`Ok`), or, if
 /// none has, where to order it (`Err`): the nearest shipyard in reach, or
 /// `id` itself.
-fn hull_source(
+pub(crate) fn hull_source(
     state: &GalaxyState,
     id: SettlementId,
     class: ShipClassId,

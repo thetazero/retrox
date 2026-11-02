@@ -35,7 +35,9 @@ use crate::haul::{self, CompanyId, Location, ShipClass};
 use crate::settlement::{SettlementId, Site};
 use crate::{GalaxyState, GalaxyTime, SystemId};
 
-const METRES_PER_AU: f64 = 1.496e11;
+/// The astronomical unit, in metres: the same one the client draws with,
+/// or ports and sources land thousands of km off their bodies.
+pub const METRES_PER_AU: f64 = 1.495_978_707e11;
 const SECONDS_PER_DAY: f64 = 86_400.0;
 /// Jump points sit this far from a star, toward the system on the far end.
 pub const JUMP_POINT_AU: f64 = 0.3;
@@ -99,6 +101,28 @@ pub struct Flight {
     pub path: Vec<SystemId>,
     /// The trip's lane losses are still to roll.
     pub jumps: bool,
+    /// A harvest run: the source it works on the way to `to`.
+    #[serde(default)]
+    pub work: Option<Work>,
+}
+
+/// A harvest run's stop at its source (see [`crate::harvest`]).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Work {
+    pub source: crate::harvest::Source,
+    /// Where round the source it works, in turns.
+    pub slot: f64,
+    /// Days still to spend working once there.
+    pub days_left: u32,
+    /// The hold is full: on to the market.
+    pub done: bool,
+}
+
+impl Flight {
+    /// The source it's bound for or working, until its hold is full.
+    pub fn working(&self) -> Option<&Work> {
+        self.work.as_ref().filter(|w| !w.done)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -306,6 +330,9 @@ pub fn flights_in(
 /// its path. What [`step`] flies toward, for anyone predicting a flight
 /// between ticks.
 pub fn goal(state: &GalaxyState, flight: &Flight, system: SystemId, t_days: f64) -> Goal {
+    if let Some(w) = flight.working() {
+        return crate::harvest::work_goal(state, w.source, w.slot, t_days);
+    }
     match flight.path.first() {
         Some(&next) => Goal {
             pos: jump_point(state, system, next),
@@ -650,6 +677,13 @@ pub(crate) fn watch(state: &mut GalaxyState, key: FleetKey) {
     let (Some(a), Some(b)) = (state.settlements.get(from), state.settlements.get(to)) else {
         return;
     };
+    // A harvest run never leaves its system.
+    if fleet.harvest.is_some_and(|h| h.working) {
+        if contains(state, a.system) {
+            materialize_harvest(state, key);
+        }
+        return;
+    }
     let (sa, sb) = (a.system, b.system);
     let class = &state.ship_classes[fleet.class];
     let span = arrive.days().saturating_sub(depart.days()) as f64;
@@ -752,6 +786,7 @@ fn materialize(state: &mut GalaxyState, key: FleetKey) {
             stage,
             path,
             jumps,
+            work: None,
         },
     );
     // Past its last lane already: the losses it would have taken coming
@@ -805,15 +840,142 @@ pub(crate) fn launch(
             },
             path: path[1..].to_vec(),
             jumps: jumps && a != b,
+            work: None,
         },
     );
     true
+}
+
+/// A harvester in the bubble sets out from `here` to work `source`, then
+/// sell at `to`.
+pub(crate) fn launch_harvest(
+    state: &mut GalaxyState,
+    key: FleetKey,
+    here: SettlementId,
+    to: SettlementId,
+    source: crate::harvest::Source,
+) {
+    let Some(n) = haul::fleet_index(state, key.0, key.1) else {
+        return;
+    };
+    let system = state.settlements[here].system;
+    let days = crate::harvest::work_days(state, source).ceil().max(1.0) as u32;
+    let start = settlement_goal(state, here, state.time.days() as f64);
+    state.companies[key.0].fleets[n].at = Location::Flying { to };
+    state.bubble.flights.insert(
+        key,
+        Flight {
+            from: here,
+            to,
+            depart: state.time,
+            stage: Stage::Flying {
+                system,
+                ship: Kinematics {
+                    pos: start.pos,
+                    vel: start.vel,
+                },
+            },
+            path: Vec::new(),
+            jumps: false,
+            work: Some(Work {
+                source,
+                slot: crate::harvest::slot(key.0, key.1),
+                days_left: days,
+                done: false,
+            }),
+        },
+    );
+}
+
+/// A coarse harvest run in a bubble system becomes a flight, placed along
+/// its run by how far through its calendar it is: flying out, working, or
+/// flying in to sell.
+fn materialize_harvest(state: &mut GalaxyState, key: FleetKey) {
+    let Some(n) = haul::fleet_index(state, key.0, key.1) else {
+        return;
+    };
+    let fleet = &state.companies[key.0].fleets[n];
+    let (
+        Location::Travelling {
+            from,
+            depart,
+            to,
+            arrive,
+            ..
+        },
+        Some(plan),
+    ) = (fleet.at, fleet.harvest.and_then(|h| h.plan))
+    else {
+        return;
+    };
+    let working = fleet.harvest.is_some_and(|h| h.working);
+    let accel = state.ship_classes[fleet.class].accel_laden;
+    let system = state.settlements[from].system;
+    let (out, work, back) = crate::harvest::run_days(state, accel, from, &plan);
+    let total = out + work + back;
+    let span = arrive.days().saturating_sub(depart.days()).max(1) as f64;
+    let gone = state.time.days().saturating_sub(depart.days()) as f64 / span * total;
+    let now = state.time.days() as f64;
+    let slot = crate::harvest::slot(key.0, key.1);
+    let at_source = crate::harvest::work_goal(state, plan.source, slot, now).pos;
+    let (ship, days_left, done) = if working && gone < out {
+        let a = settlement_goal(state, from, now).pos;
+        (
+            burn(a, at_source, out, gone),
+            work.ceil().max(1.0) as u32,
+            false,
+        )
+    } else if working && gone < out + work {
+        let g = crate::harvest::work_goal(state, plan.source, slot, now);
+        let left = (out + work - gone).ceil().max(1.0) as u32;
+        (
+            Kinematics {
+                pos: g.pos,
+                vel: g.vel,
+            },
+            left,
+            false,
+        )
+    } else {
+        // Past its work: the hold fills when it docks, as the coarse run
+        // would have, so materializing creates nothing.
+        let b = settlement_goal(state, to, now).pos;
+        let into = (gone - out - work).clamp(0.0, back);
+        (burn(at_source, b, back, into), 0, true)
+    };
+    state.companies[key.0].fleets[n].at = Location::Flying { to };
+    state.bubble.flights.insert(
+        key,
+        Flight {
+            from,
+            to,
+            depart,
+            stage: Stage::Flying { system, ship },
+            path: Vec::new(),
+            jumps: false,
+            work: Some(Work {
+                source: plan.source,
+                slot,
+                days_left,
+                done,
+            }),
+        },
+    );
 }
 
 /// Days a flight still needs, estimated the way coarse trips are.
 fn days_left(state: &GalaxyState, flight: &Flight, class: &ShipClass) -> f64 {
     let cruise = |m: f64| flight::trip_seconds(m, class.accel_laden) / SECONDS_PER_DAY;
     let today = state.time.days();
+    if let (Some(w), Stage::Flying { ship, .. }) = (flight.working(), flight.stage) {
+        let t = today as f64;
+        let source = crate::harvest::work_goal(state, w.source, w.slot, t).pos;
+        let port = settlement_goal(state, flight.to, t).pos;
+        return cruise(flight::length(flight::sub(source, ship.pos)))
+            + f64::from(w.days_left)
+            + cruise(flight::length(flight::sub(port, source)))
+            + haul::HANDLING_DAYS;
+    }
     let port = settlement_goal(state, flight.to, today as f64).pos;
     // In `system`, having come out of the lane from `prev`: across to the
     // next jump point, or in to port.
@@ -946,8 +1108,27 @@ pub(crate) fn step(state: &mut GalaxyState, contracts: &haul::Contracts, board: 
                         state.bubble.flights.get_mut(&key).expect("flight").stage =
                             Stage::Flying { system, ship };
                     }
+                    (Some(_), None) if flight.working().is_some() => {
+                        // At the source: hold station there and work.
+                        let g = goal(state, flight, system, t0 + 1.0);
+                        let f = state.bubble.flights.get_mut(&key).expect("flight");
+                        f.stage = Stage::Flying {
+                            system,
+                            ship: Kinematics {
+                                pos: g.pos,
+                                vel: g.vel,
+                            },
+                        };
+                        let w = f.work.as_mut().expect("working");
+                        w.days_left = w.days_left.saturating_sub(1);
+                        if w.days_left == 0 {
+                            w.done = true;
+                            crate::harvest::fill(state, key.0, n);
+                        }
+                    }
                     (Some(_), None) => {
                         state.bubble.flights.remove(&key);
+                        crate::harvest::fill(state, key.0, n);
                         haul::dock(state, contracts, board, key.0, n, to, true);
                         // Straight out again: today is flown, so the next
                         // trip starts from where the port is tomorrow.

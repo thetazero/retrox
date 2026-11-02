@@ -10,7 +10,8 @@
 //! `--combat` (by a raider band), `--brawl` (in a fight), `--lost <s>`
 //! (the ship lost that long ago; with `--keys`, it has a checkpoint at a
 //! station to go back to), `--rewind` (rewinding to a checkpoint),
-//! `--arrival` (back at the checkpoint),
+//! `--arrival` (back at the checkpoint), `--harvesters <gas|ice>` (by a
+//! harvester at work), `--skim` (in a giant's clouds),
 //! `--ship-view <deg>`, `--screenshot <path.ppm>`. `--menu <page>` opens a
 //! menu page instead (`title`, `new`, `load`, `settings`, `handbook[:chapter]`, or `pause` or `quit`
 //! over a fresh game), for screenshots. `--keys` plays a key script
@@ -34,6 +35,7 @@ mod mining;
 mod render;
 mod save;
 mod settings;
+mod skim;
 mod standing;
 mod station_ui;
 mod title;
@@ -82,6 +84,10 @@ struct Flags {
     /// Alongside a trader fleet in its frame (and its faction hostile).
     convoy: bool,
     hostile_convoy: bool,
+    /// Start skimming a gas giant (`--skim`).
+    skim: bool,
+    /// Start by a harvester at work: `gas` or `ice` (`--harvesters`).
+    harvesters: Option<String>,
     /// Start in the nearest asteroid field with raiders, for them to find.
     combat: bool,
     /// With `combat`: the band close in front, battered, fighting at once.
@@ -142,6 +148,8 @@ impl Flags {
             interdict: has("--interdict"),
             convoy: has("--convoy") || has("--hostile-convoy"),
             hostile_convoy: has("--hostile-convoy"),
+            skim: has("--skim"),
+            harvesters: value("--harvesters").or_else(|| has("--harvesters").then(|| "gas".into())),
             combat: has("--combat") || has("--brawl") || has("--lost") || has("--rewind"),
             brawl: has("--brawl") || has("--lost") || has("--rewind"),
             lost: value("--lost")
@@ -178,6 +186,8 @@ impl Flags {
                     || self.station
                     || self.field
                     || self.traffic
+                    || self.harvesters.is_some()
+                    || self.skim
                     || self.combat
                     || self.arrival
                     || self.contracts
@@ -251,6 +261,16 @@ impl Flags {
         }
         if self.convoy {
             world.stage_convoy(self.hostile_convoy);
+        }
+        if self.skim && !world.start_skimming() {
+            eprintln!("--skim: no gas giant anywhere");
+        }
+        if let Some(good) = &self.harvesters {
+            use retrox_sim::economy::Good;
+            let good = if good == "ice" { Good::Ice } else { Good::Gas };
+            if !world.start_by_harvesters(good) {
+                eprintln!("--harvesters: nobody harvesting {} nearby", good.name());
+            }
         }
         if self.brawl {
             world.stage_brawl();
@@ -1551,6 +1571,23 @@ fn scene(
                 ),
             ));
         }
+        // The gas scoop open in a giant's clouds: the same plume NPC
+        // skimmers trail.
+        if world.skim.open {
+            // Scaled down: the chase camera sits right behind it.
+            let length = world.stats().length_m as f32 * 0.3;
+            harvest_glow(
+                meshes,
+                retrox_sim::economy::Good::Gas,
+                pos,
+                rot,
+                length,
+                7,
+                world.clock_s,
+                cam,
+                &mut out,
+            );
+        }
         // The mining laser.
         if let Some((from, to)) = world.beam {
             let (a, b) = (pos + from, pos + to);
@@ -1629,9 +1666,26 @@ fn traffic_scene(
         let rot = world::look_rotation(heading);
         let seed = c.key.0.data().as_ffi() ^ u64::from(c.key.1);
         let length = c.fit.stats().length_m;
-        for offset in traffic::formation(c.ships, length, seed) {
+        let working = c.work.as_ref().filter(|w| w.at_source);
+        for (i, offset) in traffic::formation(c.ships, length, seed)
+            .into_iter()
+            .enumerate()
+        {
             let pos = c.pos + rot * offset;
             let q = rot.as_quat();
+            if let Some(w) = working {
+                harvest_glow(
+                    meshes,
+                    w.good,
+                    pos,
+                    q,
+                    length as f32,
+                    seed ^ i as u64,
+                    world.clock_s,
+                    cam,
+                    out,
+                );
+            }
             out.push((
                 *mesh,
                 Instance::new(
@@ -1725,6 +1779,123 @@ fn pirate_scene(
                     ),
                 ));
             }
+        }
+    }
+}
+
+/// A harvester at work (issue #68), drawn round one ship at `pos` facing
+/// `q`: at an ice source, its laser cutting a boulder off its bow; at a gas
+/// giant, the glowing wake it ploughs through the cloud tops.
+#[allow(clippy::too_many_arguments)]
+fn harvest_glow(
+    meshes: &Meshes,
+    good: retrox_sim::economy::Good,
+    pos: DVec3,
+    q: Quat,
+    length: f32,
+    seed: u64,
+    clock_s: f64,
+    cam: DVec3,
+    out: &mut Vec<(MeshId, Instance)>,
+) {
+    let rel = |p: DVec3| (p - cam).as_vec3();
+    let phase = (seed % 1000) as f64 * 0.37;
+    let flicker = 0.8 + 0.2 * ((clock_s * 53.0 + phase).sin() as f32);
+    let unlit = [0.0, 1.0, 0.0, 1.0];
+    let length = length.max(10.0);
+    match good {
+        retrox_sim::economy::Good::Gas => {
+            // Ploughing the cloud tops: a thin bright contrail streaming
+            // astern (it reads against the bright cloud), and churning
+            // plasma where the hull meets the gas.
+            let trail = length * 7.0;
+            let breathe = 0.85 + 0.15 * ((clock_s * 1.7 + phase).sin() as f32);
+            out.push((
+                meshes.sphere,
+                Instance::new(
+                    Mat4::from_scale_rotation_translation(
+                        Vec3::new(length * 0.07, length * 0.05, trail / 2.0),
+                        q,
+                        rel(pos) + q * (Vec3::Z * (trail / 2.0 + length * 0.2)),
+                    ),
+                    [1.0, 0.95, 0.86],
+                    Surface::Star,
+                    1.6 * breathe,
+                    0.0,
+                    unlit,
+                ),
+            ));
+            let plume = length * 1.6;
+            out.push((
+                meshes.sphere,
+                Instance::new(
+                    Mat4::from_scale_rotation_translation(
+                        Vec3::new(length * 0.2, length * 0.16, plume / 2.0),
+                        q,
+                        rel(pos) + q * (Vec3::Z * (plume / 2.0 + length * 0.1)),
+                    ),
+                    [1.0, 0.6, 0.3],
+                    Surface::Fire,
+                    5.0 * breathe,
+                    (seed % 977) as f32,
+                    [0.0, 1.0, 0.0, 0.25],
+                ),
+            ));
+        }
+        _ => {
+            // The laser out ahead to a boulder of ice it's cutting up.
+            let reach = length * 2.0;
+            let rock_r = length * 0.3;
+            let bow = q * (Vec3::NEG_Z * length * 0.5);
+            let hit = q * (Vec3::NEG_Z * (length * 0.5 + reach));
+            let mesh = meshes.rocks[mining::rock_mesh(seed)];
+            let spin = Quat::from_rotation_y((clock_s * 0.05 + phase) as f32)
+                * Quat::from_rotation_x(phase as f32);
+            out.push((
+                mesh,
+                Instance::new(
+                    Mat4::from_scale_rotation_translation(
+                        Vec3::splat(rock_r),
+                        spin,
+                        rel(pos) + hit + q * (Vec3::NEG_Z * rock_r * 0.8),
+                    ),
+                    [0.58, 0.66, 0.74],
+                    Surface::Plain,
+                    0.05,
+                    0.0,
+                    [0.0, 1.0, 0.0, 1.3],
+                ),
+            ));
+            out.push((
+                meshes.sphere,
+                Instance::new(
+                    Mat4::from_scale_rotation_translation(
+                        Vec3::new(0.25, 0.25, reach / 2.0),
+                        q,
+                        rel(pos) + (bow + hit) / 2.0,
+                    ),
+                    [1.0, 0.32, 0.18],
+                    Surface::Star,
+                    4.0 * flicker,
+                    0.0,
+                    unlit,
+                ),
+            ));
+            out.push((
+                meshes.sphere,
+                Instance::new(
+                    Mat4::from_scale_rotation_translation(
+                        Vec3::splat(1.4 * flicker),
+                        Quat::IDENTITY,
+                        rel(pos) + hit,
+                    ),
+                    [1.0, 0.32, 0.18],
+                    Surface::Star,
+                    6.0,
+                    0.0,
+                    unlit,
+                ),
+            ));
         }
     }
 }

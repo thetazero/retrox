@@ -33,6 +33,18 @@ pub struct Contact {
     /// Thrust the autopilot is asking for, m/s², and the most it has.
     pub thrust: DVec3,
     pub accel: f64,
+    /// A harvester's run, if it's on one (issue #68).
+    pub work: Option<Work>,
+}
+
+/// What a harvester is doing, as the HUD and the renderer show it.
+#[derive(Clone, Debug)]
+pub struct Work {
+    pub good: Good,
+    pub source: String,
+    /// Holding station at the source, working it.
+    pub at_source: bool,
+    pub days_left: u32,
 }
 
 /// A fleet's flight as last predicted: the galaxy day the sim's state was
@@ -126,7 +138,9 @@ impl Traffic {
                 track.t_s = clock_s;
                 track.done = arrived.is_some();
             }
-            if track.done {
+            // A harvester at its source holds station there: still drawn.
+            let working = f.working().copied();
+            if track.done && working.is_none() {
                 continue;
             }
             if !self.fits.contains_key(&class.hull) {
@@ -137,17 +151,38 @@ impl Traffic {
             }
             let fit = self.fits[&class.hull].clone();
             let g = goal(track.t_s);
-            let thrust = flight::autopilot(&track.ship, &g, accel, 1.0);
+            let at_source = working.is_some()
+                && (track.done || flight::length(flight::sub(g.pos, track.ship.pos)) < 2_000.0);
+            // Holding station: wherever the source is now.
+            let g = if at_source { goal(clock_s) } else { g };
+            let (ship, thrust) = if at_source {
+                (
+                    Kinematics {
+                        pos: g.pos,
+                        vel: g.vel,
+                    },
+                    [0.0; 3],
+                )
+            } else {
+                (track.ship, flight::autopilot(&track.ship, &g, accel, 1.0))
+            };
+            let work = working.map(|w| Work {
+                good: retrox_sim::harvest::yields(galaxy, w.source).map_or(Good::Ice, |y| y.0),
+                source: retrox_sim::harvest::name(galaxy, w.source).to_owned(),
+                at_source,
+                days_left: w.days_left,
+            });
             contacts.push(Contact {
                 key,
                 fit,
                 ships: fleet.ships,
                 company: company.name.clone(),
                 cargo: fleet.cargo.map(|c| (c.good, c.amount)),
-                pos: to_client(track.ship.pos),
-                vel: to_client(track.ship.vel),
+                pos: to_client(ship.pos),
+                vel: to_client(ship.vel),
                 thrust: to_client(thrust),
                 accel,
+                work,
             });
         }
         self.tracks.retain(|k, _| live.contains(k));

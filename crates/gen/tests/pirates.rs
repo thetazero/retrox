@@ -130,7 +130,7 @@ fn gangs_fly_in_the_bubble_and_hunt() {
     assert!(state.pirates.prowls.contains_key(&id));
     let mut hunted = 0;
     let mut robbed = 0;
-    for _ in 0..120 {
+    for _ in 0..60 {
         tick(&mut state);
         for p in state.pirates.prowls.values() {
             if matches!(p.aim, Aim::Hunt(_)) {

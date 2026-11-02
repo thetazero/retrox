@@ -269,7 +269,8 @@ Consequences:
 - **Planet ports:** ships dock at a holding point above a planet's north
   pole (1.5 radii out), not at its centre.
 - **Pirates** fly in the bubble too (§7.2.2).
-- **Not yet in the bubble:** colony ships, miners, patrols.
+- **Not yet in the bubble:** colony ships, patrols. Harvesters fly in it
+  (§5.4.2).
 - **Seen by the player:** the client carries each flight on between the
   sim's daily ticks with the same autopilot, and draws each fleet as its
   ships in a loose echelon, nose along its thrust (a braking ship flies
@@ -352,6 +353,47 @@ report to check them on a long run.
 - **Cargo always gets off.** A fleet with cargo still aboard at its review
   routes to wherever that cargo sells best; if nobody in reach can buy it,
   it leaves the cargo at the dock for nothing.
+
+#### 5.4.2 Harvesting (#68)
+
+Raw materials also come from space, gathered by ships, not only from
+facilities on the ground. Decided while building it:
+
+- **Gas is a good of its own.** Gas giants hold gas (richness 0.2–1.0,
+  more in bigger giants); nothing else does. A **gas plant** refines it,
+  1 t of gas to 1.4 t of fuel, which makes it cheaper to run than cracking
+  ice in the old fuel plant (1:1), which stays as the fallback where
+  there's no giant. Gas plants are built only in systems with a giant.
+  Gas's base price is 10.
+- **Sources.** Ice comes from icy asteroid fields, icy moons and ice
+  worlds; gas from gas giants. Ore stays with mines.
+- **Harvesters are companies** like traders, on the same calendar, whose
+  fleets carry a harvest job. They work only sources in their port's
+  system and never use the lanes. At its monthly review a fleet picks the
+  source and the market in the system that pay best per day, after fuel
+  and crew upkeep, for a market with room for at least half a hold (no
+  market buys past the storage cap that would stop its own facilities).
+  A **run** is one trip: out to the source, work it until the hold is
+  full, in to the market, where it sells like any arrival. In the coarse
+  tier the hold fills on the day it arrives.
+- **Sources don't run dry; they strain.** Each source remembers the tonnes
+  taken from it lately, fading with a 120-day time constant (the same
+  memory fields have of the player's mining). Work takes
+  `6 days / richness`, stretched by `1 + strain / capacity` (capacity
+  6,000 t for a field, 10,000 t for a moon, 40,000 t for a giant), so
+  crowded sources slow down and crews spread out. The player's skimming
+  and ice mining strain a source like anyone's.
+- **Founding.** A settlement short of a good it has a source of may found
+  a harvesting company with one ship: the hull that pays best at base
+  prices that it can afford, fetched from the nearest yard in reach, which
+  then flies home. Generation seeds harvesters for every settlement's gas,
+  and for ice where nobody in the system mines it on the ground.
+- **In the bubble** a run is flown: out to the source, holding station
+  there while it works (in a field, among the rocks; at a giant, skimming
+  its sunlit cloud tops; at a moon, low over it), and in to sell. Ice crews
+  are drawn cutting a boulder with their laser, gas skimmers trailing a
+  plasma plume and contrail. Their HUD label says what they're doing and
+  for how many more days.
 
 ### 5.5 Factions
 
@@ -476,7 +518,8 @@ in from the well's edge to landing range, and back out again, at the
 minutes (pillar 4):
 
 - **Fast travel to a planet with a city stops low over it**, at 1.6
-  radii, inside the 2-radii landing range: arrive, [L] to land. Planets
+  radii, inside the 2-radii landing range: arrive, [L] to land. Gas giants
+  stop just above their cloud deck, for skimming (§7.3.1). Other planets
   without a city still stop just past their well's edge.
 - **Inside a gravity well the autopilot only flies within it**: down to
   anything whose arrival point is in the same well (the planet's city, a
@@ -560,8 +603,9 @@ somewhere, live somewhere, and fly for real near the player.
   its own day: a small base chance plus a share of its *hardship* (the
   worst of its food and fuel demand going unmet) that some crews go over
   (§5.1.1 cost: arithmetic, with a search only on the rare founding). At
-  most one gang per six settlements, plus three. The starting galaxy
-  seeds gangs from 12% of settlements until prehistory grows them.
+  most one gang per fifteen settlements, plus three: denser than that,
+  robbed freight leaves a quarter of the trade fleet idle. The starting
+  galaxy seeds gangs from 6% of settlements until prehistory grows them.
 - **Where they live.** A lair is an asteroid field within two jumps of
   the crews' home, never in a system with a faction capital, one gang
   per system, chosen at random weighted by *prey* (settlements in and
@@ -603,11 +647,12 @@ somewhere, live somewhere, and fly for real near the player.
   came from posts a warrant on them, if it can afford one. A gang without
   one draws one at its monthly review from the faction whose traders it
   has robbed most, if that faction can afford the whole gang twice over.
-  A warrant pays 2,500 cr per fighter, 15 cr more per tonne the gang has
-  taken, up to 9,000, and double for a gunship, from the posting
+  A warrant pays 2,000 cr per fighter, 15 cr more per tonne the gang has
+  taken, up to 8,000, and double for a gunship, from the posting
   faction's treasury the moment a ship goes down (as far as it can pay).
-  A two-fighter gang is about two freight contracts' pay, or an
-  interceptor's price.
+  A fresh two-fighter gang pays 4,000: about 1.4 hours of contracts in a
+  courier (§7.8), or two-thirds of an interceptor, for a trip of a few
+  jumps and a fight that can cost the ship and pays for its repairs.
 - **The bounty office**, on every station's and city's menu, lists the
   warrants on gangs within six jumps (name, lair, ships, who posted it,
   what it has taken, pay per ship and for the gang, PLOT COURSE), and the
@@ -669,6 +714,31 @@ somewhere, live somewhere, and fly for real near the player.
 - Fields remember: broken and worked rocks stay that way for ~120 galaxy
   days, then the field is whole again.
 
+### 7.3.1 Gas skimming (#68)
+
+The player's way to harvest a gas giant, the same sources NPC skimmers
+work.
+
+- **Getting there:** fast travel to a gas giant stops 160 km above its
+  cloud deck, not at the edge of its well.
+- **The band:** the gas thickens by a factor of *e* every 20 km down, from
+  nothing at 120 km to full at the deck. The deck is solid: you bounce
+  off it.
+- **The scoop** is the hold's intake; any ship with a hold can skim. Hold
+  the trigger in the band and it opens. It takes in gas as density × speed
+  × richness, scaled by the square root of the hold's size, and friction
+  heats it as density × speed². So deep and slow beats high and fast, and
+  deep and fast cooks it in seconds. At full heat it shuts and vents until
+  it has cooled to a fifth; radiators shed the heat, as they do the mining
+  laser's.
+- **The gas pushes back:** drag through it, and turbulent shoves near the
+  deck that grow with density and speed.
+- **The HUD** swaps the mining panel for a skimming panel over a giant: an
+  altimeter strip shaded by density with the band's top marked, readouts
+  of height, speed through the gas and intake, the scoop's lamps and heat,
+  the hold, and what the gas fetches nearby. The open scoop trails the
+  same plume NPC skimmers do.
+
 ### 7.4 Ships
 
 - Ships are built from **sections**, each with its own slots and each its
@@ -713,11 +783,12 @@ from a random generator (pillar 5).
   A board holds 8 contracts at most, 2 per destination, best pay per day
   first. Boards change daily as markets do; some days a port has nothing.
 - **Who pays, and what.** The consignee buys the goods at the origin's
-  price and pays the fee from its own treasury: the price gap between
-  the two markets, its faction's delivery premium if planned (the same
-  premium NPC haulers earn), and freight for the expected trip (a rate
-  per tonne-day plus the crew's wage), scaled up by how short it is. It
-  only commits what it can afford.
+  price and pays the fee from its own treasury: freight for the expected
+  trip (a rate per tonne-day plus the crew's wage, both the galaxy's own
+  hauler upkeep): a wage, not a profit. The price gap and a
+  planned faction's delivery premium go to traders, not to a captain
+  carrying someone else's goods (§7.8). It only commits what it can
+  afford.
 - **Deposit.** Taking a contract costs a deposit of the cargo's value,
   returned on delivery. Contract cargo rides in the hold but can't be
   sold.
@@ -780,6 +851,80 @@ from a random generator (pillar 5).
   place and date.
 - Saves' headers carry the exact galaxy clock (for the counter); older
   headers without it still load.
+
+### 7.8 Earnings and progression
+
+Every career in §2 the player can follow today earns a living, and the
+ship ladder is long enough to save up along (issue #84). Money comes out
+of the economy, never from a payout table (pillar 5), so the levers are
+the sim's own numbers:
+
+- **Ships cost about twice their materials.** Finished hull sells at
+  120 cr/t: a tonne takes 1 t of metal, 0.3 t of components and 0.1 t of
+  fuel (56 cr at base prices), and a shipyard marks that up as a factory
+  marks up components (§5.4). Every ship and part is priced from it
+  (§7.4). At half that, ships cost barely more than their raw metal and
+  a few hours of any work bought a freighter. NPC companies buy hulls at
+  the same price; five simulated years end with 4% fewer NPC ships and
+  the same shortages.
+- **A new pilot owns the courier and 2 000 cr.** That covers a first
+  contract's deposit or a hold of cargo, not another ship. (It was
+  25 000 cr, which bought any medium ship on day one.)
+- **A contract pays carriage.** Its fee is the hauler's keep for the
+  trip at the galaxy's own upkeep rates: 0.02 cr per tonne-day plus a
+  crew's 2 cr a day (§7.5.1). How short the consignee is decides whether
+  it posts and how the board is ordered, not the pay. The price gap
+  between the two markets, and a planned faction's delivery premium,
+  belong to whoever buys the goods and carries them at their own risk:
+  a trader, or an NPC hauler. So each career earns from its own thing:
+  contracts from hauling, trading from price gaps, mining from what it
+  digs. Contracts used to pay the gap, the premium and a shortage
+  markup too, at 3 cr/t-day and 30 cr/day (50–150× NPC upkeep), so a
+  courier on contracts made 35–78k cr/h while mining made 1–3k, and
+  nobody would mine.
+- **Mining is unchanged:** ore sells at its market price. A faster laser
+  or a longer tractor barely moves it (+0–15% in the bench). In a courier
+  the 12 t hold forces ~25 station trips an hour, and gluts at the local
+  market set the price. A miner grows by refitting: a gunship with mining
+  lasers in the bow and a cargo bay amidships (43 500 cr) cuts five times
+  as fast. A miner mines in fields the nav list shows no gang lairs in
+  (§7.2.2).
+- **Bounties** pay from the posting faction's treasury per pirate ship
+  destroyed (§7.2.2), a little above contracts for the time, against the
+  risk of the fight.
+
+**Measured** with the career bench (`cargo test -p retrox-client careers
+-- --ignored --nocapture`, `crates/client/src/world/careers.rs`). Bots
+play an hour of each career in a fresh game, seeds 1–4. They fly the real
+world, with turning, nudging around a field and menus charged at a
+practised pilot's pace. They play well, so a new player should expect
+somewhat less, contracts most of all (the bot reads a board instantly).
+
+| Career, ship | cr per hour (seeds 1–4) |
+|---|---|
+| Mining, courier (12 t, light laser) | 1 950 · 2 990 · 970 · 1 670 |
+| Freight contracts, courier | 2 840 · 3 920 · 2 340 · 2 530 |
+| Trading, courier | 16 510 · 4 360 · 8 920 · −980 |
+| Mining, gunship refit (180 t, 2 lasers) | 1 520 · 8 080 · 1 120 · 1 720 |
+| Freight contracts, hauler (360 t) | 8 900 · 7 180 · 7 620 · 8 210 |
+| Trading, hauler | 27 280 · 9 870 · 17 110 · 7 470 |
+
+In a courier, contracts earn about 1.5× mining on average (1.3× to 2.4×
+by seed). Mining needs no capital and never meets a bare board. Trading
+pays best and swings most. Planned economies hold one price everywhere,
+so the money is in market space and across the border (§5.4). A trader
+who guesses wrong loses money. The bot trader also knows prices two jumps
+out, which a player has to learn.
+
+**The ladder** (stock fits): racer 4 060, courier 5 930, interceptor
+6 180, light trader 6 590, heavy fighter 10 150; blockade runner 38 800,
+hauler 41 200, gunship 50 500; express freighter 243 000, bulk freighter
+302 000, frigate 413 000. From the courier and 2 000 cr, the light
+trader (twice the hold) is about 2 hours of contracts or 2–4 of mining
+away; a medium ship is ~15–20 hours of either, less for a good trader. A
+medium freighter on contracts takes ~30 hours to buy a large ship (a
+trader, half that), which leaves fleets and capital ships (§7.5) the
+rest of the ~100-hour arc (§2).
 
 ## 8. Art direction & audio
 

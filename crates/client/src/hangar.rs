@@ -27,7 +27,10 @@ const BUY_SHIP_SECONDS: f64 = 24.0 * HOUR;
 /// Settlements this populous (thousands) have an outfitter even without
 /// industry.
 const OUTFITTER_POPULATION: f64 = 50.0;
-pub const STARTING_CREDITS: f64 = 25_000.0;
+/// A new pilot owns the courier and a small purse: enough for a first
+/// contract's deposit or a hold of cargo, not for another ship
+/// (DESIGN §7.8).
+pub const STARTING_CREDITS: f64 = 2_000.0;
 pub const STARTING_HULL: &str = "courier";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -441,13 +444,21 @@ mod tests {
         }
     }
 
+    /// A pilot with money to spend: the starting purse doesn't buy ships.
+    fn rich() -> Player {
+        Player {
+            credits: 100_000.0,
+            ..Player::new()
+        }
+    }
+
     fn here() -> SettlementId {
         SlotMap::<SettlementId, ()>::with_key().insert(())
     }
 
     #[test]
     fn buying_a_ship_stores_the_old_one_and_pays_the_yard() {
-        let (mut p, at, mut eco) = (Player::new(), here(), yard());
+        let (mut p, at, mut eco) = (rich(), here(), yard());
         let hauler = hull("hauler").unwrap();
         let price = quote(&p, Job::BuyShip(hauler)).unwrap();
         let (credits, treasury, hull_t) = (p.credits, eco.treasury, eco.hull_t);
@@ -487,7 +498,7 @@ mod tests {
 
     #[test]
     fn boarding_and_selling_stored_ships() {
-        let (mut p, at, mut eco) = (Player::new(), here(), yard());
+        let (mut p, at, mut eco) = (rich(), here(), yard());
         run(&mut p, at, &mut eco, Job::BuyShip(hull("racer").unwrap())).unwrap();
         run(&mut p, at, &mut eco, Job::Board(0)).unwrap();
         assert_eq!(p.ship.fit.hull().id, STARTING_HULL);
@@ -509,7 +520,7 @@ mod tests {
 
     #[test]
     fn swapping_a_module_sells_the_old_one() {
-        let (mut p, at, mut eco) = (Player::new(), here(), yard());
+        let (mut p, at, mut eco) = (rich(), here(), yard());
         // A filled slot, and a different module that also fits it.
         let (mount, slot, replacement) = (0..p.ship.fit.hull().mounts.len())
             .flat_map(|m| (0..16).map(move |s| (m, s)))
@@ -540,7 +551,7 @@ mod tests {
 
     #[test]
     fn swapping_a_section_sells_its_modules() {
-        let (mut p, at, mut eco) = (Player::new(), here(), yard());
+        let (mut p, at, mut eco) = (rich(), here(), yard());
         run(&mut p, at, &mut eco, Job::BuyShip(hull("hauler").unwrap())).unwrap();
         let mount = (0..p.ship.fit.hull().mounts.len())
             .find(|&m| p.ship.fit.check_section(m, &GUN_DECK_M).is_ok())
@@ -582,7 +593,7 @@ mod tests {
 
     #[test]
     fn cargo_must_fit_the_new_hold() {
-        let (mut p, at, mut eco) = (Player::new(), here(), yard());
+        let (mut p, at, mut eco) = (rich(), here(), yard());
         p.cargo[retrox_sim::economy::Good::Ore] = 10.0;
         // A racer's hold is smaller than the courier's 12 t.
         let racer = hull("racer").unwrap();
@@ -594,7 +605,7 @@ mod tests {
 
     #[test]
     fn the_settlement_must_afford_what_it_buys_back() {
-        let (mut p, at, mut eco) = (Player::new(), here(), yard());
+        let (mut p, at, mut eco) = (rich(), here(), yard());
         run(&mut p, at, &mut eco, Job::BuyShip(hull("racer").unwrap())).unwrap();
         eco.treasury = 0.0;
         assert!(run(&mut p, at, &mut eco, Job::SellShip(0)).is_err());

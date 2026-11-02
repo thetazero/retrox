@@ -41,6 +41,12 @@ pub struct GalaxyState {
     /// Remembered lane distances; see [`crate::haul::ReachCache`].
     #[serde(skip)]
     pub reach_cache: crate::haul::ReachCache,
+    /// Recent takings from each harvest source; see [`crate::harvest`].
+    #[serde(default)]
+    pub strain: crate::harvest::Strain,
+    /// Where the harvest sources are; see [`crate::harvest::SourceIndex`].
+    #[serde(skip)]
+    pub source_index: crate::harvest::SourceIndex,
     /// The agent tier around the player; see [`crate::bubble`].
     #[serde(default)]
     pub bubble: crate::bubble::Bubble,
@@ -236,6 +242,9 @@ pub struct StarSystem {
 pub struct Resources {
     pub ore: f64,
     pub ice: f64,
+    /// Skimmable gas: only gas giants have any (issue #68).
+    #[serde(default)]
+    pub gas: f64,
 }
 
 /// The primary star's spectral class.

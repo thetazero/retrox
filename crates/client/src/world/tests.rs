@@ -90,6 +90,8 @@ fn fast_travel_reaches_every_place_and_only_climbs_out_of_a_well() {
 #[test]
 fn buy_and_refit_a_ship_at_the_starting_yard() {
     let mut world = World::new(1);
+    // The starting purse doesn't stretch to a ship.
+    world.player.credits = 100_000.0;
     let here = world.docked_at().expect("starts landed");
     assert!(hangar::services(&world.galaxy.settlements[here].economy).shipyard);
     // The yard builds hull over time; the cheapest ship is soon in stock.
@@ -880,4 +882,44 @@ fn intercept_brings_the_ship_alongside_a_convoy() {
     // In its frame, flight assist holds us with it.
     let rel = world.ship.vel.length();
     assert!(rel < 200.0, "{rel:.0} m/s relative");
+}
+
+#[test]
+fn skimming_a_gas_giant_fills_the_hold_with_gas() {
+    use retrox_sim::harvest::{self, Source};
+    let mut world = World::new(1);
+    assert!(world.start_skimming(), "no gas giant to skim");
+    let pass = world.skim_pass().expect("over a gas giant");
+    let source = Source::Body(pass.giant);
+    let strain = |w: &World| w.galaxy.strain.get(source, w.galaxy.time);
+    let before = strain(&world);
+    let scoop = Controls {
+        fire: true,
+        ..Controls::default()
+    };
+    let dt = 1.0 / 60.0;
+    for _ in 0..(20.0 / dt) as usize {
+        world.update(dt, scoop);
+    }
+    let gas = world.player.cargo[Good::Gas];
+    assert!(gas > 0.5, "only {gas:.2} t of gas in 20 s");
+    assert!(world.player.cargo_t() <= world.stats().cargo_t + 1e-9);
+    assert!(strain(&world) > before, "the giant doesn't feel it");
+    assert!(harvest::effective_richness(&world.galaxy, source) > 0.0);
+}
+
+#[test]
+fn fast_travel_to_a_gas_giant_stops_over_its_clouds() {
+    let world = World::new(1);
+    let giant = world
+        .galaxy
+        .bodies
+        .iter()
+        .find(|(_, b)| b.kind == BodyKind::GasGiant)
+        .map(|(id, _)| id)
+        .expect("a gas giant");
+    let place = Place::Body(giant);
+    let above = world.arrival_distance(place) - world.place_radius(place);
+    assert!(above < crate::skim::BAND_M * 2.0, "{above} m up");
+    assert!(above > crate::skim::BAND_M, "arrives inside the band");
 }
