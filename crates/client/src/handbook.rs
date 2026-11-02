@@ -122,7 +122,8 @@ fn first_steps(ui: &mut egui::Ui) {
         1,
         "Take a contract",
         "Open CONTRACTS on the city's menu. Each job pays to carry goods to a settlement that's \
-         short of them. ACCEPT one: the goods load and you leave a deposit. Then PLOT COURSE.",
+         short of them. ACCEPT one: the goods load, you leave a deposit, and your course is set \
+         for its system (PLOT COURSE sets it again if you change it).",
     );
     step(
         ui,
@@ -142,8 +143,9 @@ fn first_steps(ui: &mut egui::Ui) {
         ui,
         4,
         "Jump",
-        "The HYPERLANES panel marks the next lane of your course with ▶. Press JUMP. Days pass \
-         in a jump, and the galaxy moves on.",
+        "Out in open space, [J] jumps the next lane of your course; the HYPERLANES panel marks \
+         it with ▶ and its JUMP key does the same. Days pass in a jump, and the galaxy moves \
+         on. On a longer course, [J] again at each system.",
     );
     step(
         ui,

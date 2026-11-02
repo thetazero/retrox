@@ -799,6 +799,29 @@ to was always directly behind you.
   stop 20 km out, which meant minutes of hand flying twice per trip. The
   station is still the far end of a real flight, so piracy is unchanged.
 
+#### 7.1.3 Following a course with [J] (#188)
+
+A player who took a contract couldn't find the way to its system: the
+course had to be plotted by hand, and the only way to jump was the JUMP
+key in a HYPERLANES panel that started folded shut.
+
+- **Taking work sets the course.** ACCEPT on a contract plots the course
+  to its system, as BUY & GO does for a trade run (§7.8.1), unless a
+  course is already set; then the board's hint says to press PLOT COURSE.
+- **[J] is the one key for going on.** Inside a well it climbs out
+  (§7.1.1); with a target in reach it fast travels; and in open space
+  with nothing to fast travel to, on a plotted course, it **jumps the
+  course's next lane**. Each system on a longer course is one more [J].
+  The prompt strip says so (*[J] jump to Siofoan · on course for
+  Fiprum*), and the JUMP keys in HYPERLANES still work. A target picked
+  in the system comes first: [J] flies there, and the prompt strip shows
+  which of the two [J] will do.
+- **HYPERLANES opens whenever a new course is set**, so the ▶ lane is in
+  sight; the player can still fold it.
+- Hints and the course panel name the destination system and the next
+  key at every step; a system not on the course is a link that plots it
+  (§8.3).
+
 ### 7.2 Combat
 
 - Small/medium ships: direct dogfighting.
