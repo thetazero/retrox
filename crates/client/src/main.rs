@@ -974,7 +974,14 @@ impl Running {
 
         // The virtual stick springs back toward centre.
         self.stick *= (-2.2 * dt).exp();
-        let keys_pitch = axis(KeyCode::ArrowDown, KeyCode::ArrowUp);
+        // Like a stick: ↓ pulls the nose up, unless pitch is inverted, which
+        // flips the keys as well as the mouse (issue #128).
+        let (nose_up, nose_down) = if self.settings.invert_pitch {
+            (KeyCode::ArrowUp, KeyCode::ArrowDown)
+        } else {
+            (KeyCode::ArrowDown, KeyCode::ArrowUp)
+        };
+        let keys_pitch = axis(nose_up, nose_down);
         let keys_yaw = axis(KeyCode::ArrowRight, KeyCode::ArrowLeft);
         let controls = Controls {
             stick: DVec3::new(
@@ -1200,6 +1207,7 @@ impl Running {
                             captured: self.captured,
                             controls_card: self.controls_card,
                             notes: self.settings.first_steps,
+                            invert_pitch: self.settings.invert_pitch,
                         },
                     );
                 }
