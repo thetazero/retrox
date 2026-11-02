@@ -1264,12 +1264,7 @@ fn edge_arrow_color(
     screen: egui::Rect,
     color: Color32,
 ) {
-    let clip = view_proj * Vec4::new(rel.x, rel.y, rel.z, 1.0);
-    let mut dir = Vec2::new(clip.x, -clip.y);
-    if clip.w < 0.0 {
-        dir = -dir;
-    }
-    let dir = dir.normalized();
+    let dir = edge_arrow_dir(view_proj, rel);
     let c = screen.center();
     let r = screen.height().min(screen.width()) * 0.42;
     let tip = c + dir * r;
@@ -1279,6 +1274,23 @@ fn edge_arrow_color(
         color,
         Stroke::NONE,
     ));
+}
+
+/// Which way, on screen (egui: +y down), to turn toward `rel`.
+///
+/// Clip-space x/y before the divide by w are the view-space right/up
+/// offsets scaled by the lens, so they point toward the target whether
+/// it's in front of the camera or behind it. Dividing by w (or flipping
+/// for w < 0) is what turns a behind-the-camera arrow around, so don't.
+/// A target dead astern has no preferred side; the arrow then points down.
+fn edge_arrow_dir(view_proj: Mat4, rel: glam::Vec3) -> Vec2 {
+    let clip = view_proj * Vec4::new(rel.x, rel.y, rel.z, 1.0);
+    let dir = Vec2::new(clip.x, -clip.y);
+    if dir.length_sq() > 1e-12 * clip.w.abs().max(1.0).powi(2) {
+        dir.normalized()
+    } else {
+        Vec2::new(0.0, 1.0)
+    }
 }
 
 /// Credits with thin-space thousands separators.
@@ -1393,5 +1405,81 @@ fn speed_text(v: f64) -> String {
         format!("{:.1} km/s", v / 1e3)
     } else {
         format!("{:.2} c", v / C)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use glam::Vec3;
+
+    /// The game's lens, looking along `forward` with +y up.
+    fn camera(forward: Vec3) -> Mat4 {
+        let proj = glam::camera::rh::proj::directx::perspective_infinite_reverse(
+            70f32.to_radians(),
+            16.0 / 9.0,
+            0.5,
+        );
+        let view = glam::camera::rh::view::look_at_mat4(Vec3::ZERO, forward, Vec3::Y);
+        proj * view
+    }
+
+    fn angle_deg(a: Vec2, b: Vec2) -> f32 {
+        a.normalized()
+            .dot(b.normalized())
+            .clamp(-1.0, 1.0)
+            .acos()
+            .to_degrees()
+    }
+
+    #[test]
+    fn behind_and_below_points_down() {
+        // The playtest case: 20 km off, 69° below the nose and behind.
+        let vp = camera(Vec3::NEG_Z);
+        let a = 111f32.to_radians();
+        let rel = Vec3::new(0.0, -a.sin(), -a.cos()) * 20_000.0;
+        assert!(rel.z > 0.0, "target is behind the camera");
+        let d = edge_arrow_dir(vp, rel);
+        assert!(angle_deg(d, Vec2::new(0.0, 1.0)) < 1.0, "{d:?}");
+    }
+
+    #[test]
+    fn behind_points_the_short_way_round_on_every_side() {
+        let vp = camera(Vec3::NEG_Z);
+        // (view-space offset, screen direction): right, left, up, down.
+        for (side, want) in [
+            (Vec3::X, Vec2::new(1.0, 0.0)),
+            (Vec3::NEG_X, Vec2::new(-1.0, 0.0)),
+            (Vec3::Y, Vec2::new(0.0, -1.0)),
+            (Vec3::NEG_Y, Vec2::new(0.0, 1.0)),
+        ] {
+            let rel = side * 3.0 + Vec3::Z * 10.0;
+            let d = edge_arrow_dir(vp, rel);
+            assert!(angle_deg(d, want) < 1.0, "{side:?} -> {d:?}");
+        }
+    }
+
+    #[test]
+    fn off_screen_in_front_points_at_it() {
+        let vp = camera(Vec3::NEG_Z);
+        // Well outside the 70° cone, ahead and up-left.
+        let d = edge_arrow_dir(vp, Vec3::new(-10.0, 10.0, -1.0));
+        assert!(d.x < 0.0 && d.y < 0.0, "{d:?}");
+    }
+
+    #[test]
+    fn turned_camera_still_points_the_right_way() {
+        // Facing +x: a target behind (-x) and above should point up.
+        let vp = camera(Vec3::X);
+        let d = edge_arrow_dir(vp, Vec3::new(-50.0, 20.0, 0.0));
+        assert!(angle_deg(d, Vec2::new(0.0, -1.0)) < 1.0, "{d:?}");
+    }
+
+    #[test]
+    fn dead_astern_still_gives_an_arrow() {
+        let vp = camera(Vec3::NEG_Z);
+        let d = edge_arrow_dir(vp, Vec3::Z * 1000.0);
+        assert!(d.x.is_finite() && d.y.is_finite());
+        assert!((d.length() - 1.0).abs() < 1e-4);
     }
 }

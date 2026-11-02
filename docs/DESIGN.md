@@ -1117,6 +1117,11 @@ player.
 - The suggested first run is a freight contract: it pays for sure and
   walks the player through launching, the galaxy map, a jump, fast travel
   and docking. Mining and trade are offered as the other ways in.
+- **Edge arrows** (#117): a target off screen gets an arrow at the edge
+  of the view (amber for the target, red for hostiles) pointing the short
+  way round to turn toward it, whether it is beside, behind or below the
+  nose. Something dead astern has no short way, and its arrow points
+  down.
 ### 8.4 Screens and controls
 
 Decided while bringing every screen into one style (issue #77):
