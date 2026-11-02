@@ -30,6 +30,30 @@ pub struct Vertex {
     pub normal: [f32; 3],
     /// Per-vertex tint multiplier (lets one mesh have panels of different shades).
     pub shade: f32,
+    /// A [`Paint`] finish, as a float (vertex attributes are floats).
+    pub paint: f32,
+}
+
+/// Surface finishes for built things; must match `mesh.wgsl`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u32)]
+pub enum Paint {
+    /// The instance colour (enamelled hull plating).
+    Hull = 0,
+    /// Signal red livery.
+    Red = 1,
+    /// Dark glazing with a warm lit interior.
+    Glass = 2,
+    /// Solar cells: deep blue with a fine grid.
+    Solar = 3,
+    /// Gold thermal blanket.
+    Foil = 4,
+    /// Hull plating with rows of lit windows.
+    Windows = 5,
+    /// Bare dark metal (nozzles, machinery).
+    Metal = 6,
+    /// A blinking red beacon.
+    Beacon = 7,
 }
 
 #[derive(Clone, Default)]
@@ -41,6 +65,15 @@ pub struct Mesh {
 impl Mesh {
     /// Append `other`, transformed.
     pub fn add(&mut self, other: &Mesh, transform: Mat4, shade: f32) {
+        self.add_painted(other, transform, shade, None);
+    }
+
+    /// Append `other`, transformed, with every vertex given `paint`.
+    pub fn paint(&mut self, other: &Mesh, transform: Mat4, shade: f32, paint: Paint) {
+        self.add_painted(other, transform, shade, Some(paint));
+    }
+
+    fn add_painted(&mut self, other: &Mesh, transform: Mat4, shade: f32, paint: Option<Paint>) {
         let base = self.vertices.len() as u32;
         let normal_m = transform.inverse().transpose();
         for v in &other.vertices {
@@ -52,6 +85,7 @@ impl Mesh {
                 pos: pos.into(),
                 normal: normal.into(),
                 shade: v.shade * shade,
+                paint: paint.map_or(v.paint, |p| p as u32 as f32),
             });
         }
         self.indices.extend(other.indices.iter().map(|i| i + base));
@@ -143,6 +177,7 @@ pub fn icosphere(subdivisions: u32) -> Mesh {
                 pos: (*p).into(),
                 normal: (*p).into(),
                 shade: 1.0,
+                paint: 0.0,
             })
             .collect(),
         indices: tris.into_iter().flatten().collect(),
@@ -283,6 +318,7 @@ fn tri(m: &mut Mesh, a: Vec3, b: Vec3, c: Vec3) {
             pos: p.into(),
             normal: n.into(),
             shade: 1.0,
+            paint: 0.0,
         });
     }
 }
@@ -304,16 +340,25 @@ fn boxed(center: Vec3, size: Vec3) -> Mat4 {
 }
 
 /// The placeholder ship: a stubby utility craft, ~24 m long, nose toward -Z.
+/// Enamelled hull with a red livery, a gold-foil service module.
 pub fn placeholder_ship() -> Mesh {
-    let (cyl, cube, ball) = (cylinder(10), cube(), icosphere(1).flat());
+    let (cyl, cube, ball) = (cylinder(14), cube(), icosphere(1).flat());
     let mut m = Mesh::default();
-    // Pressurised hull: a cylinder along Z.
+    // Pressurised hull: a cylinder along Z, with red bands.
     m.add(
         &cyl,
         strut(Vec3::new(0.0, 0.0, 8.0), Vec3::new(0.0, 0.0, -6.0), 2.2),
         1.0,
     );
-    // Cockpit ball with a dark "window" band.
+    for (from, to) in [(1.6, 3.0), (-4.6, -4.0)] {
+        m.paint(
+            &cyl,
+            strut(Vec3::new(0.0, 0.0, from), Vec3::new(0.0, 0.0, to), 2.26),
+            1.0,
+            Paint::Red,
+        );
+    }
+    // Cockpit ball with a glazed band.
     m.add(
         &ball,
         Mat4::from_scale_rotation_translation(
@@ -323,47 +368,71 @@ pub fn placeholder_ship() -> Mesh {
         ),
         0.95,
     );
-    m.add(
+    m.paint(
         &cube,
         boxed(Vec3::new(0.0, 0.9, -8.6), Vec3::new(2.6, 0.7, 1.2)),
-        0.25,
+        1.0,
+        Paint::Glass,
     );
-    // Service module and engine bell.
-    m.add(
+    // Service module in thermal blanket, and the engine bell.
+    m.paint(
         &cube,
         boxed(Vec3::new(0.0, 0.0, 9.5), Vec3::new(3.6, 3.6, 3.0)),
-        0.8,
+        1.0,
+        Paint::Foil,
     );
-    m.add(
+    m.paint(
         &cyl,
         strut(Vec3::new(0.0, 0.0, 11.0), Vec3::new(0.0, 0.0, 13.0), 1.6),
-        0.45,
+        1.0,
+        Paint::Metal,
     );
     // Side pods on struts.
     for side in [-1.0f32, 1.0] {
-        m.add(
+        m.paint(
             &cyl,
             strut(
                 Vec3::new(side * 1.5, 0.0, 3.0),
                 Vec3::new(side * 4.8, -0.5, 3.0),
                 0.25,
             ),
-            0.6,
+            1.0,
+            Paint::Metal,
         );
-        m.add(
+        m.paint(
             &cyl,
             strut(
                 Vec3::new(side * 5.0, -0.5, 7.5),
                 Vec3::new(side * 5.0, -0.5, -1.0),
                 0.9,
             ),
-            0.85,
+            1.0,
+            Paint::Red,
         );
-        // Radiator fin.
+        m.add(
+            &cyl,
+            strut(
+                Vec3::new(side * 5.0, -0.5, -1.0),
+                Vec3::new(side * 5.0, -0.5, -1.6),
+                0.7,
+            ),
+            0.9,
+        );
+        // Radiator fin, with a beacon on top.
         m.add(
             &cube,
             boxed(Vec3::new(side * 5.0, 1.4, 4.0), Vec3::new(0.15, 2.6, 5.0)),
             1.1,
+        );
+        m.paint(
+            &ball,
+            Mat4::from_scale_rotation_translation(
+                Vec3::splat(0.22),
+                Quat::IDENTITY,
+                Vec3::new(side * 5.0, 2.8, 6.4),
+            ),
+            1.0,
+            Paint::Beacon,
         );
     }
     m
@@ -383,10 +452,27 @@ pub fn station(kind: StationKind, seed: u64) -> Mesh {
     for _ in 0..modules {
         let len = r(&mut rng, 0.15, 0.32);
         let rad = r(&mut rng, 0.06, 0.12);
-        m.add(
+        let paint = if rng.below(2) == 0 {
+            Paint::Windows
+        } else {
+            Paint::Hull
+        };
+        m.paint(
             &cyl,
             strut(Vec3::new(0.0, y, 0.0), Vec3::new(0.0, y + len, 0.0), rad),
             1.0,
+            paint,
+        );
+        // A red band at the top of each module.
+        m.paint(
+            &cyl,
+            strut(
+                Vec3::new(0.0, y + len * 0.82, 0.0),
+                Vec3::new(0.0, y + len * 0.92, 0.0),
+                rad * 1.04,
+            ),
+            1.0,
+            Paint::Red,
         );
         // Docking node between modules.
         m.add(
@@ -405,15 +491,16 @@ pub fn station(kind: StationKind, seed: u64) -> Mesh {
         StationKind::Habitat => {
             // A rotating habitat ring on spokes.
             let ring_r = r(&mut rng, 0.55, 0.8);
-            m.add(
-                &torus(0.08, 40, 8),
+            m.paint(
+                &torus(0.08, 48, 10),
                 Mat4::from_scale(Vec3::splat(ring_r)),
                 0.95,
+                Paint::Windows,
             );
             for i in 0..4 {
                 let a = i as f32 / 4.0 * TAU;
                 let end = Vec3::new(a.cos(), 0.0, a.sin()) * ring_r;
-                m.add(&cyl, strut(Vec3::ZERO, end, 0.025), 0.7);
+                m.paint(&cyl, strut(Vec3::ZERO, end, 0.025), 1.0, Paint::Metal);
             }
         }
         StationKind::Facility(FacilityKind::Mine | FacilityKind::IceHarvester) => {
@@ -421,7 +508,7 @@ pub fn station(kind: StationKind, seed: u64) -> Mesh {
             for i in 0..3 {
                 let a = i as f32 / 3.0 * TAU;
                 let out = Vec3::new(a.cos(), r(&mut rng, -0.4, 0.4), a.sin()) * 0.7;
-                m.add(&cyl, strut(Vec3::ZERO, out, 0.03), 0.6);
+                m.paint(&cyl, strut(Vec3::ZERO, out, 0.03), 1.0, Paint::Metal);
                 m.add(&cube, boxed(out, Vec3::splat(0.22)), 0.75);
             }
         }
@@ -430,20 +517,22 @@ pub fn station(kind: StationKind, seed: u64) -> Mesh {
             for i in 0..4 {
                 let a = i as f32 / 4.0 * TAU + 0.4;
                 let p = Vec3::new(a.cos() * 0.35, r(&mut rng, -0.4, 0.3), a.sin() * 0.35);
-                m.add(
+                m.paint(
                     &ball,
                     Mat4::from_scale_rotation_translation(Vec3::splat(0.17), Quat::IDENTITY, p),
-                    1.05,
+                    1.0,
+                    Paint::Foil,
                 );
             }
         }
         StationKind::Facility(FacilityKind::Hydroponics) => {
             // Long greenhouse arms.
             for side in [-1.0f32, 1.0] {
-                m.add(
+                m.paint(
                     &cyl,
                     strut(Vec3::ZERO, Vec3::new(side * 0.9, 0.0, 0.0), 0.07),
-                    1.15,
+                    1.0,
+                    Paint::Windows,
                 );
             }
         }
@@ -455,7 +544,7 @@ pub fn station(kind: StationKind, seed: u64) -> Mesh {
                     r(&mut rng, -0.5, 0.4),
                     r(&mut rng, -0.35, 0.35),
                 );
-                m.add(
+                m.paint(
                     &cube,
                     boxed(
                         p,
@@ -466,6 +555,7 @@ pub fn station(kind: StationKind, seed: u64) -> Mesh {
                         ),
                     ),
                     0.8,
+                    Paint::Windows,
                 );
             }
         }
@@ -474,23 +564,35 @@ pub fn station(kind: StationKind, seed: u64) -> Mesh {
 
     // Solar wings on a truss.
     let wing_y = r(&mut rng, -0.3, 0.3);
-    m.add(
+    m.paint(
         &cyl,
         strut(
             Vec3::new(-0.95, wing_y, 0.0),
             Vec3::new(0.95, wing_y, 0.0),
             0.02,
         ),
-        0.6,
+        1.0,
+        Paint::Metal,
     );
     for side in [-1.0f32, 1.0] {
-        m.add(
+        m.paint(
             &cube,
             boxed(
                 Vec3::new(side * 0.7, wing_y, 0.0),
                 Vec3::new(0.45, 0.01, 0.22),
             ),
-            0.35,
+            1.0,
+            Paint::Solar,
+        );
+        m.paint(
+            &ball,
+            Mat4::from_scale_rotation_translation(
+                Vec3::splat(0.012),
+                Quat::IDENTITY,
+                Vec3::new(side * 0.95, wing_y, 0.0),
+            ),
+            1.0,
+            Paint::Beacon,
         );
     }
     m

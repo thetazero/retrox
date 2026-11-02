@@ -1,15 +1,20 @@
-// Tonemap the HDR scene and give it a filmic, slightly worn look:
-// exposure, vignette, film grain, faint scanlines.
+// Tonemap the HDR scene and grade it like period film stock with a
+// sovietwave lean: bloom with red halation, indigo shadows, warm highlights,
+// a touch of lens fringing, vignette, grain and faint scanlines.
 
 struct Globals {
     view_proj: mat4x4<f32>,
+    inv_view_proj: mat4x4<f32>,
     star_color: vec4<f32>,
     // x: time, y: exposure, z: width, w: height
     misc: vec4<f32>,
+    // xyz: direction to the galactic core, w: how far out we are (0..1)
+    sky: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> g: Globals;
 @group(1) @binding(0) var hdr: texture_2d<f32>;
 @group(1) @binding(1) var samp: sampler;
+@group(1) @binding(2) var bloom: texture_2d<f32>;
 
 struct VOut {
     @builtin(position) clip: vec4<f32>,
@@ -36,18 +41,31 @@ fn hash(p: vec2<f32>) -> f32 {
 
 @fragment
 fn fs(i: VOut) -> @location(0) vec4<f32> {
-    var c = textureSample(hdr, samp, i.uv).rgb * g.misc.y;
-    // Slight warm film-stock grade: lift shadows toward teal, warm highlights.
+    // Lens fringing: red and blue pulled apart toward the edges.
+    let off = (i.uv - 0.5) * 0.0018;
+    var c = vec3<f32>(
+        textureSample(hdr, samp, i.uv + off).r,
+        textureSample(hdr, samp, i.uv).g,
+        textureSample(hdr, samp, i.uv - off).b,
+    ) * g.misc.y;
+    // Bloom, with film halation: an extra red-orange fringe on bright things.
+    let b = textureSample(bloom, samp, i.uv).rgb;
+    c = c + b * 0.35 + vec3<f32>(dot(b, vec3<f32>(0.33))) * vec3<f32>(0.22, 0.05, 0.03);
+
     c = aces(c);
-    c = mix(c, c * vec3<f32>(1.04, 1.0, 0.92), smoothstep(vec3<f32>(0.3), vec3<f32>(1.0), c));
-    c = c + vec3<f32>(0.004, 0.008, 0.01) * (1.0 - c);
+    let lum = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+    // A little extra saturation in the mids.
+    c = max(mix(vec3<f32>(lum), c, 1.12), vec3<f32>(0.0));
+    // Indigo shadows, warm peach highlights.
+    c = c + vec3<f32>(0.006, 0.002, 0.014) * (1.0 - lum) * (1.0 - lum);
+    c = c * mix(vec3<f32>(0.97, 0.98, 1.03), vec3<f32>(1.05, 0.99, 0.9), smoothstep(0.15, 0.85, lum));
     // Vignette.
     let d = distance(i.uv, vec2<f32>(0.5));
-    c = c * (1.0 - smoothstep(0.45, 0.95, d) * 0.55);
-    // Grain and faint scanlines.
+    c = c * (1.0 - smoothstep(0.4, 0.95, d) * 0.6);
+    // Grain (strongest in the mids, like film) and faint scanlines.
     let px = i.uv * g.misc.zw;
     let grain = hash(px + fract(g.misc.x) * 113.0) - 0.5;
-    c = c + grain * 0.012;
-    c = c * (0.993 + 0.007 * sin(px.y * 3.14159));
+    c = c + grain * (0.008 + 0.025 * lum * (1.0 - lum));
+    c = c * (0.985 + 0.015 * sin(px.y * 3.14159));
     return vec4<f32>(max(c, vec3<f32>(0.0)), 1.0);
 }

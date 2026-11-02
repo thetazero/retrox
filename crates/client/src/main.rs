@@ -34,9 +34,18 @@ fn main() {
     let event_loop = EventLoop::new().expect("event loop");
     event_loop.set_control_flow(ControlFlow::Poll);
     let undocked = std::env::args().any(|a| a == "--undocked");
+    let station = std::env::args().any(|a| a == "--station");
+    // `--screenshot <path.ppm>`: save the 90th frame and quit (for checking
+    // visual changes without a person at the window).
+    let screenshot = std::env::args()
+        .skip_while(|a| a != "--screenshot")
+        .nth(1)
+        .map(std::path::PathBuf::from);
     let mut app = App {
         seed,
         undocked,
+        station,
+        screenshot,
         running: None,
     };
     event_loop.run_app(&mut app).expect("run");
@@ -46,6 +55,9 @@ struct App {
     seed: u64,
     /// Start in space rather than docked (handy for testing).
     undocked: bool,
+    /// Start docked at a station, in the first system that has one.
+    station: bool,
+    screenshot: Option<std::path::PathBuf>,
     running: Option<Running>,
 }
 
@@ -70,6 +82,7 @@ struct Running {
     captured: bool,
     last_frame: Instant,
     start: Instant,
+    frames: u32,
 }
 
 impl ApplicationHandler for App {
@@ -88,8 +101,20 @@ impl ApplicationHandler for App {
         );
         let mut renderer = Renderer::new(window.clone());
         let mut world = World::new(self.seed);
+        if self.station {
+            world.start_at_station();
+        }
         if self.undocked {
-            world.act(Action::Undock);
+            // Out by a station if there's one here, else in orbit.
+            if let (Mode::Landed { .. }, Some(&s)) = (world.mode, world.view.stations.first()) {
+                world.mode = Mode::Docked(s);
+            }
+            if let Mode::Docked(s) = world.mode {
+                world.act(Action::Undock);
+                world.target = Some(Place::Station(s));
+            } else {
+                world.act(Action::Launch);
+            }
             world.ship.throttle = 0.3;
             // Look back at the station.
             world.ship.rot *= DQuat::from_rotation_y(2.6);
@@ -105,7 +130,8 @@ impl ApplicationHandler for App {
             stations: Vec::new(),
             system_generation: u64::MAX,
         };
-        renderer.set_sky(&sky(&world));
+        let (core, out) = galactic_core(&world);
+        renderer.set_sky(&sky(&world), core, out);
 
         let egui_ctx = egui::Context::default();
         hud::style(&egui_ctx);
@@ -130,6 +156,7 @@ impl ApplicationHandler for App {
             captured: false,
             last_frame: Instant::now(),
             start: Instant::now(),
+            frames: 0,
         });
     }
 
@@ -167,7 +194,17 @@ impl ApplicationHandler for App {
                 r.set_captured(true);
             }
             WindowEvent::Focused(false) => r.set_captured(false),
-            WindowEvent::RedrawRequested => r.frame(),
+            WindowEvent::RedrawRequested => {
+                const SCREENSHOT_FRAME: u32 = 90;
+                r.frames += 1;
+                if r.frames == SCREENSHOT_FRAME {
+                    r.renderer.capture = self.screenshot.clone();
+                }
+                r.frame();
+                if r.frames == SCREENSHOT_FRAME && self.screenshot.is_some() {
+                    event_loop.exit();
+                }
+            }
             _ => {}
         }
     }
@@ -284,7 +321,8 @@ impl Running {
                 })
                 .collect();
             self.meshes.system_generation = self.world.system_generation;
-            self.renderer.set_sky(&sky(&self.world));
+            let (core, out) = galactic_core(&self.world);
+            self.renderer.set_sky(&sky(&self.world), core, out);
         }
 
         let (cam_pos, cam_rot) = self.world.camera();
@@ -371,12 +409,18 @@ fn scene(world: &World, meshes: &Meshes, cam: DVec3) -> Vec<(MeshId, Instance)> 
         let (surface, color) = match body.kind {
             BodyKind::Planet(PlanetClass::Barren) => (Surface::Barren, [0.42, 0.39, 0.36]),
             BodyKind::Planet(PlanetClass::Desert) => (Surface::Desert, [0.72, 0.52, 0.32]),
-            BodyKind::Planet(PlanetClass::Terran) => (Surface::Rocky, [0.36, 0.42, 0.3]),
+            BodyKind::Planet(PlanetClass::Terran) => (Surface::Ocean, [0.36, 0.42, 0.3]),
             BodyKind::Planet(PlanetClass::Ocean) => (Surface::Ocean, [0.2, 0.35, 0.5]),
             BodyKind::Planet(PlanetClass::Ice) => (Surface::Ice, [0.65, 0.75, 0.82]),
             BodyKind::GasGiant => (Surface::Gas, gas_color(seed)),
             BodyKind::Moon => (Surface::Barren, [0.4, 0.38, 0.36]),
             BodyKind::Belt => continue,
+        };
+        // How much of an ocean world is sea.
+        let sea_level = match body.kind {
+            BodyKind::Planet(PlanetClass::Terran) => 0.52,
+            BodyKind::Planet(PlanetClass::Ocean) => 0.6,
+            _ => 0.0,
         };
         let spin = Quat::from_rotation_y(
             (t / 86_400.0 * std::f64::consts::TAU % std::f64::consts::TAU) as f32,
@@ -394,7 +438,8 @@ fn scene(world: &World, meshes: &Meshes, cam: DVec3) -> Vec<(MeshId, Instance)> 
                 0.0,
                 seed as f32,
                 light(pos),
-            ),
+            )
+            .with_detail(sea_level),
         ));
     }
 
@@ -416,12 +461,13 @@ fn scene(world: &World, meshes: &Meshes, cam: DVec3) -> Vec<(MeshId, Instance)> 
                     Quat::from_rotation_y(spin) * Quat::from_rotation_x(0.3),
                     rel(pos),
                 ),
-                [0.72, 0.7, 0.64],
+                [0.74, 0.71, 0.63],
                 Surface::Plain,
                 0.0,
-                0.0,
+                i as f32,
                 light(pos),
-            ),
+            )
+            .with_detail(24.0),
         ));
     }
 
@@ -458,17 +504,39 @@ fn scene(world: &World, meshes: &Meshes, cam: DVec3) -> Vec<(MeshId, Instance)> 
     let hidden = world.cockpit || !matches!(world.mode, Mode::Normal | Mode::FastTravel(_));
     if !hidden {
         let pos = world.ship_position();
+        let rot = world.ship.rot.as_quat();
         out.push((
             meshes.ship,
             Instance::new(
-                Mat4::from_rotation_translation(world.ship.rot.as_quat(), rel(pos)),
-                [0.78, 0.74, 0.66],
+                Mat4::from_rotation_translation(rot, rel(pos)),
+                [0.8, 0.75, 0.64],
                 Surface::Plain,
                 0.0,
                 0.0,
                 light(pos),
-            ),
+            )
+            .with_detail(0.5),
         ));
+        // Engine plume, growing with the throttle.
+        let thrust = world.ship.throttle.max(0.0) as f32;
+        if thrust > 0.01 {
+            let len = 0.8 + 2.5 * thrust;
+            out.push((
+                meshes.sphere,
+                Instance::new(
+                    Mat4::from_scale_rotation_translation(
+                        Vec3::new(0.7, 0.7, len),
+                        rot,
+                        rel(pos) + rot * Vec3::new(0.0, 0.0, 13.0 + len * 0.6),
+                    ),
+                    [0.35, 0.7, 1.0],
+                    Surface::Star,
+                    1.2 + 2.5 * thrust,
+                    0.0,
+                    [0.0, 1.0, 0.0, 1.0],
+                ),
+            ));
+        }
     }
     out
 }
@@ -519,6 +587,20 @@ fn gas_color(seed: u64) -> [f32; 3] {
 }
 
 /// The rest of the galaxy as background stars, in their true directions.
+/// The direction to the galaxy's centre from here (in the same axes as
+/// [`sky`]) and how far out we are, 0 at the centre to 1 at the rim.
+fn galactic_core(world: &World) -> (Vec3, f32) {
+    let here = world.galaxy.systems[world.system].position;
+    let rim = world
+        .galaxy
+        .systems
+        .iter()
+        .map(|(_, s)| s.position.x.hypot(s.position.y))
+        .fold(1.0, f64::max);
+    let dir = DVec3::new(-here.x, -here.z, -here.y).normalize_or(DVec3::X);
+    (dir.as_vec3(), (here.x.hypot(here.y) / rim) as f32)
+}
+
 fn sky(world: &World) -> Vec<SkyVertex> {
     let here = world.galaxy.systems[world.system].position;
     world
