@@ -1147,7 +1147,7 @@ impl World {
                 let capacity = self.stats().cargo_t;
                 let before = self.player.credits;
                 let premium = if amount < 0.0 {
-                    self.premium(here, good, -amount.round())
+                    self.premium(here, good, -amount)
                 } else {
                     0.0
                 };

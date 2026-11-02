@@ -60,7 +60,12 @@ pub fn max_buy(
     n
 }
 
-/// Buy (positive `amount`) or sell (negative) whole tonnes of a good.
+/// Below this a hold's share of a good is float dust, not cargo.
+pub const DUST_T: f64 = 1e-6;
+
+/// Buy (positive `amount`) or sell (negative) a good. Purchases are whole
+/// tonnes; a sale may take a mined fraction, so selling all of a good
+/// empties the hold of it (issue #175).
 pub fn trade(
     player: &mut Player,
     capacity_t: f64,
@@ -69,7 +74,7 @@ pub fn trade(
     good: Good,
     amount: f64,
 ) -> Result<String, String> {
-    let amount = amount.round();
+    let amount = if amount > 0.0 { amount.round() } else { amount };
     let market = &economy.market;
     if amount > 0.0 {
         let available = for_sale(market, model, good).floor();
@@ -104,12 +109,18 @@ pub fn trade(
             good.name(),
             crate::hud::credits(cost)
         ))
-    } else if amount < 0.0 {
-        let amount = -amount;
-        if amount > player.cargo[good] + 1e-9 {
+    } else if amount < -DUST_T {
+        let have = player.cargo[good];
+        // Selling all of it, give or take float dust, sells exactly that.
+        let amount = if (-amount - have).abs() < DUST_T {
+            have
+        } else {
+            -amount
+        };
+        if amount > have + DUST_T {
             return Err(format!(
-                "You only carry {:.0} t of {}",
-                player.cargo[good],
+                "You only carry {} of {}",
+                crate::hud::tonnes(have),
                 good.name()
             ));
         }
@@ -119,10 +130,14 @@ pub fn trade(
         }
         player.credits += value;
         player.cargo[good] -= amount;
+        if player.cargo[good] < DUST_T {
+            player.cargo[good] = 0.0;
+        }
         economy.market.stock[good] += amount;
         economy.treasury -= value;
         Ok(format!(
-            "Sold {amount:.0} t of {} for {}",
+            "Sold {} of {} for {}",
+            crate::hud::tonnes(amount),
             good.name(),
             crate::hud::credits(value)
         ))
@@ -216,6 +231,51 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    /// Issue #175: a mined lot isn't whole tonnes, and selling all of it
+    /// leaves nothing behind.
+    #[test]
+    fn selling_all_of_a_mined_lot_empties_the_hold() {
+        let (mut p, mut eco) = (Player::new(), market());
+        // Mining adds a little at a time.
+        for _ in 0..21 {
+            p.cargo[Good::Food] += 0.1;
+        }
+        let have = p.cargo[Good::Food];
+        let start = p.credits;
+        let text = trade(
+            &mut p,
+            12.0,
+            &mut eco,
+            EconomyModel::Market,
+            Good::Food,
+            -have,
+        )
+        .unwrap();
+        assert!(text.starts_with("Sold 2.1 t of food"), "{text}");
+        assert_eq!(p.cargo_t(), 0.0);
+        assert!(p.credits > start);
+        // A remnant under a tonne sells on its own.
+        p.cargo[Good::Food] = 0.1;
+        trade(
+            &mut p,
+            12.0,
+            &mut eco,
+            EconomyModel::Market,
+            Good::Food,
+            -0.1,
+        )
+        .unwrap();
+        assert_eq!(p.cargo_t(), 0.0);
+    }
+
+    #[test]
+    fn tonnes_read_like_the_mining_hold() {
+        assert_eq!(crate::hud::tonnes(2.0), "2 t");
+        assert_eq!(crate::hud::tonnes(2.1000000001), "2.1 t");
+        assert_eq!(crate::hud::tonnes(0.1), "0.1 t");
+        assert_eq!(crate::hud::tonnes(11.98), "12 t");
     }
 
     #[test]
