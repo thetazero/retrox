@@ -811,7 +811,7 @@ impl Renderer {
         let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();
         for y in 0..h {
             let line = &data[(y * row) as usize..(y * row + w * 4) as usize];
-            for px in line.chunks_exact(4) {
+            for px in line.as_chunks::<4>().0 {
                 if bgra {
                     out.extend([px[2], px[1], px[0]]);
                 } else {
