@@ -112,7 +112,7 @@ fn step(ui: &mut egui::Ui, n: usize, title: &str, text: &str) {
 fn first_steps(ui: &mut egui::Ui) {
     rich_hint(
         ui,
-        "You start landed at your faction's capital with 25 000 cr and a small ship. The galaxy \
+        "You start landed at your faction's capital with 2 000 cr and a small ship. The galaxy \
          runs whether or not you take part; here's one way into it.",
         CREAM,
     );

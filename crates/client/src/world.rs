@@ -24,6 +24,8 @@
 //! place it arrived at or launched from. The frame moves with that place,
 //! so nearby things hold still while you fly.
 
+#[cfg(test)]
+mod careers;
 mod field;
 mod pilot;
 mod routing;

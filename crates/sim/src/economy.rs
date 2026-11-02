@@ -193,8 +193,11 @@ pub const PER_CAPITA_DEMAND: [(Good, f64); 3] = [
 pub const HULL_T_PER_RUN: f64 = 1.0;
 /// Shipyards stop once they hold this many days of their own output.
 pub const HULL_STORAGE_DAYS: f64 = 120.0;
-/// What a tonne of finished hull sells for, in credits.
-pub const HULL_PRICE_PER_T: f64 = 60.0;
+/// What a tonne of finished hull sells for, in credits: about twice what
+/// goes into it (a tonne of metal, 0.3 t of components, 0.1 t of fuel, 56
+/// cr at base prices), the same mark-up a factory puts on components. It
+/// prices every ship and part (DESIGN §7.8).
+pub const HULL_PRICE_PER_T: f64 = 120.0;
 
 /// A facility under construction: what it will be, and the materials it
 /// still needs.

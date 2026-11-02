@@ -83,6 +83,8 @@ fn fast_travel_reaches_every_place_and_cannot_start_in_a_well() {
 #[test]
 fn buy_and_refit_a_ship_at_the_starting_yard() {
     let mut world = World::new(1);
+    // The starting purse doesn't stretch to a ship.
+    world.player.credits = 100_000.0;
     let here = world.docked_at().expect("starts landed");
     assert!(hangar::services(&world.galaxy.settlements[here].economy).shipyard);
     // The yard builds hull over time; the cheapest ship is soon in stock.

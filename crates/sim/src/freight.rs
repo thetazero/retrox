@@ -52,10 +52,14 @@ const MIN_SHORTAGE: f64 = 0.25;
 /// its target, so it never ends up shorter than the consignee started.
 const RELEASE_TO: f64 = 1.0 - MIN_SHORTAGE;
 /// Freight, in credits per tonne per day of the trip, at the smallest
-/// shortage; it doubles for an empty market.
-const FREIGHT_RATE: f64 = 3.0;
-/// The crew's wage, in credits per day of the trip, likewise.
-const WAGE: f64 = 30.0;
+/// shortage; it doubles for an empty market. It is what the galaxy's own
+/// haulers spend keeping a tonne of hold in service (DESIGN §7.8): the
+/// galaxy's haulers move goods for that, so a consignee won't pay a captain
+/// much more.
+const FREIGHT_RATE: f64 = crate::haul::UPKEEP_PER_CARGO_T_DAY;
+/// The crew's wage, in credits per day of the trip, likewise: a hauler
+/// crew's upkeep. The player's ship burns no fuel yet, so none is paid.
+const WAGE: f64 = crate::haul::UPKEEP_PER_SHIP_DAY;
 /// The smallest lot worth posting, as a share of the hold.
 const MIN_LOT_SHARE: f64 = 0.25;
 /// Days allowed for each system on the route (flying to the jump point,

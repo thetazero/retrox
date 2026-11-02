@@ -495,8 +495,9 @@ from a random generator (pillar 5).
   price and pays the fee from its own treasury: the price gap between
   the two markets, its faction's delivery premium if planned (the same
   premium NPC haulers earn), and freight for the expected trip (a rate
-  per tonne-day plus the crew's wage), scaled up by how short it is. It
-  only commits what it can afford.
+  per tonne-day plus the crew's wage, both the galaxy's own hauler
+  upkeep, §7.8), scaled up by how short it is. It only commits what it
+  can afford.
 - **Deposit.** Taking a contract costs a deposit of the cargo's value,
   returned on delivery. Contract cargo rides in the hold but can't be
   sold.
@@ -522,6 +523,76 @@ from a random generator (pillar 5).
   autosave). Because the game is deterministic, the same future plays out
   again unless you act differently — what you learned before dying is
   yours to use.
+
+### 7.8 Earnings and progression
+
+Every career in §2 the player can follow today earns a living, and the
+ship ladder is long enough to save up along (issue #84). Money comes out
+of the economy, never from a payout table (pillar 5), so the levers are
+the sim's own numbers:
+
+- **Ships cost about twice their materials.** Finished hull sells at
+  120 cr/t: a tonne takes 1 t of metal, 0.3 t of components and 0.1 t of
+  fuel (56 cr at base prices), and a shipyard marks that up as a factory
+  marks up components (§5.4). Every ship and part is priced from it
+  (§7.4). At half that, ships cost barely more than their raw metal and
+  a few hours of any work bought a freighter. NPC companies buy hulls at
+  the same price; five simulated years end with 4% fewer NPC ships and
+  the same shortages.
+- **A new pilot owns the courier and 2 000 cr.** That covers a first
+  contract's deposit or a hold of cargo, not another ship. (It was
+  25 000 cr, which bought any medium ship on day one.)
+- **Freight pays what hauling costs.** A contract's freight is the
+  galaxy's own hauler upkeep for the trip: 0.02 cr per tonne-day plus a
+  crew's 2 cr a day, scaled up by how short the consignee is (§7.5.1).
+  It was 3 cr/t-day and 30 cr/day, 50–150× what NPC haulers spend, so a
+  consignee paid 30–40× the cargo's value for 12 t of ore. Most of a
+  contract's pay is now the price gap (market economies) or the
+  faction's delivery premium (planned ones), like any trader's.
+- **Mining is unchanged:** ore sells at its market price. Mining is the
+  dependable start (no capital, no deposit, never a bare board) and the
+  slowest earner in a courier. Bulk ore is cheap next to the goods a
+  hauler carries to a market that's short. A miner grows by refitting:
+  a gunship with mining lasers in the bow and a cargo bay amidships
+  (43 500 cr) cuts five times as fast as the courier. Once its hold
+  stops forcing trips, the laser's heat and gluts at the local market
+  set the pace.
+
+**Measured** with the career bench (`cargo test -p retrox-client careers
+-- --ignored --nocapture`, `crates/client/src/world/careers.rs`). Bots
+play an hour of each career in a fresh game, seeds 1–4. They fly the real
+world, with turning, nudging around a field and menus charged at a
+practised pilot's pace. They play well, so a new player should expect
+about half these rates.
+
+| Career, ship | cr per hour (seeds 1–4) |
+|---|---|
+| Mining, courier (12 t, light laser) | 1 080 · 3 070 · 1 040 · 2 750 |
+| Mining, gunship refit (180 t, 2 lasers) | 2 270 · 7 490 · 1 110 (seeds 1–3) |
+| Trading, courier | 12 900 · 1 580 · 5 190 · 460 |
+| Freight contracts, courier | 17 000 · 8 500 · 18 500 · 9 050 |
+| Trading, hauler (360 t) | 22 800 · 4 730 · 16 000 · 8 670 |
+| Freight contracts, hauler | 42 900 · 31 300 · 50 100 · 44 100 |
+
+Trading swings the most because it depends on where you start: planned
+economies hold one price everywhere, so the money is in market space and
+across the border (§5.4). The bot trader also knows prices two jumps out,
+which a player has to learn.
+
+**The ladder** (stock fits): racer 4 060, courier 5 500, interceptor
+6 180, light trader 6 590, heavy fighter 10 150; blockade runner 38 800,
+hauler 41 200, gunship 50 500; express freighter 243 000, bulk freighter
+302 000, frigate 413 000. From the courier, the next small ship (the
+light trader, with twice the hold) is under an hour of contracts or about
+two of mining away, and a medium ship 3–5 hours of contracts or about 20
+of mining. A medium freighter takes 6–10 hours
+of contracts to buy a large ship, which leaves fleets and capital ships
+(§7.5) to fill the rest of the ~100-hour arc (§2).
+
+**Still open:** a planet city costs ~5 minutes of plain flying per visit
+(down from the fast-travel stop at the well's edge, and back out). That
+taxes every career that sells at a city, so a miner sets up by a station.
+It's a flight issue, not an earnings one.
 
 ## 8. Art direction & audio
 
