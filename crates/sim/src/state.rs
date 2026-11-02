@@ -32,6 +32,10 @@ pub struct GalaxyState {
     /// The kinds of trade ship in service.
     pub ship_classes: Arena<ShipClass>,
     pub companies: SlotMap<CompanyId, Company>,
+    /// Traders' upcoming events; see [`crate::haul`].
+    pub calendar: crate::haul::Calendar,
+    /// Cargo on its way to each market.
+    pub traffic: crate::haul::Traffic,
     /// Remembered lane distances; see [`crate::haul::ReachCache`].
     #[serde(skip)]
     pub reach_cache: crate::haul::ReachCache,

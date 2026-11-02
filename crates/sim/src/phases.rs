@@ -25,7 +25,6 @@ pub fn trade(state: &mut GalaxyState) {
 
 /// Fleets arrive where they were going.
 pub fn movement(state: &mut GalaxyState) {
-    crate::haul::movement(state);
     crate::colonize::arrive(state);
 }
 
