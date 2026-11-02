@@ -232,6 +232,17 @@ fn living(ui: &mut egui::Ui) {
     );
     topic(
         ui,
+        "Combat",
+        "Raiders lurk in asteroid fields away from faction capitals; NAVIGATION marks a field \
+         where they've been seen. They close in when you arrive. [LMB] or [R] fires every gun \
+         you carry; put the boresight on the red lead pip and the guns swing onto it. [Y] picks \
+         the next hostile. Shields soak hits first and come back once you stop taking them; \
+         heat and power are shared, so burning hard and firing hot will lock your guns. Wrecks \
+         spill salvage for the tractor. While raiders are near you can't fast travel, jump or \
+         save: fight, or run. Docking repairs the hull, for a price.",
+    );
+    topic(
+        ui,
         "Ships",
         "The HANGAR refits your ship (cargo racks, radiators, reactors, drives); the SHIPYARD \
          sells new hulls. Ships you leave behind wait in storage where you left them.",

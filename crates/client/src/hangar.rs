@@ -39,6 +39,9 @@ pub struct OwnedShip {
     /// Saved as the ids of its parts (see [`crate::save::loadout`]).
     #[serde(with = "crate::save::loadout")]
     pub fit: Loadout,
+    /// Hull damage from fighting, until repaired (see [`crate::combat`]).
+    #[serde(default)]
+    pub damage: crate::combat::Damage,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -74,6 +77,7 @@ impl Player {
             ship: OwnedShip {
                 name: format!("{} No. 1", fit.hull().name),
                 fit,
+                damage: Default::default(),
             },
             stored: Vec::new(),
             cargo: GoodMap::default(),
@@ -170,7 +174,8 @@ pub fn yard_output_t_per_day(economy: &LocalEconomy) -> f64 {
         .iter()
         .filter(|f| f.kind == FacilityKind::Shipyard)
         .map(|f| f.scale * HULL_T_PER_RUN)
-        .sum()
+        // Not `sum`: an empty float sum is -0.0, shown as "-0".
+        .fold(0.0, |a, b| a + b)
 }
 
 pub fn can_build(economy: &LocalEconomy, offer: &Offer) -> bool {
@@ -327,6 +332,7 @@ pub fn run(
             let ship = OwnedShip {
                 name: format!("{} No. {}", hull.name, player.bought),
                 fit,
+                damage: Default::default(),
             };
             let old = std::mem::replace(&mut player.ship, ship);
             player.stored.push(StoredShip {

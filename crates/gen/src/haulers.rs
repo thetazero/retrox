@@ -87,6 +87,8 @@ pub fn seed(rng: &mut Rng, state: &mut GalaxyState, classes: &[ShipClassId]) {
                         route: None,
                         review_due: false,
                         idle: false,
+                        loaded: false,
+                        slack: 0,
                     }],
                     next_fleet: 0,
                 },

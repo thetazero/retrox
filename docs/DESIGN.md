@@ -300,6 +300,58 @@ Consequences:
 - NPC traders, miners and haulers operate on the same timeline as the
   player, so observed price gaps really do close.
 
+#### 5.4.1 Rules that keep it healthy (#72)
+
+Decisions from the economy audit; `retrox simulate` ends with a health
+report to check them on a long run.
+
+- **People before industry.** Each day a settlement's population takes
+  what it needs first; facilities then share what is left of each input
+  in proportion to what they want of it. Nothing gets first pick because
+  of where it sits in a list. A facility stopped because its output store
+  is full wants nothing that day, so it isn't counted as short.
+- **Ships follow freight.** A company buys a ship only when a fleet came
+  in with its holds ≥ 90 % full and none of its fleets is idle. A
+  settlement founds a company only when it has a full hold's worth of
+  surplus and no ships sit idle in its system; the crew fetches its hull
+  from the nearest yard in trading reach that has it. A fleet that has
+  carried nothing for three monthly reviews running (cargo aboard counts
+  as carrying) sells half its ships, at least one, for scrap: half their
+  mass, as metal, to the port it's in. A company whose last fleet goes
+  winds up.
+- **Shipyards build to orders.** A captain who wants a ship where there
+  isn't enough hull leaves an order (`hull_wanted`, halving monthly) at
+  the nearest yard in reach, or at home if there's none. Yards
+  keep about a month of their own output on hand plus the orders, and
+  otherwise stand idle and decay like any idle facility. A shipyard is
+  built only where orders exceed the hull on hand; planned settlements
+  treat hull like any other good they're short of.
+- **Projects give up.** A construction project still short of materials
+  after 180 days is cut short: the settlement keeps the share it has built
+  (if that's at least a tenth of a unit) and can plan again.
+- **Printing follows need.** A faction with money pays welfare out of it as
+  before. A faction without money prints only for settlements below their
+  reserve, in proportion to how far below they are, and within its debt
+  limit.
+- **Debt reins in spending.** What a faction spends by choice (delivery
+  premiums, construction wages, printed relief) scales with its *thrift*:
+  full with money in hand, falling to nothing as its debt reaches a quarter
+  of its limit. Planned economies run a structural deficit (they pay
+  premiums and wages, and the money drains to market economies through
+  trade), so this brake is what bounds their debt: on a 60-year run it
+  settles just under a quarter of the limit.
+- **Trips cost what flying them costs.** One estimate serves the coarse
+  tier and the bubble: the burn out to a jump point, each lane in whole
+  days, each crossing of a system on the way (jump point to jump point),
+  the burn in, half a day lost at each change of stretch, and a day of
+  handling. In-system distances are typical, not radial, since bodies sit
+  anywhere on their orbits. A hop between two settlements on one world is
+  a climb to orbit and back down (a day), burns fuel, and is never flown
+  in the bubble.
+- **Cargo always gets off.** A fleet with cargo still aboard at its review
+  routes to wherever that cargo sells best; if nobody in reach can buy it,
+  it leaves the cargo at the dock for nothing.
+
 ### 5.5 Factions
 
 - Procedural, can form/split/merge/die. The only factions placed by hand
@@ -422,6 +474,61 @@ rather than space bugs.
   turret direction, damage per compartment, possibly crew-less
   "station" switching. Exact design open (§11).
 
+#### 7.2.1 Basic combat as built (#70)
+
+- **Guns.** One trigger (LMB or R) fires every gun in a weapon slot,
+  and the mining laser too except while hostiles are near (then the
+  trigger is the guns' alone; the laser keeps its own gauge, §7.3).
+  Autocannons throw shells at 1.6 km/s on top of the ship's velocity;
+  lasers hit along their line at once. Fixed guns swing up to 4° to
+  meet the target's lead, so putting the boresight on the HUD's **lead
+  pip** hits. Y picks the next hostile; the nearest is picked for you.
+- **Budgets (§7.4) in flight.** Engines draw power and make heat in
+  proportion to how hard they burn, shields while recharging, guns while
+  firing; the reactor feeds the rest first and the guns last, so an
+  over-budget fit fires slower while it burns and recharges. Heat the
+  radiators can't shed fills the sections' capacity; at the top the guns
+  lock out until half of it is gone.
+- **Damage.** Shields take hits first and recharge 3 s after the last
+  one. Past them a hit lands on the section it struck, by where along the
+  hull. A section run out of structure is wrecked and its modules die
+  with it (lose the stern, lose the engines). A small ship is one section;
+  a framed ship's further hits on wreckage go to the frame, and it is lost
+  when the frame gives out or every section is gone. Hull damage stays
+  with the ship until a dock or city repairs it, automatically, at
+  3 cr per point, paid to the settlement's treasury.
+- **Raiders.** Pirate bands lurk at asteroid fields, preying on miners:
+  never in a faction's capital system, at 45% of fields in settled
+  systems (1–2 light fighters), 85% where no one lives (2–3, sometimes a
+  gunship). Each field has a band or not for each 20-day stretch,
+  decided from the field and the date, so a restored checkpoint meets the
+  same band; ships killed stay dead for the stretch. The navigation list
+  marks fields with a band. A band closes in from ~7 km when a ship
+  arrives. Raiders fly the player's own arcade flight model (shared
+  code) and stock fits under the same budgets, attack along the lead,
+  break off after overshooting, jink when someone is on their tail, fire
+  in bursts, run when badly hurt, and give up 16 km out from their field.
+  Until raiders are agents of the bubble (§5.2) bands are kept by the
+  client, like the mining laser's work on a field.
+- **Stakes.** With a hostile within 20 km there's no fast travel, no
+  jump and no saving: fight or run. Wrecks spill components and metal
+  for the tractor.
+- **The starting courier** carries a light autocannon in a belly mount
+  besides its chin mining laser, so a new pilot can defend themselves.
+- **Looks (§8).** Tracers are streaks of light, cream for the player's
+  guns and red for everyone else's; lasers are brief beams. Shields are
+  a faint bubble of scan bands that flares round each hit. Hull hits
+  spark. Damage scorches the paint in soot patches. Ships blow up in a
+  churning fireball with secondaries, a white core flash, a shockwave
+  ring, flung hull plates and embers, and leave a burnt-out wreck with
+  embers in its cracks, tumbling, for three minutes.
+- **Sounds (§8).** Synthesized like the rest: a thump and crack per
+  autocannon round (raiders' quieter and lower), a falling zap for
+  lasers, an electric fizz on the shield, a metal clang and hull creak
+  when shots get through, and the volatile-rock blast for ships going up.
+- **Losing the ship** shows a "ship lost" card and restores the last
+  checkpoint (§7.7); everything else about death is its own issue.
+
 ### 7.3 Mining
 
 - An **activity**, not a timer: fracture asteroids, cut into them, collect
@@ -492,12 +599,12 @@ from a random generator (pillar 5).
   A board holds 8 contracts at most, 2 per destination, best pay per day
   first. Boards change daily as markets do; some days a port has nothing.
 - **Who pays, and what.** The consignee buys the goods at the origin's
-  price and pays the fee from its own treasury: the price gap between
-  the two markets, its faction's delivery premium if planned (the same
-  premium NPC haulers earn), and freight for the expected trip (a rate
-  per tonne-day plus the crew's wage, both the galaxy's own hauler
-  upkeep, §7.8), scaled up by how short it is. It only commits what it
-  can afford.
+  price and pays the fee from its own treasury: freight for the expected
+  trip (a rate per tonne-day plus the crew's wage, both the galaxy's own
+  hauler upkeep), scaled up by how short it is. The price gap and a
+  planned faction's delivery premium go to traders, not to a captain
+  carrying someone else's goods (§7.8). It only commits what it can
+  afford.
 - **Deposit.** Taking a contract costs a deposit of the cargo's value,
   returned on delivery. Contract cargo rides in the hold but can't be
   sold.
@@ -542,52 +649,55 @@ the sim's own numbers:
 - **A new pilot owns the courier and 2 000 cr.** That covers a first
   contract's deposit or a hold of cargo, not another ship. (It was
   25 000 cr, which bought any medium ship on day one.)
-- **Freight pays what hauling costs.** A contract's freight is the
-  galaxy's own hauler upkeep for the trip: 0.02 cr per tonne-day plus a
-  crew's 2 cr a day, scaled up by how short the consignee is (§7.5.1).
-  It was 3 cr/t-day and 30 cr/day, 50–150× what NPC haulers spend, so a
-  consignee paid 30–40× the cargo's value for 12 t of ore. Most of a
-  contract's pay is now the price gap (market economies) or the
-  faction's delivery premium (planned ones), like any trader's.
-- **Mining is unchanged:** ore sells at its market price. Mining is the
-  dependable start (no capital, no deposit, never a bare board) and the
-  slowest earner in a courier. Bulk ore is cheap next to the goods a
-  hauler carries to a market that's short. A miner grows by refitting:
-  a gunship with mining lasers in the bow and a cargo bay amidships
-  (43 500 cr) cuts five times as fast as the courier. Once its hold
-  stops forcing trips, the laser's heat and gluts at the local market
-  set the pace.
+- **A contract pays carriage.** Its fee is freight for the trip at the
+  galaxy's own hauler upkeep: 0.02 cr per tonne-day plus a crew's 2 cr a
+  day, scaled up by how short the consignee is (§7.5.1). The price gap
+  between the two markets, and a planned faction's delivery premium,
+  belong to whoever buys the goods and carries them at their own risk:
+  a trader, or an NPC hauler. So each career earns from its own thing:
+  contracts from hauling, trading from price gaps, mining from what it
+  digs. Contracts used to pay the gap and the premium too, at 3 cr/t-day
+  and 30 cr/day (50–150× NPC upkeep), so a courier on contracts made
+  35–78k cr/h while mining made 1–3k, and nobody would mine.
+- **Mining is unchanged:** ore sells at its market price. A faster laser
+  or a longer tractor barely moves it (+0–15% in the bench). In a courier
+  the 12 t hold forces ~25 station trips an hour, and gluts at the local
+  market set the price. A miner grows by refitting: a gunship with mining
+  lasers in the bow and a cargo bay amidships (43 500 cr) cuts five times
+  as fast. A miner mines in fields the nav list shows clear of raiders
+  (§7.2), and sits a raided stretch out docked.
 
 **Measured** with the career bench (`cargo test -p retrox-client careers
 -- --ignored --nocapture`, `crates/client/src/world/careers.rs`). Bots
 play an hour of each career in a fresh game, seeds 1–4. They fly the real
 world, with turning, nudging around a field and menus charged at a
 practised pilot's pace. They play well, so a new player should expect
-about half these rates.
+somewhat less, contracts most of all (the bot reads a board instantly).
 
 | Career, ship | cr per hour (seeds 1–4) |
 |---|---|
-| Mining, courier (12 t, light laser) | 1 080 · 3 070 · 1 040 · 2 750 |
-| Mining, gunship refit (180 t, 2 lasers) | 2 270 · 7 490 · 1 110 (seeds 1–3) |
-| Trading, courier | 12 900 · 1 580 · 5 190 · 460 |
-| Freight contracts, courier | 17 000 · 8 500 · 18 500 · 9 050 |
-| Trading, hauler (360 t) | 22 800 · 4 730 · 16 000 · 8 670 |
-| Freight contracts, hauler | 42 900 · 31 300 · 50 100 · 44 100 |
+| Mining, courier (12 t, light laser) | 1 950 · 2 990 · 970 · 1 670 |
+| Freight contracts, courier | 4 940 · 3 540 · 5 350 · 3 730 |
+| Trading, courier | 10 060 · 1 570 · 6 580 · −1 010 |
+| Mining, gunship refit (180 t, 2 lasers) | 1 520 · 8 080 · 1 120 · 1 720 |
+| Freight contracts, hauler (360 t) | 13 100 · 12 900 · 10 850 · 11 300 |
+| Trading, hauler | 23 400 · 6 920 · 15 070 · 5 290 |
 
-Trading swings the most because it depends on where you start: planned
-economies hold one price everywhere, so the money is in market space and
-across the border (§5.4). The bot trader also knows prices two jumps out,
-which a player has to learn.
+In a courier, contracts earn about 2.3× mining on average (1.2× to 5.5×
+by seed). Mining needs no capital and never meets a bare board. Trading
+pays best and swings most. Planned economies hold one price everywhere,
+so the money is in market space and across the border (§5.4). A trader
+who guesses wrong loses money. The bot trader also knows prices two jumps
+out, which a player has to learn.
 
-**The ladder** (stock fits): racer 4 060, courier 5 500, interceptor
+**The ladder** (stock fits): racer 4 060, courier 5 930, interceptor
 6 180, light trader 6 590, heavy fighter 10 150; blockade runner 38 800,
 hauler 41 200, gunship 50 500; express freighter 243 000, bulk freighter
-302 000, frigate 413 000. From the courier, the next small ship (the
-light trader, with twice the hold) is under an hour of contracts or about
-two of mining away, and a medium ship 3–5 hours of contracts or about 20
-of mining. A medium freighter takes 6–10 hours
-of contracts to buy a large ship, which leaves fleets and capital ships
-(§7.5) to fill the rest of the ~100-hour arc (§2).
+302 000, frigate 413 000. From the courier and 2 000 cr, the light
+trader (twice the hold) is 1–2 hours of contracts or 2–4 of mining away;
+a medium ship is ~10 hours of contracts or ~20 of mining. A medium
+freighter on contracts takes ~20 hours to buy a large ship, which leaves
+fleets and capital ships (§7.5) the rest of the ~100-hour arc (§2).
 
 **Still open:** a planet city costs ~5 minutes of plain flying per visit
 (down from the fast-travel stop at the well's edge, and back out). That
@@ -614,42 +724,6 @@ Inspiration, not imitation — fictional throughout.
   film grain, period film-stock color grading.
 - **Audio:** analog-synth score, radio static and crackle on comms, heavy
   mechanical sounds for docking, switches, and hull stress.
-
-### 8.2 Sound
-
-Decided while building the soundscape (#76):
-
-- **All synthesized, no samples.** Every sound is made in code from
-  oscillators, noise, filters and resonators (`client/src/audio/`), so
-  the whole game shares one analog character, nothing needs licensing,
-  and cues can be retuned like any other code. One-shot cues render once
-  at startup; continuous sounds run live on the audio thread through
-  kira.
-- **The score is generative**: a small analog ensemble — detuned-saw
-  string pad, filtered bass, sequencer arpeggio through a ping-pong tape
-  delay, a theremin-like lead with blooming vibrato, glassy FM bells, a
-  soft rhythm box — with tape wow on everything. It plays progressions in
-  D Dorian / Aeolian (hopeful, with melancholy), a section at a time.
-  Moods crossfade by situation: *title* (the full theme), *space*
-  (sparse, and it rests in silence now and then), *station* (warmer,
-  with the rhythm box), *transit* (fast travel and jumps: the sequencer
-  driving).
-- **The palette:** heavy mechanisms for anything physical — docking
-  clamps then airlock hiss, the jump drive's breaker, the star chart's
-  motors and relays, bakelite toggles for every switch and button, hull
-  plates groaning on impacts and in transit; radio static with crackle
-  and a squelch tail whenever a message comes over comms; VFD-panel beeps
-  for instruments (menu cursor, targeting, the prospector's sonar ping).
-  Engines are a low roar plus a turbine note that rise with acceleration
-  rather than speed, so cruising is quiet and burns are loud.
-- **The sound follows the game**, not the other way round: the client
-  watches the world each frame and turns what changed into cues and loop
-  levels. Game code only reports what the sound can't see (the speed of a
-  collision).
-- **Volume:** master, music and effects sliders in Settings, heard while
-  dragging. Pausing silences the ship but not the music. Screenshot and
-  scripted runs are silent unless `--sound`; `--mute` silences any run.
-  No audio device means silence, never an error.
 
 ### 8.1 Ship models and liveries
 
@@ -716,6 +790,67 @@ player.
 - The suggested first run is a freight contract: it pays for sure and
   walks the player through launching, the galaxy map, a jump, fast travel
   and docking. Mining and trade are offered as the other ways in.
+### 8.4 Screens and controls
+
+Decided while bringing every screen into one style (issue #77):
+
+- **No stock widgets.** Every list, button and table is painted from the
+  shared kit in `crates/client/src/widgets.rs` (and the HUD helpers in
+  `hud.rs`): lists are **instrument rows** with a hairline under each, a
+  red wash and tab on hover, an amber wash and tab on the selected row;
+  buttons are **push keys** with a darker lip that sink when pressed (red
+  for the one primary action, dark enamel otherwise, outlined in a colour
+  where the colour means something).
+- **Colour carries meaning, consistently:** amber is what you pay, buy,
+  target or have selected; teal is live readings and what you're paid or
+  sell for; red is the primary action and alarms; cream is names.
+  So trade has an amber bank of buy keys and a teal bank of sell keys.
+- **Joined key banks** (`+1 +10 MAX`) rather than loose buttons for steps
+  of one action, like a row of switches on a panel.
+- **Chart symbols** in lists of places: a rayed star, ringed gas giants,
+  stations as teal diamonds, fields as scattered dots; moons hang off their
+  planet on a bracket.
+- **Slot plates:** loadout slots carry a stencilled kind plate coloured by
+  role (weapons red; engines, power and jump amber; shields, radar and RCS
+  teal; radiators and cargo cream).
+- **Key legends** (the corner strip from §8.3, the star chart's legend)
+  are cream keycaps with the action in uppercase mono beside them.
+
+### 8.5 Sound
+
+Decided while building the soundscape (#76):
+
+- **All synthesized, no samples.** Every sound is made in code from
+  oscillators, noise, filters and resonators (`client/src/audio/`), so
+  the whole game shares one analog character, nothing needs licensing,
+  and cues can be retuned like any other code. One-shot cues render once
+  at startup; continuous sounds run live on the audio thread through
+  kira.
+- **The score is generative**: a small analog ensemble — detuned-saw
+  string pad, filtered bass, sequencer arpeggio through a ping-pong tape
+  delay, a theremin-like lead with blooming vibrato, glassy FM bells, a
+  soft rhythm box — with tape wow on everything. It plays progressions in
+  D Dorian / Aeolian (hopeful, with melancholy), a section at a time.
+  Moods crossfade by situation: *title* (the full theme), *space*
+  (sparse, and it rests in silence now and then), *station* (warmer,
+  with the rhythm box), *transit* (fast travel and jumps: the sequencer
+  driving).
+- **The palette:** heavy mechanisms for anything physical — docking
+  clamps then airlock hiss, the jump drive's breaker, the star chart's
+  motors and relays, bakelite toggles for every switch and button, hull
+  plates groaning on impacts and in transit; radio static with crackle
+  and a squelch tail whenever a message comes over comms; VFD-panel beeps
+  for instruments (menu cursor, targeting, the prospector's sonar ping).
+  Engines are a low roar plus a turbine note that rise with acceleration
+  rather than speed, so cruising is quiet and burns are loud.
+- **The sound follows the game**, not the other way round: the client
+  watches the world each frame and turns what changed into cues and loop
+  levels. Game code only reports what the sound can't see (the speed of a
+  collision).
+- **Volume:** master, music and effects sliders in Settings, heard while
+  dragging. Pausing silences the ship but not the music. Screenshot and
+  scripted runs are silent unless `--sound`; `--mute` silences any run.
+  No audio device means silence, never an error.
 
 ## 9. Technical architecture
 

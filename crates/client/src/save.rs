@@ -120,6 +120,9 @@ struct PlayerState {
     /// What the mining laser has done to every field, and the haul.
     #[serde(default)]
     mining: Mining,
+    /// The raider bands fought, and who of them is dead.
+    #[serde(default)]
+    raiders: crate::combat::Bands,
     played_s: f64,
 }
 
@@ -137,6 +140,8 @@ pub fn can_save(world: &World) -> Result<(), &'static str> {
 
 fn saved_mode(world: &World) -> Result<SavedMode, &'static str> {
     match world.mode {
+        Mode::Normal if world.combat.lost.is_some() => Err("can't save: the ship is lost"),
+        Mode::Normal if world.hostiles_near() > 0 => Err("can't save with hostiles near"),
         Mode::Normal => Ok(SavedMode::InSpace),
         Mode::Docked(s) => Ok(SavedMode::Docked(s)),
         Mode::Landed { city, body, timer } if timer <= 0.0 => Ok(SavedMode::Landed { city, body }),
@@ -210,6 +215,7 @@ pub fn snapshot(
         cockpit: world.cockpit,
         player: world.player.clone(),
         mining: world.mining.clone(),
+        raiders: world.combat.bands.clone(),
         played_s,
     };
     let err = |e: serde_json::Error| format!("couldn't write the save: {e}");
@@ -281,6 +287,7 @@ pub fn decode(bytes: &[u8]) -> Result<Loaded, String> {
     world.course = state.course;
     world.cockpit = state.cockpit;
     world.mining = state.mining;
+    world.combat.bands = state.raiders;
     Ok(Loaded {
         header,
         world,
@@ -574,6 +581,7 @@ mod tests {
             ship: OwnedShip {
                 name: "Spare".into(),
                 fit: spare,
+                damage: Default::default(),
             },
             at: here,
         });

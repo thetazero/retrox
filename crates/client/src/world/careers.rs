@@ -118,6 +118,19 @@ impl Bot {
     }
 
     fn cruise_inner(&mut self, place: Place) {
+        // Raiders block fast travel: run until they give up the chase.
+        let mut n = 0;
+        while self.w.hostiles_near() > 0 {
+            let away = self.w.combat_position().normalize_or(DVec3::X);
+            self.w.ship.rot = look_rotation(away);
+            self.w.ship.throttle = throttle_for(450.0);
+            self.frame(Controls {
+                boost: true,
+                ..Default::default()
+            });
+            n += 1;
+            assert!(n < 30 * 300, "couldn't shake raiders in 5 minutes: at {:.0} s, anchor {:?}, frame {:?}, {:.0} m from anchor, {:.0} m/s, target {place:?}", self.real_s, self.w.combat_anchor(), self.w.ship.frame, self.w.combat_position().length(), self.w.ship.vel.length());
+        }
         self.w.target = Some(place);
         self.w.act(Action::FastTravel);
         let mut n = 0;
@@ -166,8 +179,11 @@ impl Bot {
             n += 1;
             assert!(
                 n < 30 * 600,
-                "approach to {place:?} took over 10 minutes: {d:.0} m off, {:.0} m/s, within {within:.0}, mode {:?}",
+                "approach to {place:?} took over 10 minutes: {d:.0} m off, {:.0} m/s, within {within:.0}, hostiles {}, accel {:.1}, said {:?}, mode {:?}",
                 self.w.ship.vel.length(),
+                self.w.hostiles_near(),
+                self.w.stats().acceleration(),
+                self.w.message,
                 self.w.mode
             );
         }
@@ -321,7 +337,10 @@ fn mine_hold(b: &mut Bot, until: f64) -> f64 {
                 .min_by(|a, c| (*a - ship).length().total_cmp(&(*c - ship).length()))
         });
         if let Some(pos) = nugget {
-            hop(b, pos + DVec3::Y * 12.0);
+            // Within the tractor's reach it comes to you; else go to it.
+            if (pos - ship).length() > crate::mining::TRACTOR_RANGE * 0.8 {
+                hop(b, pos + DVec3::Y * 12.0);
+            }
             b.idle(1.0);
             continue;
         }
@@ -429,15 +448,18 @@ fn mining_hour(seed: u64) {
     let start = b.worth();
     let mut mined = 0.0;
     let mut in_field = 0.0;
-    // A miner sets up where there's a field and a station to sell at (a
-    // city costs minutes of flying down its well and back out each trip).
+    // A miner sets up where there's a field without raiders (the nav list
+    // marks them) and a station to sell at (a city costs minutes of flying
+    // down its well and back out each trip).
     let systems: Vec<_> = b.w.galaxy.systems.iter().map(|(id, _)| id).collect();
+    let epoch = (b.w.t_days() / crate::combat::BAND_DAYS) as u64;
+    let quiet = |w: &World, sys, f| crate::combat::band(&w.galaxy, sys, f, epoch).is_empty();
     let home = systems
         .iter()
         .copied()
         .find(|&id| {
             let v = SystemView::new(&b.w.galaxy, id);
-            !v.fields.is_empty() && !v.stations.is_empty()
+            !v.stations.is_empty() && v.fields.iter().any(|&f| quiet(&b.w, id, f))
         })
         .or_else(|| {
             systems.iter().copied().find(|&id| {
@@ -455,7 +477,23 @@ fn mining_hour(seed: u64) {
     b.go(port);
     let begin = b.real_s;
     while b.real_s - begin < HOUR {
-        let field = b.w.view.fields[0];
+        let quiet_field = |w: &World| {
+            w.view
+                .fields
+                .iter()
+                .copied()
+                .find(|&f| !w.raiders_reported(f))
+        };
+        // Every field has a band out: sit it out docked, a day at a time.
+        let mut waited = 0;
+        while quiet_field(&b.w).is_none() && waited < 60 {
+            b.w.act(Action::Wait(1));
+            while b.w.waiting.is_some() {
+                b.frame(Controls::default());
+            }
+            waited += 1;
+        }
+        let field = quiet_field(&b.w).unwrap_or(b.w.view.fields[0]);
         b.leave();
         b.cruise(Place::Field(field));
         b.approach(

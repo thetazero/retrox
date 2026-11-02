@@ -106,6 +106,10 @@ const ICE: u32 = 5u;
 const LAVA: u32 = 6u;
 const DESERT: u32 = 7u;
 const BARREN: u32 = 8u;
+// Glows (fs_glow, additive).
+const SHIELD: u32 = 20u;
+const FIRE: u32 = 21u;
+const RING: u32 = 22u;
 
 // Paints for built things (must match meshes.rs).
 const HULL: u32 = 0u;
@@ -235,10 +239,70 @@ fn built(i: VOut, n: vec3<f32>, mu: f32, fw: vec3<f32>) -> vec3<f32> {
     let highlight = pow(max(dot(n, h), 0.0), gloss) * spec * step(0.0, ndl) * i.light.w;
     // Cool rim so silhouettes read against the sky.
     let rim = pow(1.0 - mu, 4.0) * vec3<f32>(0.1, 0.16, 0.22);
+    // Battle damage: soot blooming over the paint in patches, and on a
+    // burnt-out wreck, embers glowing in the cracks.
+    let scorch = i.color.a;
+    if (scorch > 0.0) {
+        let q = i.obj * 0.45 + vec3<f32>(i.params.z * 3.1);
+        let soot_mask = fbm(q);
+        let burnt = smoothstep(1.0 - scorch * 1.1, 1.05 - scorch * 0.9, soot_mask);
+        base = mix(base, vec3<f32>(0.025, 0.02, 0.018), burnt * 0.92);
+        spec = spec * (1.0 - burnt);
+        let crack = 1.0 - smoothstep(0.0, 0.035, abs(fbm(q * 2.7 + vec3<f32>(5.0)) - 0.5));
+        let hot = smoothstep(0.85, 1.0, scorch);
+        let flicker = 0.75 + 0.25 * sin(g.misc.x * 7.0 + soot_mask * 30.0);
+        emissive = emissive + vec3<f32>(1.0, 0.32, 0.06) * crack * burnt * hot * flicker * 3.0;
+    }
+
     var color = base * (lit * light_color + ambient_light(n) * 2.0 + vec3<f32>(0.04 * mu))
         + highlight * light_color + rim + emissive;
     color = color + i.color.rgb * i.params.y;
     return color;
+}
+
+// Additive glows over the solid scene. light.w is how far through its
+// life the glow is (0..1); params.y its strength.
+@fragment
+fn fs_glow(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    let mode = u32(round(i.params.x));
+    // Spheres show their near side only; rings both.
+    if (!front && mode != RING) { discard; }
+    let n = normalize(i.normal);
+    let mu = clamp(dot(n, i.view_dir), 0.0, 1.0);
+    let k = clamp(i.light.w, 0.0, 1.0);
+    let fade = (1.0 - k) * (1.0 - k);
+    let t = g.misc.x;
+
+    if (mode == SHIELD) {
+        // A field of fine horizontal scan bands, faint at the limb and
+        // flaring round where the shot struck.
+        let d = normalize(i.obj);
+        let at = max(dot(d, normalize(i.light.xyz)), 0.0);
+        let spot = pow(at, 14.0) * 2.4 + pow(at, 4.0) * 0.35;
+        let rim = pow(1.0 - mu, 4.0) * 0.18;
+        let bands = 0.55 + 0.45 * sin(i.obj.y * 26.0 - t * 18.0);
+        let ripple = 0.6 + 0.4 * sin(acos(clamp(dot(d, normalize(i.light.xyz)), -1.0, 1.0)) * 18.0 - k * 30.0);
+        let glow = (rim * bands + spot * ripple) * fade * i.params.y;
+        return vec4<f32>(i.color.rgb * glow, 1.0);
+    }
+    if (mode == FIRE) {
+        // Churning flame: white-hot at the start and in the core, cooling
+        // through orange to a dull red as it spreads.
+        let p = i.obj * 2.2 + vec3<f32>(i.params.z * 7.0, i.params.z, t * 0.4);
+        let churn = fbm(p + vec3<f32>(fbm(p * 1.7) * 1.5));
+        let core = pow(mu, 0.8);
+        let heat = clamp((churn * 1.3 - 0.2) * core * (1.15 - k) * 1.4, 0.0, 1.5);
+        let cool = vec3<f32>(0.55, 0.08, 0.02);
+        let warm = vec3<f32>(1.0, 0.42, 0.08);
+        let white = vec3<f32>(1.0, 0.9, 0.7);
+        var c = mix(cool, warm, smoothstep(0.15, 0.6, heat));
+        c = mix(c, white, smoothstep(0.75, 1.2, heat) * (1.0 - k));
+        let edge = smoothstep(0.05, 0.35, mu);
+        return vec4<f32>(c * heat * edge * fade * i.params.y, 1.0);
+    }
+    // RING: lit at the rim.
+    let rim = pow(1.0 - mu, 2.0);
+    return vec4<f32>(i.color.rgb * rim * fade * i.params.y, 1.0);
 }
 
 @fragment

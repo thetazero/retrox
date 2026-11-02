@@ -116,7 +116,8 @@ pub const RACER_BODY: Section = Section {
     ],
 };
 
-/// Small hold, big engine: high-value cargo, delivered fast.
+/// Small hold, big engine: high-value cargo, delivered fast. A chin mount
+/// for a mining laser and a belly gun to defend it.
 pub const COURIER_BODY: Section = Section {
     id: "courier-body",
     name: "Courier body",
@@ -140,6 +141,9 @@ pub const COURIER_BODY: Section = Section {
         slot(Cargo, S, [-0.9, -0.4, 1.0]),
         slot(Cargo, S, [0.9, -0.4, 1.0]),
         slot(JumpDrive, S, [0.0, 0.0, 0.0]),
+        // A belly gun behind the chin mount, so a new pilot can defend
+        // themselves (added last, so older saves keep their slots).
+        slot(Weapon, S, [0.0, -1.25, 1.0]),
     ],
 };
 

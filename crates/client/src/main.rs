@@ -6,13 +6,15 @@
 //!
 //! Development flags skip the title and drop straight into a fresh game:
 //! `--seed N`, `--station`, `--undocked`, `--map`, `--course <jumps>`,
-//! `--ship <hull>`,
+//! `--ship <hull>`, `--screen <trade|hangar|shipyard|contracts>`,
+//! `--combat` (by a raider band), `--brawl` (in a fight),
 //! `--ship-view <deg>`, `--screenshot <path.ppm>`. `--menu <page>` opens a
 //! menu page instead (`title`, `new`, `load`, `settings`, `handbook[:chapter]`, or `pause` or `quit`
 //! over a fresh game), for screenshots. `--keys` plays a key script
 //! (see [`Flags::keys`]).
 
 mod audio;
+mod combat;
 mod contracts;
 mod contracts_ui;
 mod guide;
@@ -31,6 +33,7 @@ mod station_ui;
 mod title;
 mod trade;
 mod traffic;
+mod widgets;
 mod world;
 
 use std::collections::HashSet;
@@ -67,6 +70,10 @@ struct Flags {
     field: bool,
     /// Start in space alongside a trader fleet.
     traffic: bool,
+    /// Start in the nearest asteroid field with raiders, for them to find.
+    combat: bool,
+    /// With `combat`: the band close in front, battered, fighting at once.
+    brawl: bool,
     /// Hold the mining laser's trigger down (for screenshots).
     fire: bool,
     /// Start on the dispatch board.
@@ -91,6 +98,9 @@ struct Flags {
     ship_view: Option<f64>,
     /// Open this menu page.
     menu: Option<String>,
+    /// Docked: open this station screen (`trade`, `hangar`, `shipyard`,
+    /// `contracts`). Implies `--station`.
+    screen: Option<String>,
     /// Press these keys, one a frame (`--keys down,enter,wait60,esc`), as
     /// if typed; `waitN` waits N frames (and any wait lasts until a game
     /// being started is ready). Quits when done, unless `--screenshot`
@@ -111,6 +121,8 @@ impl Flags {
             station: has("--station"),
             field: has("--field"),
             traffic: has("--traffic"),
+            combat: has("--combat") || has("--brawl"),
+            brawl: has("--brawl"),
             fire: has("--fire"),
             contracts: has("--contracts") || has("--contract"),
             take_contract: has("--contract"),
@@ -121,6 +133,7 @@ impl Flags {
             screenshot: value("--screenshot").map(PathBuf::from),
             ship_view: value("--ship-view").and_then(|s| s.parse().ok()),
             menu: value("--menu"),
+            screen: value("--screen"),
             keys: value("--keys")
                 .map(|k| k.split(',').map(|s| s.trim().to_lowercase()).collect())
                 .unwrap_or_default(),
@@ -139,12 +152,14 @@ impl Flags {
                     || self.station
                     || self.field
                     || self.traffic
+                    || self.combat
                     || self.contracts
                     || self.map
                     || self.course.is_some()
                     || self.ship.is_some()
                     || self.ship_view.is_some()
                     || self.screenshot.is_some()
+                    || self.screen.is_some()
             }
         }
     }
@@ -152,7 +167,7 @@ impl Flags {
     /// A fresh world set up as the flags ask.
     fn world(&self) -> World {
         let mut world = World::new(self.seed.unwrap_or(1));
-        if self.station {
+        if self.station || self.screen.is_some() {
             world.start_at_station();
         }
         if let Some(mut fit) = self.ship.as_deref().and_then(retrox_content::ships::stock) {
@@ -163,6 +178,20 @@ impl Flags {
         }
         if self.contracts {
             world.act(Action::Open(Screen::Contracts));
+        }
+        let screen = match self.screen.as_deref() {
+            Some("trade") => Some(Screen::Trade),
+            Some("hangar") => Some(Screen::Hangar),
+            Some("shipyard") => Some(Screen::Shipyard),
+            Some("contracts") => Some(Screen::Contracts),
+            Some(other) => {
+                eprintln!("--screen: no screen {other}");
+                None
+            }
+            None => None,
+        };
+        if let Some(screen) = screen {
+            world.act(Action::Open(screen));
         }
         if self.take_contract {
             world.act(Action::AcceptContract(0));
@@ -188,6 +217,11 @@ impl Flags {
         }
         if self.traffic {
             world.start_by_traffic();
+        }
+        if self.brawl {
+            world.stage_brawl();
+        } else if self.combat {
+            world.start_by_raiders();
         }
         world.map_open = self.map;
         if let Some(jumps) = self.course {
@@ -242,6 +276,10 @@ struct Meshes {
     ship_cache: std::collections::HashMap<String, (MeshId, meshes::ShipShape)>,
     hangar_bay: MeshId,
     rocks: Vec<MeshId>,
+    /// A unit cube: hull plates flung off in explosions.
+    plate: MeshId,
+    /// A thin unit ring: shockwaves.
+    ring: MeshId,
     /// One mesh per station in the current system, aligned with `view.stations`.
     stations: Vec<MeshId>,
     /// The world's `system_generation` the stations and sky were built
@@ -360,6 +398,8 @@ impl ApplicationHandler for App {
                 .collect(),
             stations: Vec::new(),
             system_generation: u64::MAX,
+            plate: renderer.add_mesh(&meshes::cube()),
+            ring: renderer.add_mesh(&meshes::torus(0.035, 64, 6)),
         };
 
         let egui_ctx = egui::Context::default();
@@ -812,6 +852,7 @@ impl Running {
                 KeyCode::KeyZ => Some(Action::ToggleFlightAssist),
                 KeyCode::KeyM => Some(Action::ToggleMap),
                 KeyCode::KeyG => Some(Action::Scan),
+                KeyCode::KeyY => Some(Action::CycleHostile),
                 KeyCode::KeyX => {
                     world.ship.throttle = 0.0;
                     None
@@ -904,6 +945,15 @@ impl Running {
                     _ => self.audio.ui_nav(),
                 }
             }
+        } else if self
+            .game
+            .as_ref()
+            .is_some_and(|g| g.world.combat.lost.is_some_and(|t| t > 1.2))
+            && keys
+                .iter()
+                .any(|k| matches!(k, KeyCode::Enter | KeyCode::NumpadEnter))
+        {
+            self.restore_checkpoint();
         } else {
             let (controls, actions, pause) = self.controls(dt, keys);
             frame_controls = Some(controls);
@@ -1076,6 +1126,7 @@ impl Running {
                         'm' => Some(KeyCode::KeyM),
                         'h' => Some(KeyCode::KeyH),
                         'g' => Some(KeyCode::KeyG),
+                        'y' => Some(KeyCode::KeyY),
                         _ => None,
                     };
                     self.just_pressed.extend(code);
@@ -1087,6 +1138,28 @@ impl Running {
         };
         self.just_pressed.push(key);
         self.script_wait = 2;
+    }
+
+    /// The ship was destroyed: go back to the game's last checkpoint
+    /// (DESIGN §7.7), or to the title if it has none.
+    fn restore_checkpoint(&mut self) {
+        let Some(game) = &self.game else { return };
+        let id = game.id.id.clone();
+        self.saves = save::list(&self.data);
+        let newest = self
+            .saves
+            .iter()
+            .filter_map(|e| Some((e.header.as_ref().ok()?, e)))
+            .filter(|(h, _)| h.game.id == id && h.kind == Kind::Checkpoint)
+            .max_by_key(|(h, _)| h.saved)
+            .map(|(_, e)| e.path.clone());
+        match newest {
+            Some(path) => self.apply(MenuAction::Load(path)),
+            None => {
+                self.back_to_title();
+                self.toast("No checkpoint to go back to", false);
+            }
+        }
     }
 
     /// Write a checkpoint on arriving at a station or city (DESIGN §7.7).
@@ -1149,14 +1222,17 @@ impl Running {
                     .map(|c| c.fit.clone())
                     .collect();
                 let traffic: Vec<_> = fits.iter().map(|fit| self.ship_mesh(fit)).collect();
+                // Raiders, then wrecks.
+                let combat = &self.game.as_ref().expect("playing").world.combat;
+                let fits: Vec<_> = (combat.raiders.iter().map(|r| r.vessel.fit.clone()))
+                    .chain(combat.wrecks.iter().map(|w| w.fit.clone()))
+                    .collect();
+                let fighting: Vec<_> = fits.iter().map(|fit| self.ship_mesh(fit)).collect();
                 let world = &self.game.as_ref().expect("playing").world;
                 let view = Mat4::from_quat(cam_rot.as_quat().inverse());
-                (
-                    proj * view,
-                    scene(world, &self.meshes, &traffic, cam_pos),
-                    cam_pos,
-                    star,
-                )
+                let mut instances = scene(world, &self.meshes, &traffic, cam_pos);
+                combat_scene(world, &self.meshes, &fighting, cam_pos, &mut instances);
+                (proj * view, instances, cam_pos, star)
             }
         }
     }
@@ -1275,7 +1351,9 @@ fn scene(
 
     traffic_scene(world, meshes, traffic, cam, &mut out);
 
-    let hidden = world.cockpit || !matches!(world.mode, Mode::Normal | Mode::FastTravel(_));
+    let hidden = world.cockpit
+        || world.combat.lost.is_some()
+        || !matches!(world.mode, Mode::Normal | Mode::FastTravel(_));
     if !hidden {
         let pos = world.ship_position();
         let rot = world.ship.rot.as_quat();
@@ -1289,7 +1367,8 @@ fn scene(
                 0.0,
                 light(pos),
             )
-            .with_detail(0.5),
+            .with_detail(0.5)
+            .with_scorch(battle_scorch(world.combat.player.hull_left())),
         ));
         // Engine plumes, growing with the throttle.
         let thrust = world.ship.throttle.max(0.0) as f32;
@@ -1421,6 +1500,295 @@ fn traffic_scene(
                     ),
                 ));
             }
+        }
+    }
+}
+
+/// How scorched a ship looks with this much hull left.
+fn battle_scorch(hull_left: f64) -> f32 {
+    (((1.0 - hull_left) * 0.8) as f32).clamp(0.0, 0.8)
+}
+
+/// Tracer and pulse colours: the player's guns warm cream, everyone
+/// else's red.
+fn gun_color(side: combat::Side, laser: bool) -> [f32; 3] {
+    match (side, laser) {
+        (combat::Side::Player, false) => [1.0, 0.8, 0.45],
+        (combat::Side::Player, true) => [0.5, 1.0, 0.88],
+        (_, false) => [1.0, 0.3, 0.14],
+        (_, true) => [1.0, 0.18, 0.32],
+    }
+}
+
+/// The fight: raiders and wrecks, shells and pulses, shields lighting up,
+/// sparks, fireballs, shockwaves and flying plates. `ships` holds the
+/// raiders' meshes, then the wrecks'.
+fn combat_scene(
+    world: &World,
+    meshes: &Meshes,
+    ships: &[(MeshId, meshes::ShipShape)],
+    cam: DVec3,
+    out: &mut Vec<(MeshId, Instance)>,
+) {
+    let c = &world.combat;
+    let origin = world.combat_origin();
+    let rel = |p: DVec3| (origin + p - cam).as_vec3();
+    let light = |p: DVec3| {
+        let dir = (-(origin + p)).normalize_or(DVec3::Y).as_vec3();
+        [dir.x, dir.y, dir.z, 1.3]
+    };
+    let glow = |m: Mat4, color: [f32; 3], surface: Surface, strength: f32, light: [f32; 4]| {
+        Instance::new(m, color, surface, strength, 0.0, light)
+    };
+    let unlit = [0.0, 1.0, 0.0, 1.0];
+
+    let (raider_meshes, wreck_meshes) = ships.split_at(c.raiders.len().min(ships.len()));
+    for (r, (mesh, shape)) in c.raiders.iter().zip(raider_meshes) {
+        let q = r.craft.rot.as_quat();
+        let pos = r.craft.pos;
+        out.push((
+            *mesh,
+            Instance::new(
+                Mat4::from_rotation_translation(q, rel(pos)),
+                [0.8, 0.75, 0.64],
+                Surface::Plain,
+                0.0,
+                r.id as f32,
+                light(pos),
+            )
+            .with_detail(0.5)
+            .with_scorch(battle_scorch(r.vessel.hull_left())),
+        ));
+        let burn = r.burn.max(0.15) as f32;
+        for &(nozzle, radius) in &shape.nozzles {
+            let len = radius * (1.0 + 3.0 * burn);
+            out.push((
+                meshes.sphere,
+                glow(
+                    Mat4::from_scale_rotation_translation(
+                        Vec3::new(radius * 0.8, radius * 0.8, len),
+                        q,
+                        rel(pos) + q * (nozzle + Vec3::Z * len * 0.6),
+                    ),
+                    [1.0, 0.45, 0.25],
+                    Surface::Star,
+                    1.2 + 2.5 * burn,
+                    unlit,
+                ),
+            ));
+        }
+    }
+    for (w, (mesh, _)) in c.wrecks.iter().zip(wreck_meshes) {
+        // Embers die down over the first minute.
+        let scorch = 1.0 - (w.age / 60.0).min(1.0) as f32 * 0.14;
+        out.push((
+            *mesh,
+            Instance::new(
+                Mat4::from_rotation_translation(w.rot().as_quat(), rel(w.pos)),
+                [0.8, 0.75, 0.64],
+                Surface::Plain,
+                0.0,
+                7.0,
+                light(w.pos),
+            )
+            .with_detail(0.5)
+            .with_scorch(scorch),
+        ));
+    }
+
+    // Shells: streaks along their flight.
+    for s in &c.shots {
+        // One about to pass through the camera would fill the screen.
+        let near = (origin + s.pos - cam).length();
+        if near < 25.0 {
+            continue;
+        }
+        let len = (s.vel.length() * 0.012).clamp(6.0, 30.0) as f32;
+        out.push((
+            meshes.sphere,
+            glow(
+                Mat4::from_scale_rotation_translation(
+                    Vec3::new(0.24, 0.24, len),
+                    world::look_rotation(s.vel).as_quat(),
+                    rel(s.pos),
+                ),
+                gun_color(s.from, false),
+                Surface::Star,
+                5.0,
+                unlit,
+            ),
+        ));
+    }
+    for p in &c.pulses {
+        let len = (p.to - p.from).length();
+        let k = (p.age / combat::PULSE_LIFE) as f32;
+        out.push((
+            meshes.sphere,
+            glow(
+                Mat4::from_scale_rotation_translation(
+                    Vec3::new(0.3, 0.3, len as f32 / 2.0),
+                    world::look_rotation(p.to - p.from).as_quat(),
+                    rel((p.from + p.to) / 2.0),
+                ),
+                gun_color(p.side, true),
+                Surface::Star,
+                7.0 * (1.0 - k),
+                unlit,
+            ),
+        ));
+    }
+
+    for f in &c.flashes {
+        let k = (f.age / f.life) as f32;
+        match f.kind {
+            combat::FlashKind::Muzzle => out.push((
+                meshes.sphere,
+                glow(
+                    Mat4::from_scale_rotation_translation(
+                        Vec3::splat(f.size as f32 * (1.0 - 0.5 * k)),
+                        Quat::IDENTITY,
+                        rel(f.pos),
+                    ),
+                    [1.0, 0.82, 0.55],
+                    Surface::Star,
+                    4.0 * (1.0 - k),
+                    unlit,
+                ),
+            )),
+            combat::FlashKind::Spark => out.push((
+                meshes.sphere,
+                glow(
+                    Mat4::from_scale_rotation_translation(
+                        Vec3::splat(f.size as f32 * (0.4 + 0.6 * k.sqrt())),
+                        Quat::IDENTITY,
+                        rel(f.pos),
+                    ),
+                    [1.0, 0.7, 0.4],
+                    Surface::Star,
+                    8.0 * (1.0 - k).powi(2),
+                    unlit,
+                ),
+            )),
+            combat::FlashKind::Shield { ship, dir } => {
+                let (vessel, craft) = match ship {
+                    combat::Side::Player if !world.cockpit => (&c.player, world.player_craft()),
+                    combat::Side::Raider(id) => match c.raider(id) {
+                        Some(r) => (&r.vessel, r.craft),
+                        None => continue,
+                    },
+                    combat::Side::Player => continue,
+                };
+                let (across, along) = vessel.bubble();
+                out.push((
+                    meshes.sphere,
+                    glow(
+                        Mat4::from_scale_rotation_translation(
+                            Vec3::new(across as f32, across as f32, along as f32),
+                            craft.rot.as_quat(),
+                            rel(craft.pos),
+                        ),
+                        [0.3, 0.85, 1.0],
+                        Surface::Shield,
+                        if ship == combat::Side::Player {
+                            0.7
+                        } else {
+                            1.6
+                        },
+                        [dir.x as f32, dir.y as f32, dir.z as f32, k],
+                    ),
+                ));
+            }
+        }
+    }
+
+    for b in c.blasts.iter().filter(|b| b.age >= 0.0) {
+        let k = (b.age / b.life) as f32;
+        let grow = 1.0 - (1.0 - k).powi(3);
+        let r = b.radius as f32 * (0.3 + 0.8 * grow);
+        out.push((
+            meshes.sphere,
+            Instance::new(
+                Mat4::from_scale_rotation_translation(Vec3::splat(r), Quat::IDENTITY, rel(b.pos)),
+                [1.0, 0.5, 0.2],
+                Surface::Fire,
+                3.0,
+                b.seed as f32,
+                [0.0, 1.0, 0.0, k],
+            ),
+        ));
+        // A blinding core, for the first moment.
+        if k < 0.12 {
+            out.push((
+                meshes.sphere,
+                glow(
+                    Mat4::from_scale_rotation_translation(
+                        Vec3::splat(b.radius as f32 * 0.45),
+                        Quat::IDENTITY,
+                        rel(b.pos),
+                    ),
+                    [1.0, 0.92, 0.78],
+                    Surface::Star,
+                    30.0 * (1.0 - k / 0.12),
+                    unlit,
+                ),
+            ));
+        }
+        // The shockwave: a ring racing out, tilted by the blast's seed.
+        if !b.ring {
+            continue;
+        }
+        let tilt =
+            Quat::from_rotation_x(b.seed as f32 * 1.7) * Quat::from_rotation_z(b.seed as f32 * 0.9);
+        out.push((
+            meshes.ring,
+            glow(
+                Mat4::from_scale_rotation_translation(
+                    Vec3::splat(b.radius as f32 * (0.4 + 2.6 * k.sqrt())),
+                    tilt,
+                    rel(b.pos),
+                ),
+                [1.0, 0.62, 0.32],
+                Surface::Ring,
+                2.4,
+                [0.0, 1.0, 0.0, k],
+            ),
+        ));
+    }
+
+    for d in &c.debris {
+        let k = (d.age / d.life) as f32;
+        if d.ember {
+            out.push((
+                meshes.sphere,
+                glow(
+                    Mat4::from_scale_rotation_translation(
+                        Vec3::splat(d.size.x as f32 * (1.0 - k * 0.6)),
+                        Quat::IDENTITY,
+                        rel(d.pos),
+                    ),
+                    [1.0, 0.48, 0.14],
+                    Surface::Star,
+                    8.0 * (1.0 - k),
+                    unlit,
+                ),
+            ));
+        } else {
+            out.push((
+                meshes.plate,
+                Instance::new(
+                    Mat4::from_scale_rotation_translation(
+                        d.size.as_vec3(),
+                        d.rot().as_quat(),
+                        rel(d.pos),
+                    ),
+                    [0.55, 0.52, 0.46],
+                    Surface::Plain,
+                    0.0,
+                    3.0,
+                    light(d.pos),
+                )
+                .with_scorch(0.7 + 0.3 * (1.0 - (d.age / 8.0).min(1.0) as f32)),
+            ));
         }
     }
 }

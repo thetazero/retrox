@@ -156,8 +156,9 @@ pub fn draw(ctx: &egui::Context, h: &HudInput) {
         }
     }
 
-    // The rock under the reticle.
-    if let Some(aim) = w.mining.aim {
+    // The rock under the reticle (not mid-fight: the target's box is
+    // what matters then).
+    if let Some(aim) = w.mining.aim.filter(|_| w.hostiles_near() == 0) {
         let rock = aim.rock;
         let pos = match &w.field_rocks {
             Some((field, _)) => w.position(Place::Field(*field)) + rock.pos,
