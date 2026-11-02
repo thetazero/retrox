@@ -621,6 +621,32 @@ pub(crate) fn roll_losses(
     survived
 }
 
+/// One ship of `fleet` is destroyed (the player shot it down): it takes
+/// its share of the cargo with it. Returns what it was carrying.
+pub fn ship_destroyed(state: &mut GalaxyState, company: CompanyId, fleet: u32) -> Option<Cargo> {
+    let n = fleet_index(state, company, fleet)?;
+    let f = &state.companies[company].fleets[n];
+    let to = match f.at {
+        Location::Docked(s) => s,
+        Location::Travelling { to, .. } | Location::Flying { to } => to,
+    };
+    let lost = f.cargo.map(|c| Cargo {
+        good: c.good,
+        amount: c.amount / f64::from(f.ships.max(1)),
+    });
+    if f.ships <= 1 {
+        lose_fleet(state, company, n, to);
+        return lost;
+    }
+    let f = &mut state.companies[company].fleets[n];
+    f.ships -= 1;
+    if let (Some(c), Some(l)) = (f.cargo.as_mut(), lost) {
+        c.amount -= l.amount;
+        state.traffic.add(to, l.good, -l.amount);
+    }
+    lost
+}
+
 /// A fleet bound for `to` is lost with everything aboard.
 pub(crate) fn lose_fleet(state: &mut GalaxyState, key: CompanyId, n: usize, to: SettlementId) {
     if let Some(cargo) = state.companies[key].fleets[n].cargo {

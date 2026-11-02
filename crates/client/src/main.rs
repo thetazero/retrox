@@ -925,6 +925,7 @@ impl Running {
                 KeyCode::KeyM => Some(Action::ToggleMap),
                 KeyCode::KeyG => Some(Action::Scan),
                 KeyCode::KeyY => Some(Action::CycleHostile),
+                KeyCode::KeyI => Some(Action::Intercept),
                 KeyCode::KeyX => {
                     world.ship.throttle = 0.0;
                     None
@@ -1357,6 +1358,13 @@ impl Running {
                     .map(|c| c.fit.clone())
                     .collect();
                 let traffic: Vec<_> = fits.iter().map(|fit| self.ship_mesh(fit)).collect();
+                let fits: Vec<_> = (self.game.as_ref().expect("playing").world)
+                    .traffic
+                    .pirates
+                    .iter()
+                    .flat_map(|c| c.fits.iter().cloned())
+                    .collect();
+                let pirates: Vec<_> = fits.iter().map(|fit| self.ship_mesh(fit)).collect();
                 // Raiders, then wrecks.
                 let combat = &self.game.as_ref().expect("playing").world.combat;
                 let fits: Vec<_> = (combat.raiders.iter().map(|r| r.vessel.fit.clone()))
@@ -1366,6 +1374,7 @@ impl Running {
                 let world = &self.game.as_ref().expect("playing").world;
                 let view = Mat4::from_quat(cam_rot.as_quat().inverse());
                 let mut instances = scene(world, &self.meshes, &traffic, cam_pos);
+                pirate_scene(world, &self.meshes, &pirates, cam_pos, &mut instances);
                 combat_scene(world, &self.meshes, &fighting, cam_pos, &mut instances);
                 (proj * view, instances, cam_pos, star)
             }
@@ -1594,7 +1603,8 @@ fn traffic_scene(
         [dir.x, dir.y, dir.z, 1.3]
     };
     for (c, (mesh, shape)) in world.traffic.contacts.iter().zip(traffic) {
-        if (c.pos - cam).length() > TRAFFIC_DRAW_M {
+        // A fleet in the fight's scene is drawn as its ships there.
+        if (c.pos - cam).length() > TRAFFIC_DRAW_M || world.combat.has_convoy(c.key) {
             continue;
         }
         let burn = (c.thrust.length() / c.accel.max(1e-9)).clamp(0.0, 1.0) as f32;
@@ -1628,6 +1638,69 @@ fn traffic_scene(
                             rel(pos) + q * (nozzle + Vec3::Z * len * 0.6),
                         ),
                         [0.35, 0.7, 1.0],
+                        Surface::Star,
+                        1.2 + 2.5 * burn,
+                        0.0,
+                        [0.0, 1.0, 0.0, 1.0],
+                    ),
+                ));
+            }
+        }
+    }
+}
+
+/// Pirate gangs flying in this system: each gang's ships in formation,
+/// drawn like the traders.
+fn pirate_scene(
+    world: &World,
+    meshes: &Meshes,
+    ships: &[(MeshId, meshes::ShipShape)],
+    cam: DVec3,
+    out: &mut Vec<(MeshId, Instance)>,
+) {
+    let rel = |p: DVec3| (p - cam).as_vec3();
+    let light = |p: DVec3| {
+        let dir = (-p).normalize_or(DVec3::Y).as_vec3();
+        [dir.x, dir.y, dir.z, 1.3]
+    };
+    let mut next = ships.iter();
+    for c in &world.traffic.pirates {
+        let these: Vec<_> = next.by_ref().take(c.fits.len()).collect();
+        if (c.pos - cam).length() > TRAFFIC_DRAW_M {
+            continue;
+        }
+        let burn = (c.thrust.length() / c.accel.max(1e-9)).clamp(0.0, 1.0) as f32;
+        let heading = if burn > 0.02 { c.thrust } else { c.vel };
+        let rot = world::look_rotation(heading.normalize_or(DVec3::NEG_Z));
+        let seed = c.gang.data().as_ffi();
+        let length = c.fits.first().map_or(20.0, |f| f.stats().length_m);
+        let offsets = traffic::formation(c.fits.len() as u32, length, seed);
+        for ((mesh, shape), offset) in these.into_iter().zip(offsets) {
+            let pos = c.pos + rot * offset;
+            let q = rot.as_quat();
+            out.push((
+                *mesh,
+                Instance::new(
+                    Mat4::from_rotation_translation(q, rel(pos)),
+                    [0.8, 0.75, 0.64],
+                    Surface::Plain,
+                    0.0,
+                    0.0,
+                    light(pos),
+                )
+                .with_detail(0.5),
+            ));
+            for &(nozzle, r) in shape.nozzles.iter().filter(|_| burn > 0.02) {
+                let len = r * (1.0 + 3.0 * burn);
+                out.push((
+                    meshes.sphere,
+                    Instance::new(
+                        Mat4::from_scale_rotation_translation(
+                            Vec3::new(r * 0.8, r * 0.8, len),
+                            q,
+                            rel(pos) + q * (nozzle + Vec3::Z * len * 0.6),
+                        ),
+                        [1.0, 0.45, 0.25],
                         Surface::Star,
                         1.2 + 2.5 * burn,
                         0.0,

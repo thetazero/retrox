@@ -94,11 +94,14 @@ impl World {
     /// of it. Climbing: just past the well's edge, facing where the ship is
     /// headed next (or straight up from where it is).
     pub(super) fn fast_travel_goal(&self, leg: Leg, ship: DVec3, t: f64) -> Goal {
+        if let Leg::Intercept(fleet) = leg {
+            return self.intercept_goal(fleet, ship, t);
+        }
         let place = leg.frame();
         let centre = self.position_at(place, t);
         let up = (ship - centre).normalize_or(DVec3::Z);
         let (side, distance) = match leg {
-            Leg::To(_) => (up, self.arrival_distance(place)),
+            Leg::To(_) | Leg::Intercept(_) => (up, self.arrival_distance(place)),
             Leg::Climb { well, toward } => {
                 let side = toward.map_or(up, |next| {
                     (self.position_at(next, t) - centre).normalize_or(up)
@@ -218,6 +221,14 @@ impl World {
         self.say(match leg {
             Leg::To(_) => format!("Arrived at {name}"),
             Leg::Climb { .. } => format!("Clear of the gravity well of {name}"),
+            Leg::Intercept(fleet) => {
+                let company = self
+                    .galaxy
+                    .companies
+                    .get(fleet.0)
+                    .map_or("the convoy", |c| c.name.as_str());
+                format!("Alongside {company}")
+            }
         });
     }
 

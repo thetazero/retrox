@@ -221,6 +221,9 @@ fn duel(raider: &str, fight_back: bool, seconds: f64) -> (f64, bool, bool) {
         jink_t: 0.0,
         burst: 0.0,
         home: DVec3::ZERO,
+        crew: Crew::Pirate,
+        hostile: true,
+        slot: None,
     });
     c.target = Some(0);
     let dt = 1.0 / 60.0;

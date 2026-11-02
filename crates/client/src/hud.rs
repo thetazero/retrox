@@ -213,6 +213,24 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
                 labels.push((false, dist, p, contact_label(c, dist), VFD));
             }
         }
+        // Pirates: red diamonds, a doubled one for a gang after us. A gang
+        // coming for us is labelled at any range.
+        for c in &w.traffic.pirates {
+            let rel = (c.pos - h.camera).as_vec3();
+            let Some(p) = project(h.view_proj, rel, screen) else {
+                continue;
+            };
+            let dist = (c.pos - me).length();
+            let hunting = c.aim == retrox_sim::pirates::Aim::Stalk;
+            let color = if hunting { ALARM } else { RED_HOT };
+            diamond(&painter, p, 4.5, color);
+            if hunting {
+                diamond(&painter, p, 8.0, color.gamma_multiply(0.7));
+            }
+            if dist < TRAFFIC_LABEL_M || hunting {
+                labels.push((false, dist, p, pirate_label(c, dist), color));
+            }
+        }
         labels.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.total_cmp(&b.1)));
         let mut taken: Vec<Rect> = Vec::new();
         for (targeted, _, p, text, color) in labels {
@@ -477,6 +495,20 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
                 Leg::To(place) => {
                     let au = w.distance_to(place) / AU;
                     ("Fast travel", format!("{} · {au:.2} AU", w.name(place)))
+                }
+                Leg::Intercept(fleet) => {
+                    let company = w
+                        .galaxy
+                        .companies
+                        .get(fleet.0)
+                        .map_or("the convoy".to_owned(), |c| c.name.clone());
+                    let d = w
+                        .traffic
+                        .contacts
+                        .iter()
+                        .find(|c| c.key == fleet)
+                        .map_or(0.0, |c| (c.pos - w.ship_position()).length());
+                    ("Intercept", format!("{company} · {}", distance(d)))
                 }
                 Leg::Climb { well, .. } => {
                     let out = (w.well_radius(well) - w.distance_to(well)).max(0.0) / 1000.0;
@@ -1164,6 +1196,26 @@ fn edge_arrow_color(
 const TRAFFIC_LABEL_M: f64 = 2.0e9;
 
 /// "KESSA HAULERS · 3× LIGHT TRADER · 120 T FOOD  42 KM"
+fn diamond(painter: &egui::Painter, c: Pos2, r: f32, color: Color32) {
+    let pts = vec![
+        c + Vec2::new(0.0, -r),
+        c + Vec2::new(r, 0.0),
+        c + Vec2::new(0.0, r),
+        c + Vec2::new(-r, 0.0),
+    ];
+    painter.add(egui::Shape::closed_line(pts, Stroke::new(1.2, color)));
+}
+
+fn pirate_label(c: &crate::traffic::PirateContact, dist: f64) -> String {
+    let n = c.fits.len();
+    let ships = if n == 1 { "1 SHIP".to_owned() } else { format!("{n} SHIPS") };
+    let wanted = c
+        .bounty
+        .map(|b| format!(" · WANTED {}", credits(b).to_uppercase()))
+        .unwrap_or_default();
+    format!("{} · {ships}{wanted}  {}", c.name.to_uppercase(), distance(dist))
+}
+
 fn contact_label(c: &crate::traffic::Contact, dist: f64) -> String {
     let class = c.fit.hull().name.to_uppercase();
     let ships = if c.ships > 1 {

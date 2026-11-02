@@ -125,8 +125,20 @@ impl World {
         let solids = self.combat_solids(pilot.craft.pos);
         let out = self.combat.update(dt, pilot, &solids);
         self.player.ship.damage = self.combat.player.damage.clone();
-        for id in out.kills {
-            self.raider_killed(id);
+        let mut complaints = std::mem::take(&mut self.complaints);
+        for id in out.hits {
+            self.ship_hit(id, &mut complaints);
+        }
+        self.complaints = complaints;
+        self.complaints
+            .retain(|_, t| self.clock_s - *t < 60.0);
+        for (id, crew) in out.kills {
+            match crew {
+                crate::combat::Crew::Pirate => self.raider_killed(id),
+                crate::combat::Crew::Trader { fleet, faction } => {
+                    self.trader_killed(fleet, faction)
+                }
+            }
         }
         if let Some(f) = self.combat.field {
             for (pos, vel, good, tonnes, seed) in out.salvage {

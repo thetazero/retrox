@@ -29,6 +29,7 @@
 
 mod field;
 mod fight;
+mod convoy;
 mod pilot;
 mod prowl;
 mod routing;
@@ -165,6 +166,8 @@ pub enum Leg {
     /// Up and out of a gravity well, stopping just past its edge: on the
     /// side facing `toward` if that's somewhere outside, else straight up.
     Climb { well: Place, toward: Option<Place> },
+    /// Alongside a trader fleet, matching its course (DESIGN §7.2.2).
+    Intercept(retrox_sim::bubble::FleetKey),
 }
 
 impl Leg {
@@ -172,6 +175,7 @@ impl Leg {
     pub fn frame(self) -> Place {
         match self {
             Leg::To(place) | Leg::Climb { well: place, .. } => place,
+            Leg::Intercept(_) => Place::Star,
         }
     }
 }
@@ -254,6 +258,8 @@ pub enum Action {
     AbandonContract(usize),
     /// Ping the prospector: read the rocks around the ship.
     Scan,
+    /// Fast travel alongside the trader fleet nearest the crosshair.
+    Intercept,
     /// Point the guns at the next hostile.
     CycleHostile,
 }
@@ -339,6 +345,8 @@ pub struct World {
     /// Seconds since a gang pulled us out of fast travel, while that's
     /// news.
     pub interdicted: Option<f64>,
+    /// When each trader fleet last took offence at our shots.
+    complaints: std::collections::HashMap<retrox_sim::bubble::FleetKey, f64>,
 }
 
 /// A wait in progress (DESIGN §3): docked or landed only, a day at a time,
@@ -438,6 +446,7 @@ impl World {
             combat: Combat::new(player.ship.fit.clone(), player.ship.damage.clone()),
             burn: 0.0,
             interdicted: None,
+            complaints: Default::default(),
             player,
         };
         // Traders near the player are ships (DESIGN §5.2).
@@ -675,6 +684,7 @@ impl World {
                 _ => {}
             },
             Action::Scan => self.scan(),
+            Action::Intercept => self.intercept(),
             Action::CycleHostile => {
                 let me = self.combat_position();
                 self.combat.cycle_target(me);
@@ -1017,6 +1027,7 @@ impl World {
         // Mid-fight the trigger is the guns' alone.
         let fighting = self.hostiles_near() > 0 && !self.combat.player.guns.is_empty();
         self.mine(dt, trigger && !fighting);
+        self.convoys();
         self.fight(dt, trigger);
         self.repair_docked();
         self.update_camera(dt);

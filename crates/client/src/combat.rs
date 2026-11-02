@@ -41,6 +41,8 @@ use retrox_gen::Rng;
 use retrox_sim::economy::Good;
 use retrox_sim::ship::{Function, Loadout, ShipStats};
 use retrox_sim::FieldId;
+use retrox_sim::FactionId;
+use retrox_sim::bubble::FleetKey;
 use retrox_sim::pirates::GangId;
 use serde::{Deserialize, Serialize};
 
@@ -466,7 +468,20 @@ pub enum Tactic {
     Return,
 }
 
-/// A pirate ship.
+/// Whose a ship in the fight is.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Crew {
+    /// One of the gang's.
+    Pirate,
+    /// One of a trader fleet's, flying for `faction`.
+    Trader { fleet: FleetKey, faction: FactionId },
+}
+
+/// Ids from here up are traders' ships; below, the gang's.
+pub const TRADER_IDS: u32 = 1000;
+
+/// A ship in the fight other than the player's: a pirate, or a trader
+/// caught up in it.
 #[derive(Clone, Debug)]
 pub struct Raider {
     pub id: u32,
@@ -486,6 +501,20 @@ pub struct Raider {
     burst: f64,
     /// What it guards and comes back to, anchor-relative.
     pub home: DVec3,
+    pub crew: Crew,
+    /// Fighting the player. A peaceful ship holds its place in its convoy.
+    pub hostile: bool,
+    /// A peaceful trader's place in its convoy: where, and how fast.
+    pub slot: Option<(DVec3, DVec3)>,
+}
+
+impl Raider {
+    pub fn trader_fleet(&self) -> Option<FleetKey> {
+        match self.crew {
+            Crew::Trader { fleet, .. } => Some(fleet),
+            Crew::Pirate => None,
+        }
+    }
 }
 
 /// A shell in flight.
@@ -607,8 +636,9 @@ pub struct Outcome {
     /// Loose cargo thrown from wrecks: where, how it drifts, what, tonnes.
     pub salvage: Vec<(DVec3, DVec3, Good, f64, u64)>,
     pub player_destroyed: bool,
-    /// Raiders destroyed this frame, by id.
-    pub kills: Vec<u32>,
+    /// Ships destroyed this frame, by id and whose, and hit by the player.
+    pub kills: Vec<(u32, Crew)>,
+    pub hits: Vec<u32>,
 }
 
 /// Everything fighting near the player.
@@ -646,7 +676,9 @@ pub struct Combat {
     /// shield and hull, and ships blown up.
     pub tally: Tally,
     rng: Rng,
-    kills: Vec<u32>,
+    kills: Vec<(u32, Crew)>,
+    hits: Vec<u32>,
+    next_trader: u32,
     /// Laser hits waiting to land this frame: who, how hard, where, which
     /// way.
     pending: Vec<(Side, f64, DVec3, DVec3)>,
@@ -680,6 +712,8 @@ impl Combat {
             tally: Tally::default(),
             rng: Rng::new(0x636f_6d62),
             kills: Vec::new(),
+            hits: Vec::new(),
+            next_trader: TRADER_IDS,
             pending: Vec::new(),
             said: Vec::new(),
             dropped: Vec::new(),
@@ -701,12 +735,109 @@ impl Combat {
         *self = c;
     }
 
-    /// Raiders within `range` of `pos`.
+    /// Hostile ships within `range` of `pos`.
     pub fn hostiles_within(&self, pos: DVec3, range: f64) -> usize {
         self.raiders
             .iter()
-            .filter(|r| r.tactic != Tactic::Flee && (r.craft.pos - pos).length() < range)
+            .filter(|r| {
+                r.hostile && r.tactic != Tactic::Flee && (r.craft.pos - pos).length() < range
+            })
             .count()
+    }
+
+    /// Whether a trader fleet's ships are in the fight.
+    pub fn has_convoy(&self, fleet: FleetKey) -> bool {
+        self.raiders.iter().any(|r| r.trader_fleet() == Some(fleet))
+    }
+
+    /// A trader fleet's ships join the scene, at `slots` (anchor-relative
+    /// position, velocity and heading), hostile or not.
+    pub fn join_convoy(
+        &mut self,
+        fleet: FleetKey,
+        faction: FactionId,
+        fit: &Loadout,
+        slots: &[(DVec3, DVec3, DQuat)],
+        hostile: bool,
+    ) {
+        let mut rng = Rng::new(
+            slotmap::Key::data(&fleet.0).as_ffi() ^ u64::from(fleet.1).wrapping_mul(0x9e37),
+        );
+        for &(pos, vel, rot) in slots {
+            let id = self.next_trader;
+            self.next_trader += 1;
+            let armed = !Vessel::new(fit.clone(), Damage::default()).guns.is_empty();
+            self.raiders.push(Raider {
+                id,
+                vessel: Vessel::new(fit.clone(), Damage::default()),
+                craft: Craft {
+                    pos,
+                    vel,
+                    rot,
+                    spin: DVec3::ZERO,
+                },
+                burn: 0.0,
+                tactic: if hostile && !armed {
+                    Tactic::Flee
+                } else {
+                    Tactic::Attack
+                },
+                timer: 0.0,
+                skill: rng.range(0.25, 0.55),
+                rng: Rng::new(rng.next_u64()),
+                jink: DVec3::ZERO,
+                jink_t: 0.0,
+                burst: rng.range(-1.0, 0.5),
+                home: pos,
+                crew: Crew::Trader { fleet, faction },
+                hostile,
+                slot: (!hostile).then_some((pos, vel)),
+            });
+        }
+    }
+
+    /// Where a peaceful convoy's ships should be now, in fleet order.
+    pub fn set_slots(&mut self, fleet: FleetKey, slots: &[(DVec3, DVec3, DQuat)]) {
+        let mut k = 0;
+        for r in self.raiders.iter_mut().filter(|r| r.trader_fleet() == Some(fleet)) {
+            if !r.hostile {
+                if let Some(&(pos, vel, _)) = slots.get(k) {
+                    r.slot = Some((pos, vel));
+                }
+            }
+            k += 1;
+        }
+    }
+
+    /// A peaceful convoy flies on out of the scene.
+    pub fn drop_convoy(&mut self, fleet: FleetKey) {
+        self.raiders
+            .retain(|r| r.hostile || r.trader_fleet() != Some(fleet));
+    }
+
+    /// The trader fleets in the scene.
+    pub fn convoys(&self) -> Vec<FleetKey> {
+        let mut v: Vec<FleetKey> = self.raiders.iter().filter_map(|r| r.trader_fleet()).collect();
+        v.dedup();
+        v
+    }
+
+    /// A trader fleet turns on the player: the armed fight, the rest run.
+    fn provoke(&mut self, fleet: FleetKey) {
+        for r in self
+            .raiders
+            .iter_mut()
+            .filter(|r| r.trader_fleet() == Some(fleet) && !r.hostile)
+        {
+            r.hostile = true;
+            r.slot = None;
+            r.home = r.craft.pos;
+            r.tactic = if r.vessel.guns.is_empty() {
+                Tactic::Flee
+            } else {
+                Tactic::Attack
+            };
+        }
     }
 
     pub fn raider(&self, id: u32) -> Option<&Raider> {
@@ -737,12 +868,14 @@ impl Combat {
 
     /// Target the next raider, nearest first from the current one.
     pub fn cycle_target(&mut self, from: DVec3) {
-        let mut ids: Vec<(f64, u32)> = self
+        // Hostiles first, nearest first; peaceful ships after them.
+        let mut ids: Vec<(bool, f64, u32)> = self
             .raiders
             .iter()
-            .map(|r| ((r.craft.pos - from).length(), r.id))
+            .map(|r| (!r.hostile, (r.craft.pos - from).length(), r.id))
             .collect();
-        ids.sort_by(|a, b| a.0.total_cmp(&b.0));
+        ids.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+        let ids: Vec<(f64, u32)> = ids.into_iter().map(|(_, d, id)| (d, id)).collect();
         let next = match self
             .target
             .and_then(|t| ids.iter().position(|(_, id)| *id == t))
@@ -825,6 +958,9 @@ impl Combat {
                 jink_t: 0.0,
                 burst: rng.range(-1.0, 0.5),
                 home,
+                crew: Crew::Pirate,
+                hostile: true,
+                slot: None,
             });
             out += 1;
         }
@@ -863,6 +999,19 @@ impl Combat {
         // The raiders.
         let target = alive.then_some(pilot.craft);
         for i in 0..self.raiders.len() {
+            if let (false, Some((pos, vel))) = (self.raiders[i].hostile, self.raiders[i].slot) {
+                // Holding its place in its convoy.
+                let r = &mut self.raiders[i];
+                r.craft.pos = pos;
+                r.craft.vel = vel;
+                r.burn = 0.15;
+                let k = 1.0 - (-2.0 * dt).exp();
+                if vel.length() > 1.0 {
+                    r.craft.rot = r.craft.rot.slerp(look_rotation(vel), k).normalize();
+                }
+                r.vessel.systems(dt, 0.1, false);
+                continue;
+            }
             let fired = self.raiders[i].think(dt, target, solids);
             for (gun, muzzle, dir) in fired {
                 let vel = self.raiders[i].craft.vel;
@@ -896,7 +1045,7 @@ impl Combat {
         }
         if self.target.is_none_or(|t| self.raider(t).is_none()) {
             self.target = None;
-            if alive {
+            if alive && self.raiders.iter().any(|r| r.hostile) {
                 self.cycle_target(pilot.craft.pos);
             }
         }
@@ -904,6 +1053,7 @@ impl Combat {
         out.messages.append(&mut self.said);
         out.salvage.append(&mut self.dropped);
         out.kills.append(&mut self.kills);
+        out.hits.append(&mut self.hits);
         out
     }
 
@@ -1035,14 +1185,22 @@ impl Combat {
                 }
                 (&mut self.player, pilot.craft)
             }
-            Side::Raider(id) => match self.raiders.iter_mut().find(|r| r.id == id) {
-                Some(r) => {
-                    // Being shot rattles them.
-                    r.jink_t = r.jink_t.min(0.2);
-                    (&mut r.vessel, r.craft)
+            Side::Raider(id) => {
+                // Only the player's guns hit anyone else; a trader they
+                // hit turns on them, with all its fleet.
+                self.hits.push(id);
+                if let Some(fleet) = self.raider(id).and_then(|r| r.trader_fleet()) {
+                    self.provoke(fleet);
                 }
-                None => return,
-            },
+                match self.raiders.iter_mut().find(|r| r.id == id) {
+                    Some(r) => {
+                        // Being shot rattles them.
+                        r.jink_t = r.jink_t.min(0.2);
+                        (&mut r.vessel, r.craft)
+                    }
+                    None => return,
+                }
+            }
         };
         let local = craft.rot.inverse() * (point - craft.pos);
         let hit = vessel.hit(damage, local);
@@ -1108,10 +1266,10 @@ impl Combat {
                             .raider(id)
                             .map_or("section", |r| r.vessel.parts[part].name),
                     };
-                    let whose = if side == Side::Player {
-                        "Our"
-                    } else {
-                        "Raider's"
+                    let whose = match side {
+                        Side::Player => "Our",
+                        Side::Raider(id) if id >= TRADER_IDS => "Trader's",
+                        Side::Raider(_) => "Raider's",
                     };
                     self.said
                         .push(format!("{whose} {} is wrecked", name.to_lowercase()));
@@ -1125,15 +1283,27 @@ impl Combat {
                         self.said.push("Ship destroyed".to_owned());
                     }
                     Side::Raider(id) => {
+                        let crew = self.raider(id).map_or(Crew::Pirate, |r| r.crew);
                         self.raiders.retain(|r| r.id != id);
-                        self.killed.push(id);
-                        self.kills.push(id);
-                        let left = self.raiders.len();
+                        self.kills.push((id, crew));
+                        if id >= TRADER_IDS {
+                            // The world says what it cost; the wreck still
+                            // spills what it was carrying below.
+                        } else {
+                            self.killed.push(id);
+                        }
+                        let left = self
+                            .raiders
+                            .iter()
+                            .filter(|r| r.crew == Crew::Pirate)
+                            .count();
+                        if id < TRADER_IDS {
                         self.said.push(if left == 0 {
                             "Raider destroyed · the gang is broken".to_owned()
                         } else {
                             format!("Raider destroyed · {left} left")
                         });
+                        }
                         // What it was carrying spills out.
                         let tonnes = (length / 4.0).clamp(1.0, 8.0) * self.rng.range(0.5, 1.2);
                         for (good, share) in [(Good::Components, 0.6), (Good::Metal, 0.4)] {
@@ -1276,6 +1446,11 @@ impl Raider {
             (_, None) => {
                 self.tactic = Tactic::Return;
                 (self.home - c.pos, 120.0)
+            }
+            (Tactic::Return, Some(_)) if self.crew != Crew::Pirate => {
+                // A trader that has lost the player keeps running.
+                self.tactic = Tactic::Flee;
+                (c.vel, 600.0)
             }
             (Tactic::Return, Some(t)) => {
                 if (t.pos - self.home).length() < LEASH * 0.8 {

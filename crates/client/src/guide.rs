@@ -89,6 +89,7 @@ pub const WORK_KEYS: &[KeyRow] = &[
     (&["G"], "prospect: read the rocks"),
     (&["LMB", "R"], "fire guns · mining laser"),
     (&["Y"], "next hostile target"),
+    (&["I"], "intercept the trader in your sights"),
     (&["V"], "cockpit / chase camera"),
     (&["TAB"], "take or free the mouse"),
     (&["H"], "controls card"),
@@ -178,6 +179,9 @@ pub fn hint(w: &World) -> Option<String> {
                     .into(),
                 Leg::Climb { .. } => "Climbing out of the gravity well: the autopilot stops at \
                                       its edge, where you can jump or fast travel on."
+                    .into(),
+                Leg::Intercept(_) => "Intercepting: the autopilot brings you alongside the \
+                                      convoy. Shooting it makes its faction hostile."
                     .into(),
             });
         }
