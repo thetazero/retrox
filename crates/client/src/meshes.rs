@@ -1,5 +1,5 @@
-//! Procedural meshes: spheres, rocks, the placeholder ship, stations built
-//! from a kit of modules, and gates.
+//! Procedural meshes: spheres, rocks, ships generated from their fits,
+//! stations built from a kit of modules, and gates.
 //!
 //! The look is "orbital hardware": cylinders, spheres, trusses and panels,
 //! flat-shaded so the facets read as built things.
@@ -339,105 +339,6 @@ fn boxed(center: Vec3, size: Vec3) -> Mat4 {
     Mat4::from_scale_rotation_translation(size, Quat::IDENTITY, center)
 }
 
-/// The placeholder ship: a stubby utility craft, ~24 m long, nose toward -Z.
-/// Enamelled hull with a red livery, a gold-foil service module.
-pub fn placeholder_ship() -> Mesh {
-    let (cyl, cube, ball) = (cylinder(14), cube(), icosphere(1).flat());
-    let mut m = Mesh::default();
-    // Pressurised hull: a cylinder along Z, with red bands.
-    m.add(
-        &cyl,
-        strut(Vec3::new(0.0, 0.0, 8.0), Vec3::new(0.0, 0.0, -6.0), 2.2),
-        1.0,
-    );
-    for (from, to) in [(1.6, 3.0), (-4.6, -4.0)] {
-        m.paint(
-            &cyl,
-            strut(Vec3::new(0.0, 0.0, from), Vec3::new(0.0, 0.0, to), 2.26),
-            1.0,
-            Paint::Red,
-        );
-    }
-    // Cockpit ball with a glazed band.
-    m.add(
-        &ball,
-        Mat4::from_scale_rotation_translation(
-            Vec3::splat(2.4),
-            Quat::IDENTITY,
-            Vec3::new(0.0, 0.3, -7.0),
-        ),
-        0.95,
-    );
-    m.paint(
-        &cube,
-        boxed(Vec3::new(0.0, 0.9, -8.6), Vec3::new(2.6, 0.7, 1.2)),
-        1.0,
-        Paint::Glass,
-    );
-    // Service module in thermal blanket, and the engine bell.
-    m.paint(
-        &cube,
-        boxed(Vec3::new(0.0, 0.0, 9.5), Vec3::new(3.6, 3.6, 3.0)),
-        1.0,
-        Paint::Foil,
-    );
-    m.paint(
-        &cyl,
-        strut(Vec3::new(0.0, 0.0, 11.0), Vec3::new(0.0, 0.0, 13.0), 1.6),
-        1.0,
-        Paint::Metal,
-    );
-    // Side pods on struts.
-    for side in [-1.0f32, 1.0] {
-        m.paint(
-            &cyl,
-            strut(
-                Vec3::new(side * 1.5, 0.0, 3.0),
-                Vec3::new(side * 4.8, -0.5, 3.0),
-                0.25,
-            ),
-            1.0,
-            Paint::Metal,
-        );
-        m.paint(
-            &cyl,
-            strut(
-                Vec3::new(side * 5.0, -0.5, 7.5),
-                Vec3::new(side * 5.0, -0.5, -1.0),
-                0.9,
-            ),
-            1.0,
-            Paint::Red,
-        );
-        m.add(
-            &cyl,
-            strut(
-                Vec3::new(side * 5.0, -0.5, -1.0),
-                Vec3::new(side * 5.0, -0.5, -1.6),
-                0.7,
-            ),
-            0.9,
-        );
-        // Radiator fin, with a beacon on top.
-        m.add(
-            &cube,
-            boxed(Vec3::new(side * 5.0, 1.4, 4.0), Vec3::new(0.15, 2.6, 5.0)),
-            1.1,
-        );
-        m.paint(
-            &ball,
-            Mat4::from_scale_rotation_translation(
-                Vec3::splat(0.22),
-                Quat::IDENTITY,
-                Vec3::new(side * 5.0, 2.8, 6.4),
-            ),
-            1.0,
-            Paint::Beacon,
-        );
-    }
-    m
-}
-
 /// A station from the module kit, sized to roughly unit radius (scale by
 /// the station's size at draw time). Shape depends on kind and seed.
 pub fn station(kind: StationKind, seed: u64) -> Mesh {
@@ -596,4 +497,227 @@ pub fn station(kind: StationKind, seed: u64) -> Mesh {
         );
     }
     m
+}
+
+/// The shape of a generated ship, for placing effects and the camera.
+#[derive(Clone, Debug, Default)]
+pub struct ShipShape {
+    /// Engine nozzles: (position, radius), with the exhaust along +Z.
+    pub nozzles: Vec<(Vec3, f32)>,
+}
+
+/// A ship built from its fit: each section a segment of the spine, nose
+/// (-Z) to tail, sized by its mass and length, with its modules where its
+/// slots are — engine bells, gun barrels, radiator fins, cargo pods, shield
+/// rings, radar masts.
+pub fn ship(fit: &retrox_sim::ship::Loadout) -> (Mesh, ShipShape) {
+    use retrox_sim::ship::{Position, Size, SlotKind};
+    let (cyl, cube, ball) = (cylinder(14), cube(), icosphere(1).flat());
+    let ring = torus(0.06, 32, 6);
+    let module_m = |size: Size| -> f32 {
+        match size {
+            Size::Small => 0.8,
+            Size::Medium => 2.0,
+            Size::Large => 5.0,
+        }
+    };
+    let sections: Vec<_> = fit.mounts().filter_map(|(_, s)| s).collect();
+    let length: f32 = sections.iter().map(|s| s.section.length_m as f32).sum();
+    let mut m = Mesh::default();
+    let mut shape = ShipShape {
+        nozzles: Vec::new(),
+    };
+    let mut front = -length / 2.0;
+    for (i, fitted) in sections.iter().enumerate() {
+        let section = fitted.section;
+        let len = section.length_m as f32;
+        let centre = front + len / 2.0;
+        let radius = ((section.mass_t / section.length_m) as f32 * 4.0)
+            .sqrt()
+            .clamp(1.0, 14.0);
+        let kinds: Vec<SlotKind> = section.slots.iter().map(|s| s.kind).collect();
+        let count = |k| kinds.iter().filter(|&&x| x == k).count();
+        // The body: a box for cargo sections, a cylinder otherwise.
+        if count(SlotKind::Cargo) * 2 > kinds.len() {
+            m.add(
+                &cube,
+                boxed(
+                    Vec3::new(0.0, 0.0, centre),
+                    Vec3::new(radius * 1.7, radius * 1.7, len * 0.96),
+                ),
+                0.95,
+            );
+        } else {
+            m.add(
+                &cyl,
+                strut(
+                    Vec3::new(0.0, 0.0, front + len * 0.02),
+                    Vec3::new(0.0, 0.0, front + len * 0.98),
+                    radius,
+                ),
+                1.0,
+            );
+        }
+        // A painted band on each section; red on fighting sections.
+        let band = if count(SlotKind::Weapon) > 0 {
+            Paint::Red
+        } else if count(SlotKind::Power) > 1 {
+            Paint::Metal
+        } else if i % 2 == 0 {
+            Paint::Red
+        } else {
+            Paint::Foil
+        };
+        m.paint(
+            &cyl,
+            strut(
+                Vec3::new(0.0, 0.0, centre - len * 0.08),
+                Vec3::new(0.0, 0.0, centre + len * 0.08),
+                radius * 1.03,
+            ),
+            1.0,
+            band,
+        );
+        // The flight deck up front.
+        if i == 0 && matches!(section.position, Position::Bow | Position::Whole) {
+            m.add(
+                &ball,
+                Mat4::from_scale_rotation_translation(
+                    Vec3::new(radius, radius, radius * 1.2),
+                    Quat::IDENTITY,
+                    Vec3::new(0.0, 0.0, front + radius * 0.6),
+                ),
+                0.95,
+            );
+            m.paint(
+                &cube,
+                boxed(
+                    Vec3::new(0.0, radius * 0.45, front + radius * 0.1),
+                    Vec3::new(radius * 1.1, radius * 0.3, radius * 0.5),
+                ),
+                1.0,
+                Paint::Glass,
+            );
+        }
+        for (slot, module) in fitted.slots() {
+            let Some(module) = module else { continue };
+            let size = module_m(module.size);
+            let [x, y, z] = slot.position_m.map(|v| v as f32);
+            let at = Vec3::new(x, y, centre - z);
+            let side = if x < 0.0 { -1.0 } else { 1.0 };
+            match slot.kind {
+                SlotKind::Engine => {
+                    let tail = front + len;
+                    let r = (size * 0.6).min(radius * 0.9);
+                    let nozzle = Vec3::new(x, y, tail);
+                    m.paint(
+                        &cyl,
+                        strut(nozzle, nozzle + Vec3::Z * size * 1.3, r),
+                        1.0,
+                        Paint::Metal,
+                    );
+                    shape.nozzles.push((nozzle + Vec3::Z * size * 1.3, r));
+                }
+                SlotKind::Weapon => {
+                    let mount = Vec3::new(x, y.max(radius * 0.8), at.z);
+                    m.paint(
+                        &cube,
+                        boxed(mount, Vec3::splat(size * 0.7)),
+                        1.0,
+                        Paint::Red,
+                    );
+                    m.paint(
+                        &cyl,
+                        strut(mount, mount - Vec3::Z * size * 2.2, size * 0.12),
+                        1.0,
+                        Paint::Metal,
+                    );
+                }
+                SlotKind::Radiator => {
+                    let out = radius + size * 0.8;
+                    m.add(
+                        &cube,
+                        boxed(
+                            Vec3::new(side * out, 0.0, at.z),
+                            Vec3::new(0.12 * size, size * 1.6, size * 3.0),
+                        ),
+                        1.1,
+                    );
+                }
+                SlotKind::Cargo => {
+                    let out = Vec3::new(x.signum() * (x.abs().max(radius * 0.7)), y, at.z);
+                    m.paint(&cube, boxed(out, Vec3::splat(size * 1.1)), 1.0, Paint::Foil);
+                }
+                SlotKind::Shield => {
+                    m.paint(
+                        &ring,
+                        Mat4::from_scale_rotation_translation(
+                            Vec3::splat(radius * 1.12),
+                            Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
+                            Vec3::new(0.0, 0.0, at.z),
+                        ),
+                        1.0,
+                        Paint::Red,
+                    );
+                }
+                SlotKind::Radar => {
+                    let base = Vec3::new(x, radius * 0.9, at.z);
+                    let top = base + Vec3::Y * size * 1.2;
+                    m.paint(&cyl, strut(base, top, size * 0.08), 1.0, Paint::Metal);
+                    m.add(
+                        &ball,
+                        Mat4::from_scale_rotation_translation(
+                            Vec3::splat(size * 0.35),
+                            Quat::IDENTITY,
+                            top,
+                        ),
+                        1.0,
+                    );
+                }
+                SlotKind::JumpDrive => {
+                    m.paint(
+                        &ring,
+                        Mat4::from_scale_rotation_translation(
+                            Vec3::splat(radius * 1.05),
+                            Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
+                            Vec3::new(0.0, 0.0, at.z),
+                        ),
+                        1.0,
+                        Paint::Windows,
+                    );
+                }
+                SlotKind::Rcs => {
+                    for s in [-1.0f32, 1.0] {
+                        m.paint(
+                            &cube,
+                            boxed(Vec3::new(s * radius, 0.0, at.z), Vec3::splat(size * 0.35)),
+                            1.0,
+                            Paint::Metal,
+                        );
+                    }
+                }
+                SlotKind::Power => {}
+            }
+        }
+        front += len;
+    }
+    // Beacons at the widest point.
+    let span = m
+        .vertices
+        .iter()
+        .map(|v| v.pos[0].abs())
+        .fold(1.0, f32::max);
+    for s in [-1.0f32, 1.0] {
+        m.paint(
+            &ball,
+            Mat4::from_scale_rotation_translation(
+                Vec3::splat(0.25 + length * 0.004),
+                Quat::IDENTITY,
+                Vec3::new(s * span, 0.0, 0.0),
+            ),
+            1.0,
+            Paint::Beacon,
+        );
+    }
+    (m, shape)
 }

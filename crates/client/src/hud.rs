@@ -14,30 +14,30 @@ use retrox_sim::{BodyKind, EconomyModel, SettlementId};
 use crate::world::{AU, Action, COMBAT_SPEED, Mode, Place, SECONDS_PER_DAY, World};
 
 /// Enamel cream: body text and rules.
-const CREAM: Color32 = Color32::from_rgb(234, 222, 196);
-const CREAM_DIM: Color32 = Color32::from_rgb(160, 146, 122);
-const RULE: Color32 = Color32::from_rgb(110, 98, 84);
+pub(crate) const CREAM: Color32 = Color32::from_rgb(234, 222, 196);
+pub(crate) const CREAM_DIM: Color32 = Color32::from_rgb(160, 146, 122);
+pub(crate) const RULE: Color32 = Color32::from_rgb(110, 98, 84);
 /// Signal red: title bands and primary buttons.
-const RED: Color32 = Color32::from_rgb(196, 44, 34);
-const RED_DARK: Color32 = Color32::from_rgb(118, 26, 22);
+pub(crate) const RED: Color32 = Color32::from_rgb(196, 44, 34);
+pub(crate) const RED_DARK: Color32 = Color32::from_rgb(118, 26, 22);
 const RED_HOT: Color32 = Color32::from_rgb(232, 70, 52);
 /// Warnings and alarms.
-const ALARM: Color32 = Color32::from_rgb(255, 88, 64);
+pub(crate) const ALARM: Color32 = Color32::from_rgb(255, 88, 64);
 /// Amber: targets and selection.
-const AMBER: Color32 = Color32::from_rgb(255, 178, 76);
+pub(crate) const AMBER: Color32 = Color32::from_rgb(255, 178, 76);
 /// Vacuum-fluorescent teal: live instrument readouts.
-const VFD: Color32 = Color32::from_rgb(110, 240, 214);
+pub(crate) const VFD: Color32 = Color32::from_rgb(110, 240, 214);
 const VFD_DIM: Color32 = Color32::from_rgb(22, 58, 56);
 const PANEL: Color32 = Color32::from_rgba_premultiplied(12, 10, 18, 222);
-const INK: Color32 = Color32::from_rgb(20, 16, 24);
+pub(crate) const INK: Color32 = Color32::from_rgb(20, 16, 24);
 
 const DISPLAY: &str = "display";
 
-fn display(size: f32) -> FontId {
+pub(crate) fn display(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name(DISPLAY.into()))
 }
 
-fn mono(size: f32) -> FontId {
+pub(crate) fn mono(size: f32) -> FontId {
     FontId::monospace(size)
 }
 
@@ -247,7 +247,11 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
                     };
                     ui.label(RichText::new(owner).color(CREAM_DIM));
                     ui.add_space(4.0);
-                    glow_label(ui, &w.date().to_string(), mono(20.0), VFD);
+                    ui.horizontal(|ui| {
+                        glow_label(ui, &w.date().to_string(), mono(20.0), VFD);
+                        ui.add_space(10.0);
+                        glow_label(ui, &credits(w.player.credits), mono(20.0), AMBER);
+                    });
                 });
             let r = frame.response.rect;
             ui.painter().rect_filled(
@@ -416,7 +420,10 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
     }
 
     match w.mode {
-        Mode::Docked(s) => settlement_screen(ctx, w, s, "Station", Action::Undock, &mut actions),
+        Mode::Docked(s) => {
+            settlement_screen(ctx, w, s, "Station", Action::Undock, &mut actions);
+            crate::hangar_ui::draw(ctx, w, s, &mut actions);
+        }
         Mode::Landed { city, timer, .. } => {
             if timer > 0.0 {
                 // Descent: fade to black and back.
@@ -436,6 +443,7 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
                 );
             } else {
                 settlement_screen(ctx, w, city, "Surface", Action::Launch, &mut actions);
+                crate::hangar_ui::draw(ctx, w, city, &mut actions);
             }
         }
         Mode::Jumping { to, timer } => {
@@ -686,17 +694,17 @@ fn economy_name(model: EconomyModel) -> &'static str {
 
 /// A HUD panel: a red title band (click to fold, if `collapsible`) over a
 /// dark body, framed by cream rules with corner brackets.
-struct Panel<'a> {
-    id: &'a str,
-    title: &'a str,
-    anchor: Align2,
-    offset: [f32; 2],
-    width: f32,
+pub(crate) struct Panel<'a> {
+    pub id: &'a str,
+    pub title: &'a str,
+    pub anchor: Align2,
+    pub offset: [f32; 2],
+    pub width: f32,
     /// `Some(open by default)` to let the title band fold the panel.
-    collapsible: Option<bool>,
+    pub collapsible: Option<bool>,
 }
 
-fn panel(ctx: &egui::Context, p: Panel, add: impl FnOnce(&mut egui::Ui)) {
+pub(crate) fn panel(ctx: &egui::Context, p: Panel, add: impl FnOnce(&mut egui::Ui)) {
     let id = egui::Id::unique(p.id);
     let mut open = p
         .collapsible
@@ -798,7 +806,7 @@ fn title_band(painter: &egui::Painter, rect: Rect, title: &str, fold: Option<boo
 }
 
 /// A sub-heading with a rule running to the right edge.
-fn section(ui: &mut egui::Ui, title: &str) {
+pub(crate) fn section(ui: &mut egui::Ui, title: &str) {
     let galley = ui
         .painter()
         .layout_no_wrap(title.to_uppercase(), display(20.0), CREAM_DIM);
@@ -833,7 +841,7 @@ fn brackets(painter: &egui::Painter, rect: Rect, len: f32, color: Color32) {
 }
 
 /// Text with a soft glow, like a vacuum-fluorescent display.
-fn glow_label(ui: &mut egui::Ui, text: &str, font: FontId, color: Color32) {
+pub(crate) fn glow_label(ui: &mut egui::Ui, text: &str, font: FontId, color: Color32) {
     let galley = ui.painter().layout_no_wrap(text.to_owned(), font, color);
     let (rect, _) = ui.allocate_exact_size(galley.size(), Sense::hover());
     let glow = color.gamma_multiply(0.12);
@@ -882,7 +890,7 @@ fn lamp(ui: &mut egui::Ui, text: &str, lit: bool, color: Color32) {
 }
 
 /// A small coloured tag, outlined.
-fn tag(ui: &mut egui::Ui, text: &str, color: Color32) {
+pub(crate) fn tag(ui: &mut egui::Ui, text: &str, color: Color32) {
     let galley = ui
         .painter()
         .layout_no_wrap(text.to_owned(), mono(11.0), color);
@@ -999,6 +1007,20 @@ fn edge_arrow(painter: &egui::Painter, view_proj: Mat4, rel: glam::Vec3, screen:
         AMBER,
         Stroke::NONE,
     ));
+}
+
+/// Credits with thin-space thousands separators.
+pub fn credits(cr: f64) -> String {
+    let n = cr.round() as i64;
+    let digits = n.unsigned_abs().to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push('\u{2009}');
+        }
+        out.push(c);
+    }
+    format!("{}{out} cr", if n < 0 { "-" } else { "" })
 }
 
 pub fn distance(m: f64) -> String {

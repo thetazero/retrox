@@ -1,7 +1,10 @@
-//! `retrox-client` — the game. For now: fly a placeholder ship around a
+//! `retrox-client` — the game. For now: fly your ship around a
 //! procedurally generated star system, fast travel between planets, dock,
-//! land, and jump along hyperlanes while the galaxy simulates around you.
+//! land, refit or buy ships in the hangar, and jump along hyperlanes while
+//! the galaxy simulates around you.
 
+mod hangar;
+mod hangar_ui;
 mod hud;
 mod meshes;
 mod render;
@@ -35,6 +38,8 @@ fn main() {
     event_loop.set_control_flow(ControlFlow::Poll);
     let undocked = std::env::args().any(|a| a == "--undocked");
     let station = std::env::args().any(|a| a == "--station");
+    // `--ship <hull>`: start in that stock ship instead (for testing).
+    let ship = std::env::args().skip_while(|a| a != "--ship").nth(1);
     // `--screenshot <path.ppm>`: save the 90th frame and quit (for checking
     // visual changes without a person at the window).
     let screenshot = std::env::args()
@@ -45,6 +50,7 @@ fn main() {
         seed,
         undocked,
         station,
+        ship,
         screenshot,
         running: None,
     };
@@ -57,13 +63,18 @@ struct App {
     undocked: bool,
     /// Start docked at a station, in the first system that has one.
     station: bool,
+    ship: Option<String>,
     screenshot: Option<std::path::PathBuf>,
     running: Option<Running>,
 }
 
 struct Meshes {
     sphere: MeshId,
+    /// The player's ship, generated from its fit; rebuilt when the fit
+    /// changes (`ship_key`).
     ship: MeshId,
+    ship_shape: meshes::ShipShape,
+    ship_key: String,
     rocks: Vec<MeshId>,
     /// One mesh per station in the current system, aligned with `view.stations`.
     stations: Vec<MeshId>,
@@ -104,6 +115,9 @@ impl ApplicationHandler for App {
         if self.station {
             world.start_at_station();
         }
+        if let Some(fit) = self.ship.as_deref().and_then(retrox_content::ships::stock) {
+            world.player.ship.fit = fit;
+        }
         if self.undocked {
             // Out by a station if there's one here, else in orbit.
             if let (Mode::Landed { .. }, Some(&s)) = (world.mode, world.view.stations.first()) {
@@ -123,7 +137,9 @@ impl ApplicationHandler for App {
 
         let meshes = Meshes {
             sphere: renderer.add_mesh(&meshes::icosphere(5)),
-            ship: renderer.add_mesh(&meshes::placeholder_ship()),
+            ship: MeshId::default(),
+            ship_shape: meshes::ShipShape::default(),
+            ship_key: String::new(),
             rocks: (0..8)
                 .map(|i| renderer.add_mesh(&meshes::rock(i * 7919 + 13)))
                 .collect(),
@@ -309,6 +325,13 @@ impl Running {
             self.set_captured(false);
         }
 
+        let key = fit_key(&self.world.player.ship.fit);
+        if key != self.meshes.ship_key {
+            let (mesh, shape) = meshes::ship(&self.world.player.ship.fit);
+            self.meshes.ship = self.renderer.add_mesh(&mesh);
+            self.meshes.ship_shape = shape;
+            self.meshes.ship_key = key;
+        }
         if self.meshes.system_generation != self.world.system_generation {
             self.meshes.stations = self
                 .world
@@ -517,17 +540,17 @@ fn scene(world: &World, meshes: &Meshes, cam: DVec3) -> Vec<(MeshId, Instance)> 
             )
             .with_detail(0.5),
         ));
-        // Engine plume, growing with the throttle.
+        // Engine plumes, growing with the throttle.
         let thrust = world.ship.throttle.max(0.0) as f32;
-        if thrust > 0.01 {
-            let len = 0.8 + 2.5 * thrust;
+        for &(nozzle, r) in meshes.ship_shape.nozzles.iter().filter(|_| thrust > 0.01) {
+            let len = r * (1.0 + 3.0 * thrust);
             out.push((
                 meshes.sphere,
                 Instance::new(
                     Mat4::from_scale_rotation_translation(
-                        Vec3::new(0.7, 0.7, len),
+                        Vec3::new(r * 0.8, r * 0.8, len),
                         rot,
-                        rel(pos) + rot * Vec3::new(0.0, 0.0, 13.0 + len * 0.6),
+                        rel(pos) + rot * (nozzle + Vec3::Z * len * 0.6),
                     ),
                     [0.35, 0.7, 1.0],
                     Surface::Star,
@@ -539,6 +562,24 @@ fn scene(world: &World, meshes: &Meshes, cam: DVec3) -> Vec<(MeshId, Instance)> 
         }
     }
     out
+}
+
+/// Identifies a fit's parts, to notice when the ship needs rebuilding.
+fn fit_key(fit: &retrox_sim::ship::Loadout) -> String {
+    let mut key = fit.hull().id.to_owned();
+    for (_, section) in fit.mounts() {
+        let Some(section) = section else {
+            key.push_str("|-");
+            continue;
+        };
+        key.push('|');
+        key.push_str(section.section.id);
+        for (_, module) in section.slots() {
+            key.push(',');
+            key.push_str(module.map_or("", |m| m.id));
+        }
+    }
+    key
 }
 
 /// What a station looks like: a habitat ring for populous ones, otherwise

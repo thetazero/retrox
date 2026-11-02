@@ -84,7 +84,7 @@ pub struct SkyVertex {
 }
 
 /// A mesh uploaded into the shared buffers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct MeshId(usize);
 
 struct MeshRange {

@@ -7,6 +7,7 @@
 
 mod hulls;
 mod modules;
+pub mod price;
 mod sections;
 mod stock;
 

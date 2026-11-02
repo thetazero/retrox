@@ -22,7 +22,12 @@
 //! place it arrived at or launched from. The frame moves with that place,
 //! so nearby things hold still while you fly.
 
+use std::sync::LazyLock;
+
 use glam::{DQuat, DVec3};
+use retrox_sim::ship::ShipStats;
+
+use crate::hangar::{self, Job, Player};
 use retrox_gen::{GalaxyConfig, Rock, generate, rocks};
 use retrox_sim::{
     BodyId, BodyKind, FieldId, GalaxyState, GalaxyTime, Orbit, SettlementId, Site, StarClass,
@@ -48,6 +53,12 @@ pub const WELL_RADII: f64 = 4.0;
 const FAST_TRAVEL_SECONDS_PER_METRE: f64 = 1.0e-6;
 const JUMP_DURATION: f32 = 4.0;
 const LANDING_DURATION: f32 = 3.0;
+/// The ship the flight model is tuned for: the starting ship, stock.
+static REFERENCE: LazyLock<ShipStats> = LazyLock::new(|| {
+    retrox_content::ships::stock(hangar::STARTING_HULL)
+        .expect("starting hull exists")
+        .stats()
+});
 
 /// Something in the current system you can navigate to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -173,7 +184,7 @@ pub struct Controls {
 }
 
 /// One-shot actions.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Action {
     FastTravel,
     Dock,
@@ -186,6 +197,8 @@ pub enum Action {
     ToggleCamera,
     ToggleFlightAssist,
     Wait(u64),
+    /// A job in the hangar of the settlement we're docked or landed at.
+    Hangar(Job),
 }
 
 /// What the player could do right now (shown as prompts).
@@ -222,6 +235,8 @@ pub struct World {
     /// Rocks of the asteroid field the ship is in, if any.
     pub field_rocks: Option<(FieldId, Vec<Rock>)>,
     pub message: Option<(String, f32)>,
+    /// The player's money and ships.
+    pub player: Player,
     /// Bumped whenever the system changes, so the client re-uploads meshes.
     pub system_generation: u64,
 }
@@ -272,6 +287,7 @@ impl World {
             cam_rot: DQuat::IDENTITY,
             field_rocks: None,
             message: None,
+            player: Player::new(),
             system_generation: 0,
         }
     }
@@ -407,6 +423,18 @@ impl World {
         (self.position(place) - self.ship_position()).length()
     }
 
+    /// Days to cross a lane, by the jump drive's speed with the ship's mass,
+    /// relative to the starting ship.
+    pub fn jump_days(&self, length_ly: f64) -> f64 {
+        let speed = self.stats().jump_speed();
+        let slower = if speed > 0.0 {
+            (REFERENCE.jump_speed() / speed).clamp(0.5, 3.0)
+        } else {
+            1.0
+        };
+        (jump_days(length_ly) * slower).round().max(1.0)
+    }
+
     pub fn lanes(&self) -> Vec<LaneInfo> {
         self.galaxy.systems[self.system]
             .lanes
@@ -418,7 +446,7 @@ impl World {
                     to,
                     name: self.galaxy.systems[to].name.clone(),
                     length_ly: lane.length_ly,
-                    days: jump_days(lane.length_ly),
+                    days: self.jump_days(lane.length_ly),
                 }
             })
             .collect()
@@ -493,6 +521,9 @@ impl World {
             }
             Action::Undock => {
                 if let Mode::Docked(s) = self.mode {
+                    if !self.can_fly() {
+                        return;
+                    }
                     let size = self.station_size_m(s);
                     self.ship.frame = Place::Station(s);
                     self.ship.rel = self.ship.rot * DVec3::new(0.0, 0.0, -(size * 0.9 + 150.0));
@@ -512,6 +543,9 @@ impl World {
             }
             Action::Launch => {
                 if let Mode::Landed { body, .. } = self.mode {
+                    if !self.can_fly() {
+                        return;
+                    }
                     let r = self.place_radius(Place::Body(body));
                     self.ship.frame = Place::Body(body);
                     self.ship.rel = self.ship.rot * DVec3::new(0.0, 0.0, r * 1.25);
@@ -528,6 +562,8 @@ impl World {
                 if let Some(well) = prompts.well {
                     let name = self.name(well);
                     self.say(format!("Can't jump inside the gravity well of {name}"));
+                } else if self.stats().drive_tier == 0 {
+                    self.say("Can't jump: no jump drive fitted");
                 } else if self.lanes().iter().any(|l| l.to == to) {
                     self.mode = Mode::Jumping {
                         to,
@@ -544,7 +580,63 @@ impl World {
                     ));
                 }
             }
+            Action::Hangar(job) => {
+                let Some(here) = self.docked_at() else {
+                    return;
+                };
+                let economy = &mut self.galaxy.settlements[here].economy;
+                match hangar::run(&mut self.player, here, economy, job) {
+                    Ok(done) => {
+                        self.advance_clock(done.seconds);
+                        self.say(done.message);
+                    }
+                    Err(why) => self.say(why),
+                }
+            }
         }
+    }
+
+    /// The settlement we're docked at, or landed at (once down).
+    pub fn docked_at(&self) -> Option<SettlementId> {
+        match self.mode {
+            Mode::Docked(s) => Some(s),
+            Mode::Landed { city, timer, .. } if timer <= 0.0 => Some(city),
+            _ => None,
+        }
+    }
+
+    /// How far the chase camera sits, relative to a ship ~20 m long.
+    fn camera_scale(&self) -> f64 {
+        (self.stats().length_m / 20.0).clamp(0.8, 6.0)
+    }
+
+    /// The stats of the ship being flown.
+    pub fn stats(&self) -> ShipStats {
+        self.player.ship.fit.stats()
+    }
+
+    /// Whether the ship can leave: it needs thrust and a way to turn.
+    fn can_fly(&mut self) -> bool {
+        let stats = self.stats();
+        if stats.acceleration() <= 0.0 {
+            self.say("Can't leave: no engine fitted");
+        } else if stats.angular_acceleration() <= 0.0 {
+            self.say("Can't leave: no RCS fitted");
+        } else {
+            return true;
+        }
+        false
+    }
+
+    /// How the ship handles next to the starting ship: thrust and turning
+    /// multipliers, within limits so every ship stays flyable.
+    pub fn handling(&self) -> (f64, f64) {
+        let (s, r) = (self.stats(), &*REFERENCE);
+        let thrust = (s.acceleration() / r.acceleration()).clamp(0.3, 2.5);
+        let turn = (s.angular_acceleration() / r.angular_acceleration())
+            .sqrt()
+            .clamp(0.3, 1.8);
+        (thrust, turn)
     }
 
     fn start_fast_travel(&mut self, target: Place) {
@@ -639,7 +731,7 @@ impl World {
     }
 
     fn steer(&mut self, dt: f64, c: Controls) {
-        let target = c.stick * TURN_RATES;
+        let target = c.stick * TURN_RATES * self.handling().1;
         let k = 1.0 - (-6.0 * dt).exp();
         self.ship.spin += (target - self.ship.spin) * k;
         let s = self.ship.spin;
@@ -670,7 +762,8 @@ impl World {
         // Acceleration scales with the speed being asked for, so cruise
         // speeds are reached in a few seconds without making fine control
         // twitchy.
-        let accel = (ACCEL * boost).max(desired.length().max(self.ship.vel.length()) * 0.5);
+        let accel = (ACCEL * boost * self.handling().0)
+            .max(desired.length().max(self.ship.vel.length()) * 0.5);
         if self.ship.flight_assist {
             let step = (desired - self.ship.vel).clamp_length_max(accel * dt);
             self.ship.vel += step;
@@ -801,11 +894,11 @@ impl World {
                 orbit_view(self.position(b), self.place_radius(b) * 3.0)
             }
             _ if self.cockpit => (
-                ship + self.ship.rot * DVec3::new(0.0, 1.2, -8.5),
+                ship + self.ship.rot * DVec3::new(0.0, 1.2, -self.stats().length_m * 0.5 + 1.0),
                 self.ship.rot,
             ),
             _ => (
-                ship + self.cam_rot * DVec3::new(0.0, 6.0, 28.0),
+                ship + self.cam_rot * DVec3::new(0.0, 6.0, 28.0) * self.camera_scale(),
                 self.cam_rot,
             ),
         }
@@ -942,6 +1035,62 @@ mod tests {
             );
             assert!(world.clock_s > before, "galaxy time must pass");
         }
+    }
+
+    #[test]
+    fn buy_and_refit_a_ship_at_the_starting_yard() {
+        let mut world = World::new(1);
+        let here = world.docked_at().expect("starts landed");
+        assert!(hangar::services(&world.galaxy.settlements[here].economy).shipyard);
+        // The yard builds hull over time; the cheapest ship is soon in stock.
+        let cheapest = hangar::lot().remove(0);
+        for _ in 0..60 {
+            if hangar::can_build(&world.galaxy.settlements[here].economy, &cheapest) {
+                break;
+            }
+            world.act(Action::Wait(1));
+        }
+        let credits = world.player.credits;
+        world.act(Action::Hangar(Job::BuyShip(cheapest.hull)));
+        assert_eq!(world.player.ship.fit.hull().id, cheapest.hull.id);
+        assert_eq!(world.player.credits, credits - cheapest.price);
+        assert_eq!(world.player.stored.len(), 1);
+
+        // Strip the engine: the ship can't leave until one is fitted again.
+        let (mount, slot) = engine_slot(&world);
+        let engine = hangar::module_in(&world.player.ship.fit, mount, slot).unwrap();
+        world.act(Action::Hangar(Job::Strip { mount, slot }));
+        world.act(Action::Launch);
+        assert!(matches!(world.mode, Mode::Landed { .. }));
+        world.act(Action::Hangar(Job::Fit {
+            mount,
+            slot,
+            module: engine,
+        }));
+        world.act(Action::Launch);
+        assert_eq!(world.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn handling_follows_the_fit() {
+        let mut world = World::new(1);
+        assert_eq!(world.handling(), (1.0, 1.0));
+        world.player.ship.fit = retrox_content::ships::stock("bulk-freighter").unwrap();
+        let (thrust, turn) = world.handling();
+        assert!(thrust < 1.0 && turn < 1.0, "{thrust} {turn}");
+    }
+
+    fn engine_slot(world: &World) -> (usize, usize) {
+        let fit = &world.player.ship.fit;
+        fit.mounts()
+            .enumerate()
+            .find_map(|(m, (_, section))| {
+                let s = section?.slots().position(|(slot, module)| {
+                    slot.kind == retrox_sim::ship::SlotKind::Engine && module.is_some()
+                })?;
+                Some((m, s))
+            })
+            .expect("an engine")
     }
 
     #[test]
