@@ -321,6 +321,16 @@ Consequences:
 - **Planet ports:** ships dock at a holding point above a planet's north
   pole (1.5 radii out), not at its centre.
 - **Pirates** fly in the bubble too (§7.2.2).
+- **What a bubble day costs** (#115): a flight flies a few dozen
+  autopilot steps a day. A goal must say how it really moves: one whose
+  velocity is off by more than the arrival tolerance (5 m/s) is never
+  reached, and the ship steps at the smallest step all day. Harvesters'
+  work spots once did (their star-facing offset turns with the source),
+  and a busy bubble's day took most of a second. So moving goals carry
+  every part of their motion, a step is never shorter than a tenth of
+  the time to match the goal's speed, and `a_busy_bubble_day_flies_few_steps`
+  holds the busiest system to under 1,000 steps per flight-day.
+  `retrox bench` reports the bubble's ms per day and steps per flight-day.
 - **Not yet in the bubble:** colony ships, patrols. Harvesters fly in it
   (§5.4.2).
 - **Seen by the player:** the client carries each flight on between the

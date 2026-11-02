@@ -149,3 +149,33 @@ fn harvesters_work_their_source_in_the_bubble() {
     assert!(worked > 0, "no harvester was ever seen at its source");
     assert!(delivered > 0, "no harvester filled its hold");
 }
+
+/// A work goal's velocity is how its position actually moves, offset
+/// turning with the source included: the autopilot only counts a ship
+/// arrived within a few m/s of it, so a goal that lies about its speed is
+/// never reached (issue #115).
+#[test]
+fn work_goals_move_as_they_say() {
+    let state = small();
+    let h = 20.0;
+    let mut checked = 0;
+    for (system, _) in state.systems.iter() {
+        for source in harvest::sources_in(&state, system) {
+            for slot in [0.0, 0.3, 0.7] {
+                let t = 100.0;
+                let a = harvest::work_goal(&state, source, slot, t);
+                let before = harvest::work_goal(&state, source, slot, t - h / 86_400.0);
+                let after = harvest::work_goal(&state, source, slot, t + h / 86_400.0);
+                let moved = flight::scale(flight::sub(after.pos, before.pos), 0.5 / h);
+                let off = flight::length(flight::sub(moved, a.vel));
+                assert!(
+                    off < 0.5,
+                    "{}: goal moves {off:.2} m/s off its stated velocity",
+                    harvest::name(&state, source)
+                );
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 100, "only {checked} goals checked");
+}

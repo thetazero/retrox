@@ -13,6 +13,7 @@
 //! their own.
 
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub type Vec3 = [f64; 3];
 
@@ -92,8 +93,20 @@ fn step_size(ship: &Kinematics, goal: &Goal, accel: f64) -> f64 {
     let d = length(sub(goal.pos, ship.pos));
     let speed = length(sub(ship.vel, goal.vel));
     // From rest, a brake-curve trip takes about 2·sqrt(d/a); at speed, d/v.
-    let left = d / speed.max((accel * d).sqrt()).max(1e-9);
+    // Either way it can't arrive before it has matched the goal's velocity,
+    // which takes v/a: without that floor, a ship on the goal's spot but
+    // not yet at its speed steps at the minimum all day (issue #115).
+    let left = (d / speed.max((accel * d).sqrt()).max(1e-9)).max(speed / accel.max(1e-9));
     (left * STEP_SHARE).clamp(MIN_STEP_S, MAX_STEP_S)
+}
+
+/// Autopilot steps flown so far, by every [`fly`] in the process: what a
+/// busy bubble's day costs, for tests and `retrox bench` (issue #115).
+static STEPS: AtomicU64 = AtomicU64::new(0);
+
+/// How many autopilot steps [`fly`] has taken in this process.
+pub fn steps_flown() -> u64 {
+    STEPS.load(Ordering::Relaxed)
 }
 
 /// Advance `ship` by one step of `dt` seconds under `thrust` m/s².
@@ -121,6 +134,7 @@ pub fn fly(
             return None;
         }
         let dt = step_size(ship, &g, accel).min(seconds - t);
+        STEPS.fetch_add(1, Ordering::Relaxed);
         step(ship, autopilot(ship, &g, accel, dt), dt);
         t += dt;
     }
