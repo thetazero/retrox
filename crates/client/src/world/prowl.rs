@@ -246,7 +246,9 @@ impl World {
             pos: to_sim(self.ship_position()),
             vel: to_sim(self.ship.vel + self.velocity_at(self.ship.frame, self.t_days())),
         };
-        self.combat.raiders.clear();
+        self.combat
+            .raiders
+            .retain(|r| r.crew != crate::combat::Crew::Pirate);
         pirates::fought(&mut self.galaxy, id, &killed, Some(at));
     }
 
@@ -320,13 +322,16 @@ impl World {
 
     /// The fight is far behind: the gang has gone home.
     pub(super) fn fight_left_behind(&self) -> bool {
-        self.combat.gang.is_some()
-            && (self.combat.raiders.is_empty()
-                || self
-                    .combat
-                    .raiders
-                    .iter()
-                    .all(|r| (r.home - self.combat_position()).length() > LEASH * 2.0))
+        if self.combat.gang.is_none() {
+            return false;
+        }
+        let me = self.combat_position();
+        // Only the gang's ships count: traders caught up in it don't.
+        self.combat
+            .raiders
+            .iter()
+            .filter(|r| r.crew == crate::combat::Crew::Pirate)
+            .all(|r| (r.home - me).length() > LEASH * 2.0)
     }
 
     /// A loaded game has no fight going: gangs that were in one, or after
