@@ -87,7 +87,7 @@ pub const TRAVEL_KEYS: &[KeyRow] = &[
 
 pub const WORK_KEYS: &[KeyRow] = &[
     (&["G"], "prospect: read the rocks"),
-    (&["LMB", "R"], "fire guns · mining laser"),
+    (&["LMB", "R"], "fire guns · mining laser · gas scoop"),
     (&["Y"], "next hostile target"),
     (&["V"], "cockpit / chase camera"),
     (&["TAB"], "take or free the mouse"),

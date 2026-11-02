@@ -268,7 +268,8 @@ Consequences:
   tiers.
 - **Planet ports:** ships dock at a holding point above a planet's north
   pole (1.5 radii out), not at its centre.
-- **Not yet in the bubble:** colony ships, miners, patrols.
+- **Not yet in the bubble:** colony ships, patrols. Harvesters fly in it
+  (§5.4.2).
 - **Seen by the player:** the client carries each flight on between the
   sim's daily ticks with the same autopilot, and draws each fleet as its
   ships in a loose echelon, nose along its thrust (a braking ship flies
@@ -351,6 +352,47 @@ report to check them on a long run.
 - **Cargo always gets off.** A fleet with cargo still aboard at its review
   routes to wherever that cargo sells best; if nobody in reach can buy it,
   it leaves the cargo at the dock for nothing.
+
+#### 5.4.2 Harvesting (#68)
+
+Raw materials also come from space, gathered by ships, not only from
+facilities on the ground. Decided while building it:
+
+- **Gas is a good of its own.** Gas giants hold gas (richness 0.2–1.0,
+  more in bigger giants); nothing else does. A **gas plant** refines it,
+  1 t of gas to 1.4 t of fuel, which makes it cheaper to run than cracking
+  ice in the old fuel plant (1:1), which stays as the fallback where
+  there's no giant. Gas plants are built only in systems with a giant.
+  Gas's base price is 10.
+- **Sources.** Ice comes from icy asteroid fields, icy moons and ice
+  worlds; gas from gas giants. Ore stays with mines.
+- **Harvesters are companies** like traders, on the same calendar, whose
+  fleets carry a harvest job. They work only sources in their port's
+  system and never use the lanes. At its monthly review a fleet picks the
+  source and the market in the system that pay best per day, after fuel
+  and crew upkeep, for a market with room for at least half a hold (no
+  market buys past the storage cap that would stop its own facilities).
+  A **run** is one trip: out to the source, work it until the hold is
+  full, in to the market, where it sells like any arrival. In the coarse
+  tier the hold fills on the day it arrives.
+- **Sources don't run dry; they strain.** Each source remembers the tonnes
+  taken from it lately, fading with a 120-day time constant (the same
+  memory fields have of the player's mining). Work takes
+  `6 days / richness`, stretched by `1 + strain / capacity` (capacity
+  6,000 t for a field, 10,000 t for a moon, 40,000 t for a giant), so
+  crowded sources slow down and crews spread out. The player's skimming
+  and ice mining strain a source like anyone's.
+- **Founding.** A settlement short of a good it has a source of may found
+  a harvesting company with one ship: the hull that pays best at base
+  prices that it can afford, fetched from the nearest yard in reach, which
+  then flies home. Generation seeds harvesters for every settlement's gas,
+  and for ice where nobody in the system mines it on the ground.
+- **In the bubble** a run is flown: out to the source, holding station
+  there while it works (in a field, among the rocks; at a giant, skimming
+  its sunlit cloud tops; at a moon, low over it), and in to sell. Ice crews
+  are drawn cutting a boulder with their laser, gas skimmers trailing a
+  plasma plume and contrail. Their HUD label says what they're doing and
+  for how many more days.
 
 ### 5.5 Factions
 
@@ -629,6 +671,31 @@ from a random generator (pillar 5).
   autosave). Because the game is deterministic, the same future plays out
   again unless you act differently — what you learned before dying is
   yours to use.
+
+### 7.3.1 Gas skimming (#68)
+
+The player's way to harvest a gas giant, the same sources NPC skimmers
+work.
+
+- **Getting there:** fast travel to a gas giant stops 160 km above its
+  cloud deck, not at the edge of its well.
+- **The band:** the gas thickens by a factor of *e* every 20 km down, from
+  nothing at 120 km to full at the deck. The deck is solid: you bounce
+  off it.
+- **The scoop** is the hold's intake; any ship with a hold can skim. Hold
+  the trigger in the band and it opens. It takes in gas as density × speed
+  × richness, scaled by the square root of the hold's size, and friction
+  heats it as density × speed². So deep and slow beats high and fast, and
+  deep and fast cooks it in seconds. At full heat it shuts and vents until
+  it has cooled to a fifth; radiators shed the heat, as they do the mining
+  laser's.
+- **The gas pushes back:** drag through it, and turbulent shoves near the
+  deck that grow with density and speed.
+- **The HUD** swaps the mining panel for a skimming panel over a giant: an
+  altimeter strip shaded by density with the band's top marked, readouts
+  of height, speed through the gas and intake, the scoop's lamps and heat,
+  the hold, and what the gas fetches nearby. The open scoop trails the
+  same plume NPC skimmers do.
 
 ## 8. Art direction & audio
 

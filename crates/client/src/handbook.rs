@@ -157,7 +157,8 @@ fn first_steps(ui: &mut egui::Ui) {
     rich_hint(
         ui,
         "Mine: fly into an asteroid field (∴ in NAVIGATION), [G] to prospect, hold [LMB] on the \
-         veins, and sell the ore. Trade: buy what's in surplus, sell where it's short.",
+         veins, and sell the ore. Skim: fast travel to a gas giant, dive into its clouds and \
+         hold [LMB] to scoop gas. Trade: buy what's in surplus, sell where it's short.",
         CREAM_DIM,
     );
     ui.add_space(6.0);
@@ -229,6 +230,14 @@ fn living(ui: &mut egui::Ui) {
         "In an asteroid field, [G] reads the rocks: what they hold, how rich, and the glowing \
          veins. Hold the laser ([LMB] or [R]) on a vein: it cuts faster and yields more. Watch \
          the heat; fly close to scoop the ore, and sell it at a station.",
+    );
+    topic(
+        ui,
+        "Skimming",
+        "Fast travel to a gas giant and you stop just above its clouds. Dive below 120 km and \
+         hold [LMB] or [R] to open the scoop. The deeper you go the thicker the gas and the \
+         faster the hold fills, but speed through thick gas cooks the scoop: deep and slow is \
+         the way. Turbulence shoves you about near the deck. Gas plants buy the gas.",
     );
     topic(
         ui,
