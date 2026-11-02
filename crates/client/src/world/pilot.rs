@@ -102,6 +102,14 @@ impl World {
         }
         let place = leg.frame();
         let centre = self.position_at(place, t);
+        if let Some(rock) = self.stop_rock(leg, t) {
+            let side = (ship - rock).normalize_or(DVec3::Z);
+            let standoff = self.field_stop.map_or(0.0, |s| s.2);
+            return Goal {
+                pos: (rock + side * standoff).to_array(),
+                vel: self.velocity_at(place, t).to_array(),
+            };
+        }
         let up = (ship - centre).normalize_or(DVec3::Z);
         let (side, distance) = match leg {
             Leg::To(_) | Leg::Intercept(_) => (up, self.arrival_distance(place)),
@@ -122,6 +130,9 @@ impl World {
     /// Which way the ship should be looking when `leg` ends: at the place
     /// it travelled to, or, out of a well, the way it's headed next.
     pub(super) fn arrival_facing(&self, leg: Leg, ship: DVec3, t: f64) -> DVec3 {
+        if let Some(rock) = self.stop_rock(leg, t) {
+            return rock - ship;
+        }
         match leg {
             Leg::To(place) => self.position_at(place, t) - ship,
             Leg::Intercept(fleet) => self.position_at(Place::Convoy(fleet), t) - ship,
@@ -130,6 +141,16 @@ impl World {
                 DVec3::from_array(goal.pos) - self.position_at(leg.frame(), t)
             }
         }
+    }
+
+    /// Where the rock a trip into a field stops by is at day `t`, if this
+    /// leg goes to one.
+    fn stop_rock(&self, leg: Leg, t: f64) -> Option<DVec3> {
+        let Leg::To(Place::Field(field)) = leg else {
+            return None;
+        };
+        let (f, offset, _) = self.field_stop?;
+        (f == field).then(|| self.position_at(leg.frame(), t) + offset)
     }
 
     /// The fast-travel drive's acceleration for this ship.
@@ -151,6 +172,14 @@ impl World {
     pub(super) fn start_fast_travel(&mut self, leg: Leg) {
         let t = self.t_days();
         let pos = self.ship_position();
+        self.field_stop = match leg {
+            Leg::To(Place::Field(field)) => {
+                let side = (pos - self.position(Place::Field(field))).normalize_or(DVec3::Z);
+                self.field_stop(field, side)
+                    .map(|(offset, standoff)| (field, offset, standoff))
+            }
+            _ => None,
+        };
         let ship = Kinematics {
             pos: pos.to_array(),
             vel: (self.ship.vel + self.velocity_at(self.ship.frame, t)).to_array(),

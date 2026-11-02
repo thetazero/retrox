@@ -97,7 +97,16 @@ fn fast_travel_reaches_every_place_and_only_climbs_out_of_a_well() {
             "{}: still {last_off:.0}° off just before arriving",
             world.name(target)
         );
-        let (d, expected) = (world.distance_to(target), world.arrival_distance(target));
+        // A field's trip stops by a rock at its edge (#122); anywhere
+        // else at the place's arrival distance.
+        let (stop, expected) = match (target, world.field_stop) {
+            (Place::Field(f), Some((field, offset, standoff))) if f == field => {
+                (world.position(target) + offset, standoff)
+            }
+            (Place::Field(_), _) => panic!("{}: no rock to stop by", world.name(target)),
+            _ => (world.position(target), world.arrival_distance(target)),
+        };
+        let d = (stop - world.ship_position()).length();
         assert!(
             (d - expected).abs() < expected * 0.05 + 1.0,
             "{}: arrived {d:.3e} m away, expected {expected:.3e}",
@@ -106,7 +115,7 @@ fn fast_travel_reaches_every_place_and_only_climbs_out_of_a_well() {
         assert!(world.clock_s > before, "galaxy time must pass");
         // Arrives nose-on (#118), not braking tail-first.
         let nose = world.ship.rot * DVec3::NEG_Z;
-        let to = (world.position(target) - world.ship_position()).normalize();
+        let to = (stop - world.ship_position()).normalize();
         assert!(
             nose.dot(to) > 0.99,
             "{}: arrived facing {:.0}° off",
@@ -1079,4 +1088,46 @@ fn t_cycles_through_cities_under_their_planet() {
     }
     world.act(Action::CycleTarget);
     assert_eq!(world.landing.filter(|c| cities.contains(c)), None);
+}
+
+#[test]
+fn fast_travel_into_a_field_stops_in_laser_reach_of_a_rock() {
+    // Issue #122: not 10 km past the field's edge, a long hand flight from
+    // its rocks.
+    let mut world = World::new(1);
+    let field = world.view.fields[0];
+    open_space(&mut world);
+    world.target = Some(Place::Field(field));
+    world.act(Action::FastTravel);
+    while matches!(world.mode, Mode::FastTravel(_)) {
+        world.update(1.0 / 60.0, Controls::default());
+    }
+    let (_, rocks) = world.field_rocks.clone().expect("in the field's rocks");
+    let f = &world.galaxy.fields[field];
+    let ship = world.ship.rel;
+    let nearest = world
+        .mining
+        .live_rocks(field, f, &rocks, world.clock_s)
+        .map(|r| (r.pos - ship).length() - r.radius)
+        .fold(f64::INFINITY, f64::min);
+    let reach = world.stats().mining_range_m;
+    assert!(nearest < reach, "nearest rock {nearest:.0} m off, laser reaches {reach:.0}");
+    // Nose-on to it: prospect and fire.
+    world.update(1.0 / 60.0, Controls::default());
+    assert!(
+        world.mining.aim.is_some_and(|a| a.distance < reach),
+        "the laser is on a rock as the trip ends"
+    );
+}
+
+#[test]
+#[ignore]
+fn scratch_first_board() {
+    for seed in [266135087u64, 1, 2, 3, 4] {
+        let w = World::new(seed);
+        println!("seed {seed}: at {}", w.galaxy.settlements[w.docked_at().unwrap()].name);
+        for o in &w.board {
+            println!("  {} j {:.0} d {:.0} t fee {:.0} dep {:.0} -> {}", o.jumps, o.trip_days, o.amount, o.fee, o.value, w.galaxy.settlements[o.to].name);
+        }
+    }
 }

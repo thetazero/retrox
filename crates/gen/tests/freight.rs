@@ -54,9 +54,11 @@ fn boards_follow_the_rules() {
             assert!(!matches!(state.settlements[o.to].site, Site::Surface(_)));
         }
         assert!(per_destination.values().all(|&n| n <= 2));
-        // Best pay per day first.
-        let rate = |o: &freight::Offer| o.fee / o.trip_days.max(1.0);
-        assert!(board.windows(2).all(|w| rate(&w[0]) >= rate(&w[1])));
+        // Best pay per day first, to the cent; the shorter run first
+        // among equals.
+        let rate = |o: &freight::Offer| (o.fee / o.trip_days.max(1.0) * 100.0).round();
+        assert!(board.windows(2).all(|w| rate(&w[0]) > rate(&w[1])
+            || (rate(&w[0]) == rate(&w[1]) && w[0].jumps <= w[1].jumps)));
         offers += board.len();
     }
     assert!(offers > 0, "some board somewhere has work");

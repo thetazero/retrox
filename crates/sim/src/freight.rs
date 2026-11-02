@@ -116,7 +116,7 @@ pub struct Pending {
 }
 
 /// The board at `here`: contracts sized to a hold of `lot_t` tonnes,
-/// best pay per day first. `lane_days` is how many days the player's ship
+/// best pay per day first, the shorter run first among equals. `lane_days` is how many days the player's ship
 /// takes to cross a lane of a given length in light-years. `pending` is
 /// what the player already carries under contract.
 pub fn board(
@@ -199,9 +199,14 @@ pub fn board(
         }
     }
 
-    // Best pay per day first; ties broken by ids so the order is stable.
+    // Best pay per day first, to the cent. Full lots all pay the same per
+    // day, so the shorter run goes first (issue #129); then ids, so the
+    // order is stable.
+    let cents = |rate: f64| (rate * 100.0).round();
     offers.sort_by(|a, b| {
-        b.0.total_cmp(&a.0)
+        cents(b.0)
+            .total_cmp(&cents(a.0))
+            .then_with(|| a.1.jumps.cmp(&b.1.jumps))
             .then_with(|| a.1.to.cmp(&b.1.to))
             .then_with(|| a.1.good.cmp(&b.1.good))
     });

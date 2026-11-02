@@ -318,6 +318,10 @@ pub struct World {
     pub cam_rot: DQuat,
     /// Rocks of the asteroid field the ship is in, if any.
     pub field_rocks: Option<(FieldId, Vec<Rock>)>,
+    /// Fast travel into a field stops by this rock (issue #122): the
+    /// field, the rock's offset from its centre and the stand-off from the
+    /// rock's centre. Picked when the trip starts.
+    pub field_stop: Option<(FieldId, DVec3, f64)>,
     /// The mining laser and what it has done to every field.
     pub mining: Mining,
     /// The gas scoop, near a gas giant (issue #68).
@@ -447,6 +451,7 @@ impl World {
             cockpit: false,
             cam_rot,
             field_rocks: None,
+            field_stop: None,
             mining: Mining::default(),
             skim: crate::skim::Skim::default(),
             beam: None,
@@ -677,7 +682,8 @@ impl World {
         Some((target, city))
     }
 
-    /// Where fast travel to `place` stops, measured from its centre.
+    /// Where fast travel to `place` stops, measured from its centre. A
+    /// field's is only roughly so: the trip stops by one of its rocks.
     pub fn arrival_distance(&self, place: Place) -> f64 {
         match place {
             // Gas giants: just above the cloud deck, ready to skim.
@@ -686,7 +692,10 @@ impl World {
             }
             Place::Body(b) if self.has_city(b) => self.place_radius(place) * APPROACH_RADII,
             Place::Star | Place::Body(_) => self.well_radius(place) * 1.05,
-            Place::Field(_) => self.place_radius(place) + 10e3,
+            // Fast travel stops by a rock at the field's edge
+            // ([`World::field_stop`]); this is the edge of its rocks, for
+            // the prompts.
+            Place::Field(_) => self.place_radius(place),
             // Inside the dock prompt's reach ([`World::prompts`]), clear of
             // the hull: arrive, [F] to dock.
             Place::Station(s) => self.station_size_m(s) * 1.2 + 200.0,
