@@ -212,7 +212,7 @@ fn offer_card(
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
                 ui.set_width(400.0);
-                let route = format!("{} · ~{:.0} d", jumps_text(o.jumps), o.trip_days);
+                let route = format!("{} · about {:.0} d", jumps_text(o.jumps), o.trip_days);
                 cargo_lines(ui, w, o, &route);
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

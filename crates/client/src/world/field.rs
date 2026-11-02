@@ -126,7 +126,7 @@ impl World {
             from,
         );
         if let Some(n) = found {
-            self.say(format!("Prospector: {n} rocks read"));
+            self.say(format!("Prospector: {} read", crate::hud::count(n, "rock")));
         }
     }
 }

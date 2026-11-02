@@ -95,7 +95,7 @@ fn hub(ctx: &egui::Context, w: &World, here: SettlementId, actions: &mut Vec<Act
             let contracts_note = match (w.board.len(), w.player.contracts.len()) {
                 (0, 0) => "nothing to haul today".to_owned(),
                 (0, n) => format!("{n} under way · nothing new today"),
-                (b, 0) => format!("{b} contracts to haul"),
+                (b, 0) => format!("{} to haul", crate::hud::count(b, "contract")),
                 (b, n) => format!("{b} to haul · {n} under way"),
             };
             let contracts_note = if bound_here > 0 {

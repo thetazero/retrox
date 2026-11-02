@@ -1175,6 +1175,15 @@ fn contact_label(c: &crate::traffic::Contact, dist: f64) -> String {
     )
 }
 
+/// `n` of `thing`, with the plural `s` when it needs one.
+pub fn count(n: usize, thing: &str) -> String {
+    if n == 1 {
+        format!("1 {thing}")
+    } else {
+        format!("{n} {thing}s")
+    }
+}
+
 /// A count of hyperlane jumps, in words.
 pub fn jumps_text(jumps: u32) -> String {
     match jumps {

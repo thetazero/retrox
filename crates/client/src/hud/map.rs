@@ -1184,10 +1184,10 @@ fn system_info(ui: &mut egui::Ui, w: &World, s: SystemId) {
         .map(|(_, st)| st.economy.population)
         .sum();
     let mut facts = format!(
-        "{} star · {} lanes · {} settlements",
+        "{} star · {} · {}",
         star_name(system.star),
-        system.lanes.len(),
-        system.settlements.len()
+        count(system.lanes.len(), "lane"),
+        count(system.settlements.len(), "settlement")
     );
     if population > 0.0 {
         facts += &format!(" · pop {population:.1}k");

@@ -409,7 +409,11 @@ pub fn run(
             let message = if sold.is_empty() {
                 format!("Fitted a {}", section.name)
             } else {
-                format!("Fitted a {} and sold {} modules", section.name, sold.len())
+                format!(
+                    "Fitted a {} and sold {}",
+                    section.name,
+                    crate::hud::count(sold.len(), "module")
+                )
             };
             Done {
                 message,
