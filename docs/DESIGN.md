@@ -721,11 +721,13 @@ somewhere, live somewhere, and fly for real near the player.
   (interceptors, heavy fighters) to start, and a record: tonnes taken,
   last raid, and how much it has taken from each faction's traders.
   Every 80 t taken buys another ship, up to five; the fourth is a gunship.
-  150 days without a raid costs a ship; a gang with none is gone.
+  150 days without a raid costs a ship, and each further 75 another (at
+  the monthly reviews, so about one every three months); a gang with none
+  is gone.
   Founding, breaking up and bounties go in the history record.
 - **Raids, coarse tier.** A trader trip that starts or ends in a lair
   system (or a system next to one) may be robbed on arrival: 5% per gang
-  ship in the lair system, 2% next door, at most 40%. The gang takes up to
+  ship in the lair system, 2% next door, so at most 25%. The gang takes up to
   25 t per ship of the cargo, and one time in twenty a ship (much more
   often and replacement ships outrun the freight: the economy test's
   idle share goes past a fifth).
@@ -777,8 +779,9 @@ somewhere, live somewhere, and fly for real near the player.
 - **Standing** with each faction runs from −100 to +100, read as a rank:
   hostile (−25 and below), wary (below −5), neutral, trusted (15 and
   up), honoured (50 and up). It moves by: +3 for a ship with that
-  faction's warrant on it, +1 for any pirate destroyed in its space
-  (where it has the most people), +1 per delivery, −5 per failed
+  faction's warrant on it (paid or not: a broke treasury is still
+  glad), +1 for any pirate destroyed in its space (where it has the most
+  people; not on top of the +3 when it posted the warrant), +1 per delivery, −5 per failed
   contract; **−20 for opening fire on one of its peaceful ships**, −6 for
   each further hit (at most one per 1.5 s per fleet) and −30 for each of
   its ships destroyed. So one attack and a second burst make a faction

@@ -259,6 +259,11 @@ impl World {
             return;
         };
         let local = self.galaxy.largest_faction_in(self.system);
+        // The warrant's faction is glad of it even when its treasury
+        // can't pay (§7.2.2: +3 for a ship with its warrant on it).
+        let warrant = (self.galaxy.pirates.gangs.get(id))
+            .and_then(|g| g.bounty)
+            .map(|b| b.faction);
         let paid = pirates::claim_bounty(&mut self.galaxy, id, ship as usize);
         let mut said = Vec::new();
         if let Some((faction, amount)) = paid {
@@ -269,11 +274,13 @@ impl World {
                 "Bounty paid · {} from the {name}",
                 crate::hud::credits(amount)
             ));
-            if let Some(rank) = self.player.standing.change(faction, standing::BOUNTY_KILL) {
-                said.push(rank_news(&name, rank));
-            }
         }
-        if let Some(f) = local.filter(|&f| paid.is_none_or(|(p, _)| p != f))
+        if let Some(faction) = warrant
+            && let Some(rank) = self.player.standing.change(faction, standing::BOUNTY_KILL)
+        {
+            said.push(rank_news(&self.faction_name(faction), rank));
+        }
+        if let Some(f) = local.filter(|&f| warrant != Some(f))
             && let Some(rank) = self.player.standing.change(f, standing::PIRATE_KILL)
         {
             said.push(rank_news(&self.faction_name(f), rank));
