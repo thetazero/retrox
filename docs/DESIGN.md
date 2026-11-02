@@ -485,6 +485,34 @@ retrox/
   the local scene it's an implementation detail, since that state is a
   disposable view of the sim.
 - **Saves:** single long save + checkpoints/autosaves at docking.
+  - Each game has its own folder (`<data dir>/saves/<started>-<seed>/`,
+    data dir `$XDG_DATA_HOME/retrox`) with two files: `save.json`, the one
+    long save, written from the pause menu; and `checkpoint.json`, rewritten
+    on every docking and landing. A death will restore the checkpoint
+    (§7.7). *Continue* loads the newest file of any game.
+  - A save is the whole sim state (RNG streams, calendar queue, free lists)
+    plus the player's: date, ship and fit, cargo, credits, stored ships,
+    and docked / landed / in space and where. Loading it replays the same
+    future given the same actions (tested).
+  - No saving in transit (fast travel, a hyperlane jump, the landing
+    animation): the pause menu says why, and checkpoints fall on arrival.
+  - File: a JSON header line (what the load screen shows) then the player's
+    state and the galaxy, gzipped. Fits are saved as content ids, not
+    indices. A `FORMAT` number is bumped when saved state changes shape;
+    other formats, or files that don't parse, are refused with a message,
+    never a crash. Migrating old saves can come once there are players
+    with saves worth keeping.
+- **Menus:** launch to a title screen (Continue, New game, Load,
+  Settings, Quit) over a backdrop that needs no galaxy. New game takes a
+  seed (a number, or a word hashed to one; random by default) and
+  generates on a worker thread behind a loading card. Esc in play opens
+  the pause menu (Resume, Save, Load, Settings, Quit to title), which
+  stops galaxy time; it first closes the map or backs out of a station
+  screen. Quit to title offers save-and-quit. Menus work with the mouse or
+  the arrow keys and Enter. Settings (mouse sensitivity, invert pitch,
+  fullscreen, interface size) persist in `$XDG_CONFIG_HOME/retrox/
+  settings.json`. Development flags (`--seed`, `--station`, …) still skip
+  the title; `--menu` and `--keys` drive menus for screenshots and checks.
 
 ## 10. Milestones (rough)
 

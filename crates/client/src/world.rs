@@ -28,6 +28,7 @@ use std::sync::LazyLock;
 
 use glam::{DQuat, DVec3};
 use retrox_sim::ship::ShipStats;
+use serde::{Deserialize, Serialize};
 
 use crate::hangar::{self, Job, Player};
 use retrox_gen::{GalaxyConfig, Rock, generate, rocks};
@@ -65,7 +66,7 @@ static REFERENCE: LazyLock<ShipStats> = LazyLock::new(|| {
 });
 
 /// Something in the current system you can navigate to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Place {
     Star,
     Body(BodyId),
@@ -149,7 +150,7 @@ pub struct FastTravel {
     pub elapsed: f32,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Ship {
     pub frame: Place,
     /// Position relative to the frame, metres.
@@ -295,39 +296,57 @@ impl World {
             .map(|(s, b, _)| (s, b))
             .expect("some faction capital is a city");
         let system = galaxy.settlements[city].system;
-        let view = SystemView::new(&galaxy, system);
         let clock_s = galaxy.time.days() as f64 * SECONDS_PER_DAY;
-        Self {
+        let ship = Ship {
+            frame: Place::Body(body),
+            rel: DVec3::ZERO,
+            vel: DVec3::ZERO,
+            rot: DQuat::IDENTITY,
+            spin: DVec3::ZERO,
+            throttle: 0.0,
+            flight_assist: true,
+        };
+        let mode = Mode::Landed {
+            city,
+            body,
+            timer: 0.0,
+        };
+        Self::from_parts(galaxy, system, clock_s, ship, mode, Player::new())
+    }
+
+    /// A world from its saved parts; everything else (the system's index,
+    /// the camera, asteroid rocks) is rebuilt from them.
+    pub fn from_parts(
+        galaxy: GalaxyState,
+        system: SystemId,
+        clock_s: f64,
+        ship: Ship,
+        mode: Mode,
+        player: Player,
+    ) -> Self {
+        let view = SystemView::new(&galaxy, system);
+        let cam_rot = ship.rot;
+        let mut world = Self {
             galaxy,
             system,
             view,
             clock_s,
-            ship: Ship {
-                frame: Place::Body(body),
-                rel: DVec3::ZERO,
-                vel: DVec3::ZERO,
-                rot: DQuat::IDENTITY,
-                spin: DVec3::ZERO,
-                throttle: 0.0,
-                flight_assist: true,
-            },
-            mode: Mode::Landed {
-                city,
-                body,
-                timer: 0.0,
-            },
+            ship,
+            mode,
             target: None,
             cockpit: false,
-            cam_rot: DQuat::IDENTITY,
+            cam_rot,
             field_rocks: None,
             message: None,
-            player: Player::new(),
+            player,
             screen: Screen::Hub,
             inspect: None,
             system_generation: 0,
             map_open: false,
             course: None,
-        }
+        };
+        world.update_field();
+        world
     }
 
     fn t_days(&self) -> f64 {

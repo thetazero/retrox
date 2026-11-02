@@ -19,6 +19,7 @@ use retrox_sim::SettlementId;
 use retrox_sim::economy::{FacilityKind, HULL_T_PER_RUN};
 use retrox_sim::economy::{GoodMap, LocalEconomy};
 use retrox_sim::ship::{Hull, Loadout, Module, Mount, Section, Size};
+use serde::{Deserialize, Serialize};
 
 const HOUR: f64 = 3600.0;
 /// Buying a ship off the lot.
@@ -29,20 +30,22 @@ const OUTFITTER_POPULATION: f64 = 50.0;
 pub const STARTING_CREDITS: f64 = 25_000.0;
 pub const STARTING_HULL: &str = "courier";
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OwnedShip {
     pub name: String,
+    /// Saved as the ids of its parts (see [`crate::save::loadout`]).
+    #[serde(with = "crate::save::loadout")]
     pub fit: Loadout,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StoredShip {
     pub ship: OwnedShip,
     pub at: SettlementId,
 }
 
 /// The player's money and ships.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Player {
     pub credits: f64,
     /// The ship being flown.
