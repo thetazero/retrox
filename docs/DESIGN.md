@@ -1504,6 +1504,14 @@ retrox/
   the player's words, labelled **blocks play** (a new player can't get
   through the loop without outside knowledge, or loses work or money to
   it) or **polish** (playable, but rough to look at or slow to feel).
+  The `info:` readout gives each raider's bearing and the bearing of its
+  lead pip (where the guns must point, as the HUD draws it), and each
+  gang laired in the system with its aim, rest and distance (added in
+  #138, whose fights missed by aiming at the raider, not the pip, and
+  whose lair stood empty for reasons the screen couldn't show). A
+  playtest checks each fixed issue it covers in play, not only the new
+  ground, and a fix that didn't hold is filed afresh, pointing at the
+  old issue, rather than reopened.
 
 ## 10. Milestones (rough)
 

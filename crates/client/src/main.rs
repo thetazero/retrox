@@ -2842,14 +2842,33 @@ fn remote_info(w: &World) -> String {
     for r in &w.combat.raiders {
         let to = r.craft.pos - me;
         let (yaw, pitch) = bearing(to);
+        // Where the lead pip sits, the bearing to put the nose on.
+        let (lead_yaw, lead_pitch) = w
+            .combat
+            .lead(&w.player_craft(), r.id)
+            .map_or((yaw, pitch), |lead| bearing(lead - me));
         let _ = writeln!(
             out,
-            "raider {} dist {:.0} yaw {yaw:.1} pitch {pitch:.1} shield {:.0} damage {:.0} targeted {}",
+            "raider {} dist {:.0} yaw {yaw:.1} pitch {pitch:.1} lead_yaw {lead_yaw:.1} lead_pitch {lead_pitch:.1} shield {:.0} damage {:.0} targeted {}",
             r.id,
             to.length(),
             r.vessel.shield,
             r.vessel.damage.total(),
             w.combat.target == Some(r.id)
+        );
+    }
+    for (id, p) in &w.galaxy.pirates.prowls {
+        let Some(gang) = w.galaxy.pirates.gangs.get(*id) else {
+            continue;
+        };
+        if gang.lair != w.system {
+            continue;
+        }
+        let at = w.traffic.pirate(*id).map(|c| (c.pos - ship).length());
+        let _ = writeln!(
+            out,
+            "gang {} aim {:?} since {:?} rest_until {:?} dist {:?}",
+            gang.name, p.aim, p.since, p.rest_until, at
         );
     }
     if let Some((field, rocks)) = &w.field_rocks {
