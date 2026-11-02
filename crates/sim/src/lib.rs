@@ -7,6 +7,7 @@
 pub mod arena;
 pub mod economy;
 pub mod history;
+pub mod layout;
 pub mod phases;
 pub mod ship;
 pub mod state;

@@ -9,6 +9,7 @@ use retrox_sim::{GalaxyTime, PIPELINE, tick_profiled};
 
 mod map;
 mod ship;
+mod system;
 
 const USAGE: &str = "\
 usage:
@@ -17,6 +18,8 @@ usage:
                                            --csv writes monthly economy totals
   retrox map [--seed N] > galaxy.svg       render the generated galaxy as SVG
   retrox stats [--seed N]                  print generation statistics
+  retrox system [--seed N] --system NAME|INDEX
+                                           print a star system's layout
   retrox ship [HULL]                       list stock ships, or show one in detail";
 
 fn main() -> ExitCode {
@@ -28,7 +31,12 @@ fn main() -> ExitCode {
     if command == "ship" {
         return ship::print(args.get(1).map(String::as_str));
     }
-    let Flags { seed, years, csv } = match parse_flags(&args[1..]) {
+    let Flags {
+        seed,
+        years,
+        csv,
+        system,
+    } = match parse_flags(&args[1..]) {
         Ok(flags) => flags,
         Err(err) => {
             eprintln!("{err}\n{USAGE}");
@@ -47,6 +55,13 @@ fn main() -> ExitCode {
             print!("{}", map::svg(&state));
         }
         "stats" => stats(seed),
+        "system" => {
+            let state = generate(seed, &GalaxyConfig::default());
+            if let Err(err) = system::print(&state, system.as_deref().unwrap_or("0")) {
+                eprintln!("{err}");
+                return ExitCode::FAILURE;
+            }
+        }
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::FAILURE;
@@ -59,6 +74,7 @@ struct Flags {
     seed: u64,
     years: u64,
     csv: Option<String>,
+    system: Option<String>,
 }
 
 fn parse_flags(args: &[String]) -> Result<Flags, String> {
@@ -66,6 +82,7 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
         seed: 0,
         years: 10,
         csv: None,
+        system: None,
     };
     let mut it = args.iter();
     while let Some(flag) = it.next() {
@@ -81,6 +98,7 @@ fn parse_flags(args: &[String]) -> Result<Flags, String> {
             "--seed" => flags.seed = number()?,
             "--years" => flags.years = number()?,
             "--csv" => flags.csv = Some(value.clone()),
+            "--system" => flags.system = Some(value.clone()),
             _ => return Err(format!("unknown flag {flag}")),
         }
     }

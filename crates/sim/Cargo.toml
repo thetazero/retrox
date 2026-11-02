@@ -12,6 +12,7 @@ workspace = true
 serde.workspace = true
 slotmap.workspace = true
 rayon.workspace = true
+glam.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

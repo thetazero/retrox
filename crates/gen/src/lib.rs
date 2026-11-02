@@ -12,8 +12,10 @@ mod lanes;
 mod names;
 mod rng;
 mod stars;
+mod system;
 
 pub use rng::Rng;
+pub use system::{rocks, system_layout};
 
 use retrox_sim::{GalaxyState, StarSystem};
 
