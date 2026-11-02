@@ -47,9 +47,11 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
     let w = h.world;
     let screen = ctx.content_rect();
 
-    // Markers for every place, brighter for the target.
+    // Markers for every place; labels placed nearest-first (target always
+    // first) and skipped where they'd overlap one already drawn.
     if matches!(w.mode, Mode::Normal | Mode::Supercruise) {
         let painter = ctx.layer_painter(egui::LayerId::background());
+        let mut labels: Vec<(bool, f64, Pos2, String)> = Vec::new();
         for place in w.layout.places() {
             let pos = w.layout.position(place, w.clock_s);
             let rel = (pos - h.camera).as_vec3();
@@ -72,18 +74,32 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
                 ],
                 Stroke::new(1.2, color),
             ));
-            let near = matches!(place, Place::Body(_) | Place::Gate(_) | Place::Star)
-                || dist < 2e6
-                || targeted;
-            if near {
-                painter.text(
-                    p + Vec2::new(r + 4.0, -2.0),
-                    Align2::LEFT_CENTER,
-                    format!("{}  {}", w.layout.name(place), distance(dist)),
-                    FontId::monospace(if targeted { 13.0 } else { 11.0 }),
-                    color,
-                );
+            labels.push((
+                targeted,
+                dist,
+                p,
+                format!("{}  {}", w.layout.name(place), distance(dist)),
+            ));
+        }
+        labels.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.total_cmp(&b.1)));
+        let mut taken: Vec<egui::Rect> = Vec::new();
+        for (targeted, _, p, text) in labels {
+            let (font, color) = if targeted {
+                (FontId::monospace(13.0), CYAN)
+            } else {
+                (FontId::monospace(11.0), AMBER_DIM)
+            };
+            let galley = painter.layout_no_wrap(text, font, color);
+            let rect = egui::Rect::from_min_size(
+                p + Vec2::new(12.0, -galley.size().y / 2.0),
+                galley.size(),
+            )
+            .expand(2.0);
+            if taken.iter().any(|t| t.intersects(rect)) {
+                continue;
             }
+            taken.push(rect);
+            painter.galley(rect.min + Vec2::splat(2.0), galley, color);
         }
 
         // Crosshair and stick position.

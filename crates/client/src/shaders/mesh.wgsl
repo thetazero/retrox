@@ -50,21 +50,24 @@ fn vs(v: VIn) -> VOut {
     return o;
 }
 
-fn hash3(p: vec3<f32>) -> f32 {
-    var q = fract(p * 0.3183099 + vec3<f32>(0.1, 0.2, 0.3));
-    q = q * 17.0;
-    return fract(q.x * q.y * q.z * (q.x + q.y + q.z));
+// Integer lattice hash: stable at any coordinate, no visible patterns.
+fn hash3(c: vec3<i32>) -> f32 {
+    var h = bitcast<u32>(c.x) * 73856093u ^ bitcast<u32>(c.y) * 19349663u ^ bitcast<u32>(c.z) * 83492791u;
+    h = (h ^ (h >> 16u)) * 0x7feb352du;
+    h = (h ^ (h >> 15u)) * 0x846ca68bu;
+    h = h ^ (h >> 16u);
+    return f32(h) * (1.0 / 4294967295.0);
 }
 
 fn noise(p: vec3<f32>) -> f32 {
-    let i = floor(p);
+    let i = vec3<i32>(floor(p));
     let f = fract(p);
     let u = f * f * (3.0 - 2.0 * f);
     return mix(
-        mix(mix(hash3(i), hash3(i + vec3<f32>(1.0, 0.0, 0.0)), u.x),
-            mix(hash3(i + vec3<f32>(0.0, 1.0, 0.0)), hash3(i + vec3<f32>(1.0, 1.0, 0.0)), u.x), u.y),
-        mix(mix(hash3(i + vec3<f32>(0.0, 0.0, 1.0)), hash3(i + vec3<f32>(1.0, 0.0, 1.0)), u.x),
-            mix(hash3(i + vec3<f32>(0.0, 1.0, 1.0)), hash3(i + vec3<f32>(1.0, 1.0, 1.0)), u.x), u.y),
+        mix(mix(hash3(i), hash3(i + vec3<i32>(1, 0, 0)), u.x),
+            mix(hash3(i + vec3<i32>(0, 1, 0)), hash3(i + vec3<i32>(1, 1, 0)), u.x), u.y),
+        mix(mix(hash3(i + vec3<i32>(0, 0, 1)), hash3(i + vec3<i32>(1, 0, 1)), u.x),
+            mix(hash3(i + vec3<i32>(0, 1, 1)), hash3(i + vec3<i32>(1, 1, 1)), u.x), u.y),
         u.z);
 }
 
@@ -74,7 +77,7 @@ fn fbm(p: vec3<f32>) -> f32 {
     var q = p;
     for (var i = 0; i < 5; i = i + 1) {
         sum = sum + amp * noise(q);
-        q = q * 2.03;
+        q = vec3<f32>(q.y * 1.6 + q.z * 1.2, q.z * 1.6 - q.x * 1.2, q.x * 1.6 + q.y * 1.2) * 1.02;
         amp = amp * 0.5;
     }
     return sum;
@@ -97,8 +100,9 @@ fn fs(i: VOut) -> @location(0) vec4<f32> {
     var n = normalize(i.normal);
     // Two-sided lighting for meshes seen from "inside".
     if (dot(n, i.view_dir) < 0.0 && mode == PLAIN) { n = -n; }
-    let seed = vec3<f32>(i.params.z * 0.001, i.params.z * 0.0007, i.params.z * 0.0013);
-    let p = i.obj + fract(seed) * 50.0;
+    // Per-body offset into noise space (seed is an integer < 10000).
+    let s = i.params.z;
+    let p = i.obj + vec3<f32>(s % 97.0, (s / 97.0) % 89.0, s * 0.37 % 83.0);
     let mu = max(dot(n, i.view_dir), 0.0);
 
     if (mode == STAR) {
@@ -116,20 +120,20 @@ fn fs(i: VOut) -> @location(0) vec4<f32> {
         atmosphere = base * 0.6;
     } else if (mode == OCEAN) {
         let land = fbm(p * 2.2);
-        let sea = vec3<f32>(0.05, 0.14, 0.32);
-        let ground = mix(vec3<f32>(0.22, 0.32, 0.14), vec3<f32>(0.42, 0.36, 0.24), fbm(p * 7.0));
-        base = select(sea, ground, land > 0.52);
+        let sea = mix(vec3<f32>(0.02, 0.06, 0.16), vec3<f32>(0.04, 0.12, 0.26), smoothstep(0.35, 0.56, land));
+        let ground = mix(vec3<f32>(0.16, 0.26, 0.1), vec3<f32>(0.36, 0.32, 0.22), fbm(p * 6.0));
+        base = select(sea, ground, land > 0.56);
         let ice = smoothstep(0.82, 0.9, abs(i.obj.y) + fbm(p * 5.0) * 0.1);
         base = mix(base, vec3<f32>(0.85, 0.9, 0.95), ice);
         let clouds = smoothstep(0.55, 0.75, fbm(p * 3.0 + vec3<f32>(g.misc.x * 0.001)));
-        base = mix(base, vec3<f32>(0.9), clouds * 0.7);
+        base = mix(base, vec3<f32>(0.85), clouds * 0.45);
         atmosphere = vec3<f32>(0.3, 0.5, 1.0);
     } else if (mode == ROCKY || mode == DESERT || mode == BARREN) {
         let t = fbm(p * 3.0);
         base = base * (0.65 + 0.7 * t);
         if (mode == BARREN) {
             // Crater-ish speckle.
-            base = base * (0.8 + 0.4 * smoothstep(0.4, 0.8, noise(p * 30.0)));
+            base = base * (0.8 + 0.4 * smoothstep(0.4, 0.8, noise(p * 9.0)));
         }
         if (mode == ROCKY) { atmosphere = vec3<f32>(0.25, 0.3, 0.4) * 0.5; }
         if (mode == DESERT) { atmosphere = vec3<f32>(0.6, 0.4, 0.2) * 0.5; }
@@ -143,8 +147,16 @@ fn fs(i: VOut) -> @location(0) vec4<f32> {
 
     let ndl = dot(n, i.light.xyz);
     let lit = max(ndl, 0.0) * i.light.w;
-    let ambient = 0.015;
-    var color = base * (lit * g.star_color.rgb + vec3<f32>(ambient)) + emissive;
+    // Starlight, desaturated a little so orange suns don't tint everything.
+    let light_color = mix(vec3<f32>(1.0), g.star_color.rgb, 0.4);
+    var ambient = 0.015;
+    var fill = 0.0;
+    if (mode == PLAIN) {
+        // Built things get some fill so they read in shadow.
+        ambient = 0.06;
+        fill = 0.12 * mu;
+    }
+    var color = base * (lit * light_color + vec3<f32>(ambient + fill)) + emissive;
     // Thin atmosphere glow at the limb, on the day side.
     let rim = pow(1.0 - mu, 3.0) * smoothstep(-0.2, 0.3, ndl);
     color = color + atmosphere * rim * i.light.w;
