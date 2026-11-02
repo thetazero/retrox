@@ -14,8 +14,8 @@ pub mod time;
 pub use arena::{Arena, Id};
 pub use history::{History, HistoryEvent, HistoryKind};
 pub use state::{
-    EconomyModel, Faction, FactionId, GalaxyPos, GalaxyState, Hyperlane, LaneId, StarSystem,
-    SystemId,
+    EconomyModel, Faction, FactionId, GalaxyPos, GalaxyState, Hyperlane, LaneId, StarClass,
+    StarSystem, SystemId,
 };
 pub use tick::{PIPELINE, Phase, tick, tick_profiled};
 pub use time::GalaxyTime;
