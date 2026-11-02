@@ -193,7 +193,11 @@ fn controls(ui: &mut egui::Ui, invert_pitch: bool) {
     rich_hint(
         ui,
         "Drag to turn the chart, right-drag to pan, scroll for range. Click a system to plot a \
-         course to it; double-click to centre on it. [M] or [ESC] closes the map.",
+         course to it; double-click to centre on it. The chart lights what matters (where you \
+         are, the lanes you can jump, your course and your contracts' destinations, the last \
+         marked with an amber diamond) and dims the rest. To find a system by name, press [/] \
+         or click FIND SYSTEM and type; [ENTER] plots a course to the first match. [M] or [ESC] \
+         closes the map.",
         CREAM_DIM,
     );
     ui.add_space(6.0);

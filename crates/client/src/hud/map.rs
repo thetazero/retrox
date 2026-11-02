@@ -7,9 +7,12 @@
 //! slew the chart there. The next hop of the course can be jumped from here.
 //!
 //! Galaxy coordinates are light-years with the disc in x/y and z up; the
-//! disc is only a few light-years thick, so lines drop from systems near
-//! the focus to the galactic plane to show their height, and the plane
-//! carries range rings and bearing spokes around the focus.
+//! disc is only a few light-years thick. The chart plots on the plane level
+//! with its focus: range rings and bearing spokes round the focus, and
+//! lines from the systems that matter down (or up) to it to show their
+//! height. Those systems are drawn at full strength and the rest of the
+//! galaxy faint behind them (issue #192), and a search box finds a
+//! system by name.
 
 use std::f32::consts::{PI, TAU};
 
@@ -27,6 +30,8 @@ struct View {
     focus: DVec3,
     /// Where the chart drive is slewing the focus to, if anywhere.
     goal: Option<DVec3>,
+    /// The range it is opening out to as it slews, if any.
+    goal_dist: Option<f64>,
     /// Heading around the galactic pole, radians.
     yaw: f64,
     /// Elevation above the galactic plane, radians.
@@ -55,7 +60,7 @@ const RING: Color32 = Color32::from_rgb(36, 32, 36);
 /// rim.
 const GLASS_MID: Color32 = Color32::from_rgb(13, 24, 26);
 const GLASS_RIM: Color32 = Color32::from_rgb(5, 6, 9);
-/// Range rings and bearing spokes on the galactic plane.
+/// Range rings and bearing spokes on the plane of the focus.
 const PLOT: Color32 = Color32::from_rgba_premultiplied(13, 28, 25, 30);
 
 /// Where the instrument's parts sit on screen.
@@ -193,16 +198,20 @@ pub(super) fn draw(ctx: &egui::Context, w: &World, actions: &mut Vec<Action>) {
     let layout = Layout::new(screen);
     let id = egui::Id::unique("galaxy_map_view");
     let here = galaxy_point(w.galaxy.systems[w.system].position);
+    let route = w.course.and_then(|c| w.route(c)).unwrap_or_default();
+    let neighbours: Vec<SystemId> = w.lanes().iter().map(|l| l.to).collect();
+    let contracts = contract_systems(w);
     let mut view = ctx
         .data(|d| d.get_temp::<View>(id))
         .filter(|v| v.home == w.system)
-        .unwrap_or(View {
+        .unwrap_or_else(|| View {
             focus: here,
             goal: None,
+            goal_dist: None,
             // Look inward from the rim, toward the core.
             yaw: here.y.atan2(here.x),
             pitch: 0.6,
-            dist: 70.0,
+            dist: opening_range(w, here, &neighbours, &contracts),
             home: w.system,
         });
 
@@ -210,17 +219,23 @@ pub(super) fn draw(ctx: &egui::Context, w: &World, actions: &mut Vec<Action>) {
     if let Some(goal) = view.goal {
         let dt = f64::from(ctx.input(|i| i.stable_dt)).min(0.1);
         view.focus += (goal - view.focus) * (1.0 - (-dt * 5.0).exp());
+        if let Some(d) = view.goal_dist {
+            view.dist += (d - view.dist) * (1.0 - (-dt * 5.0).exp());
+        }
         if (goal - view.focus).length() < view.dist * 1e-3 {
             view.focus = goal;
             view.goal = None;
+            view.dist = view.goal_dist.take().unwrap_or(view.dist);
         }
         ctx.request_repaint();
     }
 
-    let route = w.course.and_then(|c| w.route(c)).unwrap_or_default();
     let next_hop = route.get(1).copied();
-    let neighbours: Vec<SystemId> = w.lanes().iter().map(|l| l.to).collect();
     let mut hovered: Option<SystemId> = None;
+    // The search box's text, and the systems it finds.
+    let query_id = egui::Id::unique("galaxy_map_query");
+    let mut query: String = ctx.data(|d| d.get_temp(query_id)).unwrap_or_default();
+    let found = search(w, &query, FOUND_MARKED);
     // The shipyards panel's systems, marked on the glass; and the one
     // whose row the pointer was on last frame.
     let found_yards = w.nearest(crate::world::Service::Shipyard, YARDS_LISTED);
@@ -251,6 +266,7 @@ pub(super) fn draw(ctx: &egui::Context, w: &World, actions: &mut Vec<Action>) {
                 view.focus +=
                     (-cam.right * f64::from(delta.x) + ahead * f64::from(delta.y)) * per_point;
                 view.goal = None;
+                view.goal_dist = None;
             } else if response.dragged_by(PointerButton::Primary) {
                 view.yaw -= f64::from(delta.x) * 0.006;
                 view.pitch = (view.pitch + f64::from(delta.y) * 0.006).clamp(-MAX_PITCH, MAX_PITCH);
@@ -260,6 +276,7 @@ pub(super) fn draw(ctx: &egui::Context, w: &World, actions: &mut Vec<Action>) {
                 let factor = f64::from(pinch * (scroll * 0.002).exp());
                 if (factor - 1.0).abs() > f64::EPSILON {
                     view.dist = (view.dist / factor).clamp(MIN_DIST, MAX_DIST);
+                    view.goal_dist = None;
                 }
             }
 
@@ -273,16 +290,21 @@ pub(super) fn draw(ctx: &egui::Context, w: &World, actions: &mut Vec<Action>) {
             let glass =
                 painter.with_clip_rect(Rect::from_center_size(centre, Vec2::splat(r * 2.0)));
             let ring_step = plane_plot(&glass, &cam, &view);
+            let marks = Marks {
+                route: &route,
+                neighbours: &neighbours,
+                contracts: &contracts,
+                yards: &yard_systems,
+                found: &found,
+                pointed,
+            };
             hovered = chart(
                 &glass,
                 &cam,
                 &view,
                 &layout,
                 w,
-                &route,
-                &neighbours,
-                &yard_systems,
-                pointed,
+                &marks,
                 response.hover_pos(),
             );
             crosshair(&glass, centre, r);
@@ -320,7 +342,7 @@ pub(super) fn draw(ctx: &egui::Context, w: &World, actions: &mut Vec<Action>) {
             painter.text(
                 layout.at(PI, layout.ring_out() + 10.0),
                 Align2::CENTER_TOP,
-                format!("GALACTIC PLANE · RINGS {} LY", ly(ring_step)),
+                format!("PLANE OF FOCUS · RINGS {} LY", ly(ring_step)),
                 mono(11.0),
                 CREAM_DIM,
             );
@@ -351,90 +373,67 @@ pub(super) fn draw(ctx: &egui::Context, w: &World, actions: &mut Vec<Action>) {
         });
 
     sidebar(ctx, w, hovered, &route, next_hop, &mut view, actions);
-    let pointed = yards_panel(ctx, w, &found_yards, actions);
+    let yard_pointed = yards_panel(ctx, w, &found_yards, actions);
+    let find_pointed = find_panel(ctx, w, &mut query, &contracts, &mut view, actions);
     ctx.data_mut(|d| {
         d.insert_temp(id, view);
-        d.insert_temp(pointed_id, pointed);
+        d.insert_temp(pointed_id, yard_pointed.or(find_pointed));
+        d.insert_temp(query_id, query);
     });
 }
 
-/// Lanes, height lines, systems and their markers and labels, on the glass.
-/// Returns the system under the cursor, if any.
-#[allow(clippy::too_many_arguments)]
+/// The systems that matter to what the player is doing, drawn at full
+/// strength on the chart; everything else fades into the background
+/// (issue #192).
+struct Marks<'a> {
+    /// The plotted course, from here to its destination.
+    route: &'a [SystemId],
+    /// One jump away: what's in reach.
+    neighbours: &'a [SystemId],
+    /// Where the player's contracts are bound.
+    contracts: &'a [ContractStop],
+    /// The shipyards in their panel.
+    yards: &'a [SystemId],
+    /// What the search box finds.
+    found: &'a [SystemId],
+    /// The system of the panel row under the pointer.
+    pointed: Option<SystemId>,
+}
+
+impl Marks<'_> {
+    fn key(&self, w: &World, s: SystemId) -> bool {
+        s == w.system
+            || Some(s) == w.course
+            || self.pointed == Some(s)
+            || self.route.contains(&s)
+            || self.neighbours.contains(&s)
+            || self.contracts.iter().any(|c| c.system == s)
+            || self.yards.contains(&s)
+            || self.found.contains(&s)
+    }
+}
+
+/// How strongly the systems and lanes in the background are drawn.
+const BACKGROUND: f32 = 0.34;
+
+/// Lanes, routes, height lines, systems and their markers and labels, on
+/// the glass. Returns the system under the cursor, if any.
 fn chart(
     painter: &egui::Painter,
     cam: &Camera,
     view: &View,
     layout: &Layout,
     w: &World,
-    route: &[SystemId],
-    neighbours: &[SystemId],
-    yards: &[SystemId],
-    pointed: Option<SystemId>,
+    marks: &Marks,
     cursor: Option<Pos2>,
 ) -> Option<SystemId> {
     let pos = |s: SystemId| galaxy_point(w.galaxy.systems[s].position);
     let visible = Rect::from_center_size(layout.centre, Vec2::splat(layout.r * 2.0)).expand(40.0);
     let on_glass = |p: Pos2, margin: f32| p.distance(layout.centre) < layout.r - margin;
     let cursor = cursor.filter(|&c| on_glass(c, 0.0));
+    let key = |s: SystemId| marks.key(w, s);
 
-    // Lanes: faint in general, brighter out of here, amber on the route.
-    let on_route = |a: SystemId, b: SystemId| {
-        route
-            .windows(2)
-            .any(|h| (h[0] == a && h[1] == b) || (h[0] == b && h[1] == a))
-    };
-    let mut route_lanes = Vec::new();
-    for lane in w.galaxy.lanes.as_slice() {
-        let Some(seg) = cam.segment(pos(lane.a), pos(lane.b)) else {
-            continue;
-        };
-        if !visible.intersects(Rect::from_two_pos(seg[0], seg[1])) {
-            continue;
-        }
-        if on_route(lane.a, lane.b) {
-            route_lanes.push(seg);
-            continue;
-        }
-        let stroke = if lane.a == w.system || lane.b == w.system {
-            Stroke::new(1.5, CREAM_DIM)
-        } else {
-            Stroke::new(1.0, RED.gamma_multiply(80.0 / 255.0))
-        };
-        painter.line_segment(seg, stroke);
-    }
-    for seg in route_lanes {
-        painter.line_segment(seg, Stroke::new(5.0, AMBER.gamma_multiply(0.18)));
-        painter.line_segment(seg, Stroke::new(2.0, AMBER));
-    }
-
-    // Height lines: down to the galactic plane for the systems that matter
-    // and for everything near the focus.
-    let important = |s: SystemId| {
-        s == w.system || Some(s) == w.course || route.contains(&s) || neighbours.contains(&s)
-    };
-    let near_radius = view.dist * 0.6;
-    for (sid, system) in w.galaxy.systems.iter() {
-        let p = galaxy_point(system.position);
-        let near = (p - view.focus).length() < near_radius;
-        if !(near || important(sid)) {
-            continue;
-        }
-        let foot = DVec3::new(p.x, p.y, 0.0);
-        let Some(seg) = cam.segment(p, foot) else {
-            continue;
-        };
-        let color = if important(sid) {
-            CREAM_DIM.gamma_multiply(0.6)
-        } else {
-            RULE.gamma_multiply(0.5)
-        };
-        painter.line_segment(seg, Stroke::new(1.0, color));
-        painter.circle_filled(seg[1], 1.2, color);
-    }
-
-    // Systems, far to near, coloured by their largest faction and sized and
-    // dimmed by distance, each a lit point with a halo.
+    // Systems on screen, far to near, and the one under the cursor.
     let mut dots: Vec<(f64, Pos2, SystemId)> = w
         .galaxy
         .systems
@@ -452,19 +451,6 @@ fn chart(
         std::collections::HashMap::with_capacity(dots.len());
     for &(depth, p, sid) in &dots {
         let r = radius_at(depth);
-        let color = match w.galaxy.largest_faction_in(sid) {
-            Some(f) => {
-                let [r, g, b] = w.galaxy.factions[f].color;
-                Color32::from_rgb(r, g, b)
-            }
-            None => Color32::from_gray(110),
-        };
-        let fade = (1.6 - depth / (view.dist * 2.5)).clamp(0.35, 1.0) as f32;
-        painter.circle_filled(p, r * 2.4, color.gamma_multiply(0.10 * fade));
-        painter.circle_filled(p, r, color.gamma_multiply(fade));
-        if r > 3.0 {
-            painter.circle_filled(p, r * 0.4, CREAM.gamma_multiply(0.7 * fade));
-        }
         screen_of.insert(sid, (p, r));
         if let Some(c) = cursor {
             let d = c.distance(p);
@@ -476,7 +462,106 @@ fn chart(
         }
     }
 
-    // Markers: you, the course's destination, the hovered system.
+    // Lanes: a faint web in the background; the lanes out of here (what a
+    // jump can take) in cream; the course in amber.
+    let on_route = |a: SystemId, b: SystemId| {
+        marks
+            .route
+            .windows(2)
+            .any(|h| (h[0] == a && h[1] == b) || (h[0] == b && h[1] == a))
+    };
+    let mut near_lanes = Vec::new();
+    let mut route_lanes = Vec::new();
+    for lane in w.galaxy.lanes.as_slice() {
+        let Some(seg) = cam.segment(pos(lane.a), pos(lane.b)) else {
+            continue;
+        };
+        if !visible.intersects(Rect::from_two_pos(seg[0], seg[1])) {
+            continue;
+        }
+        if on_route(lane.a, lane.b) {
+            route_lanes.push(seg);
+        } else if lane.a == w.system || lane.b == w.system {
+            near_lanes.push(seg);
+        } else {
+            painter.line_segment(seg, Stroke::new(1.0, RED.gamma_multiply(0.14)));
+        }
+    }
+    for seg in near_lanes {
+        painter.line_segment(seg, Stroke::new(1.5, CREAM_DIM));
+    }
+
+    // The way to each contract's destination, when it isn't the course,
+    // and to the system under the cursor: dashed, so it reads as a way
+    // there rather than a course set.
+    let dashed = |path: &[SystemId], stroke: Stroke| {
+        for hop in path.windows(2) {
+            if let Some(seg) = cam.segment(pos(hop[0]), pos(hop[1])) {
+                painter.extend(egui::Shape::dashed_line(&seg, stroke, 6.0, 4.0));
+            }
+        }
+    };
+    let mut shown: Vec<SystemId> = Vec::new();
+    for c in marks.contracts {
+        if Some(c.system) == w.course || shown.contains(&c.system) {
+            continue;
+        }
+        shown.push(c.system);
+        if let Some(path) = w.route(c.system) {
+            dashed(&path, Stroke::new(1.5, AMBER.gamma_multiply(0.6)));
+        }
+    }
+    for seg in route_lanes {
+        painter.line_segment(seg, Stroke::new(5.0, AMBER.gamma_multiply(0.18)));
+        painter.line_segment(seg, Stroke::new(2.0, AMBER));
+    }
+    if let Some(h) = hovered.filter(|&h| h != w.system && Some(h) != w.course)
+        && let Some(path) = w.route(h)
+    {
+        dashed(&path, Stroke::new(1.5, CREAM));
+    }
+
+    // Height lines to the chart's plane, for the systems that matter.
+    for (sid, system) in w.galaxy.systems.iter() {
+        if !(key(sid) || hovered == Some(sid)) {
+            continue;
+        }
+        let p = galaxy_point(system.position);
+        let foot = DVec3::new(p.x, p.y, view.focus.z);
+        let Some(seg) = cam.segment(p, foot) else {
+            continue;
+        };
+        let color = CREAM_DIM.gamma_multiply(0.6);
+        painter.line_segment(seg, Stroke::new(1.0, color));
+        painter.circle_filled(seg[1], 1.2, color);
+    }
+
+    // Systems, far to near, coloured by their largest faction and sized and
+    // dimmed by distance: the ones that matter as lit points with a halo,
+    // the rest small and faint.
+    for &(depth, p, sid) in &dots {
+        let r = radius_at(depth);
+        let color = match w.galaxy.largest_faction_in(sid) {
+            Some(f) => {
+                let [r, g, b] = w.galaxy.factions[f].color;
+                Color32::from_rgb(r, g, b)
+            }
+            None => Color32::from_gray(110),
+        };
+        let fade = (1.6 - depth / (view.dist * 2.5)).clamp(0.35, 1.0) as f32;
+        if key(sid) || hovered == Some(sid) {
+            painter.circle_filled(p, r * 2.4, color.gamma_multiply(0.10 * fade));
+            painter.circle_filled(p, r, color.gamma_multiply(fade));
+            if r > 3.0 {
+                painter.circle_filled(p, r * 0.4, CREAM.gamma_multiply(0.7 * fade));
+            }
+        } else {
+            painter.circle_filled(p, r * 0.75, color.gamma_multiply(BACKGROUND * fade));
+        }
+    }
+
+    // Markers: you, the course's destination, contracts, shipyards, the
+    // hovered system.
     if let Some(&(me, r)) = screen_of.get(&w.system) {
         painter.circle_stroke(me, r + 5.0, Stroke::new(2.0, VFD));
         painter.circle_stroke(me, r + 9.0, Stroke::new(1.0, VFD.gamma_multiply(0.5)));
@@ -489,11 +574,26 @@ fn chart(
             AMBER,
         );
     }
+    // A contract's destination: an amber diamond, as cargo is tagged amber.
+    for c in marks.contracts {
+        if let Some(&(p, r)) = screen_of.get(&c.system) {
+            let d = r + 9.0;
+            painter.add(egui::Shape::closed_line(
+                vec![
+                    p + Vec2::new(0.0, -d),
+                    p + Vec2::new(d, 0.0),
+                    p + Vec2::new(0.0, d),
+                    p + Vec2::new(-d, 0.0),
+                ],
+                Stroke::new(1.5, AMBER),
+            ));
+        }
+    }
     // Shipyards in the panel: a cream square round each (issue #161),
     // bright for the one whose row the pointer is on.
-    for &y in yards {
+    for &y in marks.yards {
         if let Some(&(p, r)) = screen_of.get(&y) {
-            let (side, ink) = if pointed == Some(y) {
+            let (side, ink) = if marks.pointed == Some(y) {
                 (r * 2.0 + 14.0, CREAM)
             } else {
                 (r * 2.0 + 9.0, CREAM.gamma_multiply(0.75))
@@ -506,29 +606,53 @@ fn chart(
             );
         }
     }
+    for &s in marks.found.iter().chain(&marks.pointed) {
+        if let Some(&(p, r)) = screen_of.get(&s) {
+            painter.circle_stroke(p, r + 4.0, Stroke::new(1.0, CREAM.gamma_multiply(0.7)));
+        }
+    }
     if let Some(&(p, r)) = hovered.and_then(|h| screen_of.get(&h)) {
         painter.circle_stroke(p, r + 4.0, Stroke::new(1.5, CREAM));
     }
 
     // Labels, most important first, skipping any that would overlap.
-    let mut wanted: Vec<(SystemId, Color32, f32)> = vec![(w.system, VFD, 14.0)];
-    wanted.extend(hovered.map(|h| (h, CREAM, 13.0)));
-    wanted.extend(pointed.map(|p| (p, CREAM, 13.0)));
-    wanted.extend(w.course.map(|c| (c, AMBER, 13.0)));
-    wanted.extend(route.iter().map(|&s| (s, AMBER.gamma_multiply(0.8), 11.0)));
-    wanted.extend(neighbours.iter().map(|&s| (s, CREAM, 11.0)));
-    wanted.extend(yards.iter().map(|&s| (s, CREAM, 11.0)));
-    // Then whatever's near the focus, nearest the camera first.
+    let mut wanted: Vec<(SystemId, Color32, f32, Option<&str>)> = vec![(w.system, VFD, 14.0, None)];
+    wanted.extend(hovered.map(|h| (h, CREAM, 13.0, None)));
+    wanted.extend(marks.pointed.map(|p| (p, CREAM, 13.0, None)));
+    wanted.extend(w.course.map(|c| (c, AMBER, 13.0, None)));
     wanted.extend(
-        dots.iter()
-            .rev()
-            .filter(|(depth, ..)| *depth < view.dist * 1.3)
-            .map(|&(.., sid)| (sid, CREAM_DIM.gamma_multiply(0.8), 10.0)),
+        marks
+            .contracts
+            .iter()
+            .map(|c| (c.system, AMBER, 12.0, Some("CONTRACT"))),
+    );
+    wanted.extend(marks.found.iter().map(|&s| (s, CREAM, 12.0, None)));
+    wanted.extend(
+        marks
+            .route
+            .iter()
+            .map(|&s| (s, AMBER.gamma_multiply(0.8), 11.0, None)),
+    );
+    wanted.extend(marks.neighbours.iter().map(|&s| (s, CREAM, 11.0, None)));
+    wanted.extend(marks.yards.iter().map(|&s| (s, CREAM, 11.0, None)));
+    // Then a few of the background's names, nearest the middle of the
+    // glass, faint, so the chart can still be read for where things are.
+    let mut background: Vec<(f32, SystemId)> = dots
+        .iter()
+        .filter(|&&(depth, p, sid)| depth < view.dist * 2.0 && !key(sid) && on_glass(p, 12.0))
+        .map(|&(_, p, sid)| (p.distance(layout.centre), sid))
+        .collect();
+    background.sort_by(|a, b| a.0.total_cmp(&b.0));
+    wanted.extend(
+        background
+            .iter()
+            .take(BACKGROUND_NAMES)
+            .map(|&(_, sid)| (sid, CREAM_DIM.gamma_multiply(0.5), 10.0, None)),
     );
     let mut taken: Vec<Rect> = Vec::new();
     let mut done: Vec<SystemId> = Vec::new();
-    for (sid, color, size) in wanted {
-        if done.contains(&sid) || taken.len() > 120 {
+    for (sid, color, size, tag) in wanted {
+        if done.contains(&sid) {
             continue;
         }
         let Some(&(p, r)) = screen_of.get(&sid) else {
@@ -539,28 +663,149 @@ fn chart(
         }
         let galley =
             painter.layout_no_wrap(w.galaxy.systems[sid].name.to_uppercase(), mono(size), color);
-        let rect = Rect::from_min_size(
-            p + Vec2::new(r + 6.0, -galley.size().y / 2.0),
-            galley.size(),
-        )
-        .expand(1.0);
+        // A contract's destination keeps its tag under any other mark.
+        let tag = tag
+            .or_else(|| {
+                marks
+                    .contracts
+                    .iter()
+                    .any(|c| c.system == sid)
+                    .then_some("CONTRACT")
+            })
+            .map(|t| painter.layout_no_wrap(t.to_owned(), mono(9.0), color));
+        let tag_w = tag.as_ref().map_or(0.0, |t| t.size().x + 14.0);
+        let size = galley.size() + Vec2::new(tag_w, 0.0);
+        let mut rect = Rect::from_min_size(p + Vec2::new(r + 6.0, -size.y / 2.0), size).expand(1.0);
+        // Near the rim, write it on the dot's other side, whole.
+        if !on_glass(rect.right_center(), 4.0) {
+            rect = rect.translate(Vec2::new(-(rect.width() + 2.0 * r + 10.0), 0.0));
+        }
         if taken.iter().any(|t| t.intersects(rect)) {
             continue;
         }
         taken.push(rect);
         done.push(sid);
+        let name_w = galley.size().x;
         painter.galley(rect.min + Vec2::splat(1.0), galley, color);
+        if let Some(tag) = tag {
+            let at = Pos2::new(rect.min.x + 1.0 + name_w + 8.0, p.y - tag.size().y / 2.0);
+            let boxed = Rect::from_min_size(at, tag.size()).expand2(Vec2::new(3.0, 1.0));
+            painter.rect_stroke(
+                boxed,
+                0.0,
+                Stroke::new(1.0, color),
+                egui::StrokeKind::Middle,
+            );
+            painter.galley(at, tag, color);
+        }
     }
     hovered
 }
 
-/// Range rings and bearing spokes on the galactic plane around the focus,
+/// Faint names of background systems written on the glass.
+const BACKGROUND_NAMES: usize = 14;
+
+/// A system a contract is bound for, and the settlement there.
+#[derive(Clone, Copy)]
+struct ContractStop {
+    system: SystemId,
+    to: retrox_sim::SettlementId,
+}
+
+/// Where the player's contracts are bound, in the order they were taken.
+fn contract_systems(w: &World) -> Vec<ContractStop> {
+    w.player
+        .contracts
+        .iter()
+        .map(|c| ContractStop {
+            system: w.galaxy.settlements[c.offer.to].system,
+            to: c.offer.to,
+        })
+        .collect()
+}
+
+/// The chart's range on opening: enough to take in the systems in reach,
+/// the course and the contracts' destinations, and no more, so they fill
+/// the glass rather than sitting in a crowd.
+fn opening_range(
+    w: &World,
+    here: DVec3,
+    neighbours: &[SystemId],
+    contracts: &[ContractStop],
+) -> f64 {
+    let pos = |s: SystemId| galaxy_point(w.galaxy.systems[s].position);
+    let reach = neighbours
+        .iter()
+        .copied()
+        .chain(contracts.iter().map(|c| c.system))
+        .chain(w.course)
+        .map(|s| (pos(s) - here).length())
+        .fold(0.0, f64::max);
+    (reach * 3.2).clamp(20.0, 400.0)
+}
+
+/// Systems marked on the chart while the search box has text.
+const FOUND_MARKED: usize = 24;
+/// Systems listed under the search box.
+const FOUND_LISTED: usize = 6;
+
+/// Systems whose name holds `query`, ignoring case and accents: names
+/// starting with it first, then a word in them starting with it, then the
+/// rest; nearest first within each.
+fn search(w: &World, query: &str, max: usize) -> Vec<SystemId> {
+    let q = fold(query.trim());
+    if q.is_empty() {
+        return Vec::new();
+    }
+    let here = w.galaxy.systems[w.system].position;
+    let mut hits: Vec<(u8, f64, SystemId)> = w
+        .galaxy
+        .systems
+        .iter()
+        .filter_map(|(sid, s)| {
+            let name = fold(&s.name);
+            let rank = if name.starts_with(&q) {
+                0
+            } else if name.split([' ', '-']).any(|word| word.starts_with(&q)) {
+                1
+            } else if name.contains(&q) {
+                2
+            } else {
+                return None;
+            };
+            Some((rank, here.distance(s.position), sid))
+        })
+        .collect();
+    hits.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    hits.into_iter().take(max).map(|(.., s)| s).collect()
+}
+
+/// Lowercase, with accents dropped, for matching names as typed.
+fn fold(s: &str) -> String {
+    s.chars()
+        .flat_map(char::to_lowercase)
+        .map(|c| match c {
+            'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'ā' => 'a',
+            'è' | 'é' | 'ê' | 'ë' | 'ē' => 'e',
+            'ì' | 'í' | 'î' | 'ï' | 'ī' => 'i',
+            'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' | 'ō' => 'o',
+            'ù' | 'ú' | 'û' | 'ü' | 'ū' => 'u',
+            'ñ' => 'n',
+            'ç' => 'c',
+            'ý' | 'ÿ' => 'y',
+            c => c,
+        })
+        .collect()
+}
+
+/// Range rings and bearing spokes round the focus, on the plane level with
+/// it (parallel to the galactic plane),
 /// every 1/2/5 × 10ⁿ ly, whichever suits the range; plus a marker at the
 /// core. Returns the ring spacing.
 fn plane_plot(painter: &egui::Painter, cam: &Camera, view: &View) -> f64 {
     let step = f64::from(nice_length((view.dist / 4.0) as f32));
     let rings = ((view.dist * 1.6 / step).ceil() as usize).clamp(2, 12);
-    let centre = DVec3::new(view.focus.x, view.focus.y, 0.0);
+    let centre = view.focus;
     let reach = step * rings as f64;
     let stroke = Stroke::new(1.0, PLOT);
     let n = 96;
@@ -1016,6 +1261,7 @@ fn legend(painter: &egui::Painter, canvas: Rect) {
         ("WHEEL", "range"),
         ("CLICK", "plot course"),
         ("DBL-CLICK", "slew to"),
+        ("/", "find system"),
         ("M", "close"),
     ] {
         x = crate::widgets::legend_item(painter, Pos2::new(x, y + 9.0), key, what);
@@ -1199,6 +1445,194 @@ fn sidebar(
             }
         },
     );
+}
+
+/// The search box, under the chart drive's readouts (issue #192): type a
+/// system's name and the matches light up on the chart and list here;
+/// a click on one (or Enter for the first) plots a course there and slews
+/// the chart to it. With the box empty, the contracts' destinations are
+/// listed instead, the places the player most often looks for. Returns the
+/// system of the row under the pointer, to mark on the glass.
+fn find_panel(
+    ctx: &egui::Context,
+    w: &World,
+    query: &mut String,
+    contracts: &[ContractStop],
+    view: &mut View,
+    actions: &mut Vec<Action>,
+) -> Option<SystemId> {
+    let mut pointed = None;
+    let mut chosen = None;
+    panel(
+        ctx,
+        Panel {
+            id: "galaxy_map_find",
+            title: "Find system",
+            anchor: Align2::LEFT_TOP,
+            offset: [18.0, 496.0],
+            width: 196.0,
+            collapsible: None,
+        },
+        |ui| {
+            let edit_id = egui::Id::unique("galaxy_map_find_edit");
+            let typing = ui.memory(|m| m.has_focus(edit_id));
+            // [/] puts the cursor in the box from anywhere on the chart.
+            if !typing && ui.input(|i| i.key_pressed(egui::Key::Slash)) {
+                ui.memory_mut(|m| m.request_focus(edit_id));
+            }
+            let edit = egui::TextEdit::singleline(query)
+                .id(edit_id)
+                .font(mono(15.0))
+                .text_color(CREAM)
+                .hint_text(RichText::new("type a name").color(CREAM_DIM.gamma_multiply(0.6)))
+                .desired_width(f32::INFINITY)
+                .margin(Vec2::new(8.0, 5.0));
+            let response = ui.add(edit);
+            // The [/] that opened the box isn't part of the name.
+            if query.contains('/') {
+                query.retain(|c| c != '/');
+            }
+            let (enter, escape) = ui.input(|i| {
+                (
+                    i.key_pressed(egui::Key::Enter),
+                    i.key_pressed(egui::Key::Escape),
+                )
+            });
+            if response.lost_focus() && escape {
+                query.clear();
+            }
+            let hits = search(w, query, FOUND_LISTED);
+            if response.lost_focus() && enter {
+                chosen = hits.first().copied();
+            }
+            ui.add_space(4.0);
+            if query.trim().is_empty() {
+                let (row, _) =
+                    ui.allocate_exact_size(Vec2::new(ui.available_width(), 22.0), Sense::hover());
+                crate::widgets::legend_item(
+                    ui.painter(),
+                    Pos2::new(row.left(), row.center().y),
+                    "/",
+                    "or click to type",
+                );
+                if contracts.is_empty() {
+                    return;
+                }
+                ui.add_space(4.0);
+                section(ui, "Contracts");
+                ui.spacing_mut().item_spacing.y = 0.0;
+                let mut listed: Vec<SystemId> = Vec::new();
+                for c in contracts {
+                    if listed.contains(&c.system) {
+                        continue;
+                    }
+                    listed.push(c.system);
+                    let to = &w.galaxy.settlements[c.to].name;
+                    let (hot, clicked) = find_row(ui, w, c.system, Some(to), AMBER);
+                    if hot {
+                        pointed = Some(c.system);
+                    }
+                    if clicked {
+                        chosen = Some(c.system);
+                    }
+                }
+                return;
+            }
+            if hits.is_empty() {
+                ui.label(RichText::new("no system by that name").color(CREAM_DIM));
+                return;
+            }
+            ui.spacing_mut().item_spacing.y = 0.0;
+            for s in hits {
+                let (hot, clicked) = find_row(ui, w, s, None, CREAM);
+                if hot {
+                    pointed = Some(s);
+                }
+                if clicked {
+                    chosen = Some(s);
+                }
+            }
+        },
+    );
+    if let Some(s) = chosen {
+        let there = galaxy_point(w.galaxy.systems[s].position);
+        let here = galaxy_point(w.galaxy.systems[w.system].position);
+        view.goal = Some(there);
+        // Open the range out enough to keep the ship on the glass too, so
+        // the way there shows.
+        let wanted = ((there - here).length() * 2.6).clamp(MIN_DIST, MAX_DIST);
+        view.goal_dist = (wanted > view.dist).then_some(wanted);
+        if s != w.system {
+            actions.push(Action::PlotCourse(Some(s)));
+        }
+    }
+    pointed
+}
+
+/// A system in the search panel: its name, how many jumps, and under it
+/// the settlement a contract is bound for there or who holds it. Returns
+/// whether the pointer is on it and whether it was clicked.
+fn find_row(
+    ui: &mut egui::Ui,
+    w: &World,
+    s: SystemId,
+    contract_to: Option<&str>,
+    ink: Color32,
+) -> (bool, bool) {
+    let (rect, response, look) =
+        crate::widgets::list_row(ui, 36.0, w.course == Some(s), true, AMBER);
+    let painter = ui.painter();
+    let jumps = if s == w.system {
+        "HERE".to_owned()
+    } else {
+        match w.route(s) {
+            Some(r) => jumps_text(r.len() as u32 - 1).to_uppercase(),
+            None => "NO ROUTE".to_owned(),
+        }
+    };
+    let range = painter.layout_no_wrap(
+        jumps,
+        mono(11.0),
+        if look.hot {
+            CREAM
+        } else {
+            VFD.gamma_multiply(0.85)
+        },
+    );
+    let x = rect.left() + 10.0;
+    let top = rect.top() + 11.0;
+    let room = rect.right() - 6.0 - range.size().x - 8.0 - x;
+    let name = &w.galaxy.systems[s].name;
+    painter.text(
+        Pos2::new(x, top),
+        Align2::LEFT_CENTER,
+        crate::widgets::fit(painter, name, mono(13.0), room),
+        mono(13.0),
+        if look.hot { CREAM } else { ink },
+    );
+    painter.galley(
+        Pos2::new(
+            rect.right() - 6.0 - range.size().x,
+            top - range.size().y / 2.0,
+        ),
+        range,
+        Color32::PLACEHOLDER,
+    );
+    let line = match contract_to {
+        Some(to) => format!("contract · {to}"),
+        None => match w.galaxy.largest_faction_in(s) {
+            Some(f) => w.galaxy.factions[f].name.clone(),
+            None => "uninhabited".to_owned(),
+        },
+    };
+    painter.text(
+        Pos2::new(x, rect.top() + 27.0),
+        Align2::LEFT_CENTER,
+        crate::widgets::fit(painter, &line, mono(11.0), rect.right() - 6.0 - x),
+        mono(11.0),
+        CREAM_DIM,
+    );
+    (response.hovered(), response.clicked())
 }
 
 /// Shipyards listed in the course panel (issue #161).
@@ -1419,4 +1853,52 @@ fn nice_length(ly: f32) -> f32 {
         .map(|m| m * mag)
         .find(|&v| v <= ly)
         .unwrap_or(mag)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn search_finds_a_system_by_part_of_its_name() {
+        let w = World::new(1);
+        let (sid, system) = w
+            .galaxy
+            .systems
+            .iter()
+            .find(|(_, s)| s.name.len() > 6)
+            .expect("a system");
+        let name = system.name.clone();
+        // Typed in lower case, the start of the name finds it first among
+        // the names that start the same way.
+        let typed: String = name.to_lowercase().chars().take(5).collect();
+        let found = search(&w, &typed, 50);
+        assert!(found.contains(&sid), "{typed} should find {name}");
+        let first = &w.galaxy.systems[found[0]].name;
+        assert!(
+            fold(first).starts_with(&typed),
+            "{first} doesn't start {typed}"
+        );
+        // The whole name in capitals, too.
+        assert!(search(&w, &name.to_uppercase(), 5).contains(&sid));
+        assert!(search(&w, "   ", 5).is_empty());
+        assert!(search(&w, "zzzzqqq", 5).is_empty());
+    }
+
+    #[test]
+    fn accents_and_case_fold_away() {
+        assert_eq!(fold("Siöprend Gate"), "sioprend gate");
+    }
+
+    #[test]
+    fn the_chart_opens_wide_enough_for_what_matters() {
+        let w = World::new(1);
+        let here = galaxy_point(w.galaxy.systems[w.system].position);
+        let neighbours: Vec<SystemId> = w.lanes().iter().map(|l| l.to).collect();
+        let range = opening_range(&w, here, &neighbours, &[]);
+        for &n in &neighbours {
+            let away = (galaxy_point(w.galaxy.systems[n].position) - here).length();
+            assert!(range > away * 2.0, "{away} ly away, range {range}");
+        }
+    }
 }
