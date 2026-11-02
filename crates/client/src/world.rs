@@ -9,9 +9,11 @@
 //! 1. *Normal flight*, in real time. The throttle's lower half is fine
 //!    control up to [`COMBAT_SPEED`]; the upper half ramps up to
 //!    [`CRUISE_SPEED`] for crossing gravity wells. One flight model.
-//! 2. *Fast travel*: automatic, to a nav target, only from outside every
-//!    gravity well. You arrive at the edge of the target's well (or near a
-//!    station or field); galaxy time passes by distance.
+//! 2. *Fast travel*: the sim's [`flight`] autopilot flies the ship to a
+//!    nav target while time runs faster, only from outside every gravity
+//!    well. Same physics as every other ship, so the trip takes as long as
+//!    the flight does. You arrive at the edge of the target's well (or near
+//!    a station or field); press J again to drop out anywhere.
 //! 3. *Hyperlane travel*: to a neighbouring system, also only from outside
 //!    gravity wells. Days pass.
 //!
@@ -24,9 +26,10 @@
 
 use glam::{DQuat, DVec3};
 use retrox_gen::{GalaxyConfig, Rock, generate, rocks};
+use retrox_sim::flight::{self, Goal, Kinematics};
 use retrox_sim::{
-    BodyId, BodyKind, FieldId, GalaxyState, GalaxyTime, Orbit, SettlementId, Site, StarClass,
-    SystemId, tick,
+    BodyId, BodyKind, FieldId, GalaxyState, GalaxyTime, SettlementId, Site, StarClass, SystemId,
+    tick,
 };
 
 pub const AU: f64 = 1.495_978_707e11;
@@ -44,8 +47,8 @@ const STRAFE_SPEED: f64 = 80.0;
 const TURN_RATES: DVec3 = DVec3::new(1.3, 0.9, 2.2);
 /// Gravity wells extend this many radii from the centre of a star or body.
 pub const WELL_RADII: f64 = 4.0;
-/// Galaxy time per metre of fast travel: about 1.7 days per AU.
-const FAST_TRAVEL_SECONDS_PER_METRE: f64 = 1.0e-6;
+/// The ship's main drive under autopilot, m/s²: about a day per AU.
+const DRIVE_ACCEL: f64 = ACCEL;
 const JUMP_DURATION: f32 = 4.0;
 const LANDING_DURATION: f32 = 3.0;
 
@@ -124,17 +127,14 @@ pub enum Mode {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FastTravel {
     pub target: Place,
-    /// Start and end, as offsets from the target. The ship flies in the
-    /// target's frame, so the target stays dead ahead while the time-lapse
-    /// carries it along its orbit.
-    pub from: DVec3,
-    pub to: DVec3,
-    /// Galaxy clock at departure, and the trip's galaxy duration.
+    /// The ship in the star's frame, flown by the autopilot.
+    pub ship: Kinematics,
+    /// Galaxy clock at departure.
     pub depart_s: f64,
-    pub travel_s: f64,
-    /// Real seconds: elapsed and total.
+    /// Galaxy seconds per real second.
+    pub warp: f64,
+    /// Real seconds since departure.
     pub elapsed: f32,
-    pub duration: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -292,7 +292,11 @@ impl World {
 
     /// Position of a place in the system frame (metres, y up).
     pub fn position(&self, place: Place) -> DVec3 {
-        let t = self.t_days();
+        self.position_at(place, self.t_days())
+    }
+
+    /// Position of a place at galaxy day `t`.
+    pub fn position_at(&self, place: Place, t: f64) -> DVec3 {
         match place {
             Place::Star => DVec3::ZERO,
             Place::Body(b) => to_metres(self.galaxy.body_position(b, t)),
@@ -302,17 +306,31 @@ impl World {
                 t,
             )),
             Place::Station(s) => match self.galaxy.settlements.get(s).map(|s| s.site) {
-                Some(Site::Space(orbit)) => self.orbit_m(&orbit),
+                Some(Site::Space(orbit)) => {
+                    to_metres(self.galaxy.orbit_position(self.system, &orbit, t))
+                }
                 _ => DVec3::ZERO,
             },
         }
     }
 
-    fn orbit_m(&self, orbit: &Orbit) -> DVec3 {
-        to_metres(
-            self.galaxy
-                .orbit_position(self.system, orbit, self.t_days()),
-        )
+    /// Velocity of a place at galaxy day `t`, m/s.
+    pub fn velocity_at(&self, place: Place, t: f64) -> DVec3 {
+        const H_DAYS: f64 = 1e-3;
+        (self.position_at(place, t + H_DAYS) - self.position_at(place, t - H_DAYS))
+            / (2.0 * H_DAYS * SECONDS_PER_DAY)
+    }
+
+    /// Where the autopilot brings the ship to rest for `place` at galaxy
+    /// day `t`: on the arrival sphere, on the ship's side of it.
+    fn fast_travel_goal(&self, place: Place, ship: DVec3, t: f64) -> Goal {
+        let centre = self.position_at(place, t);
+        let side = (ship - centre).normalize_or(DVec3::Z);
+        let pos = centre + side * self.arrival_distance(place);
+        Goal {
+            pos: pos.to_array(),
+            vel: self.velocity_at(place, t).to_array(),
+        }
     }
 
     pub fn name(&self, place: Place) -> String {
@@ -482,6 +500,7 @@ impl World {
                     ));
                 }
                 (Mode::Normal, None, None) => self.say("Select a target to fast travel"),
+                (Mode::FastTravel(trip), _, _) => self.drop_out(trip),
                 _ => {}
             },
             Action::Dock => {
@@ -550,24 +569,55 @@ impl World {
     }
 
     fn start_fast_travel(&mut self, target: Place) {
-        let from = self.ship_position() - self.position(target);
-        let distance = from.length();
-        let travel_s = distance * FAST_TRAVEL_SECONDS_PER_METRE;
-        let approach = from.normalize_or(DVec3::Z);
-        let to = approach * self.arrival_distance(target);
-        let duration = (2.0 + (distance / 1e7).max(1.0).log10() * 1.2).min(7.0) as f32;
-        self.ship.rot = look_rotation(-approach);
-        self.ship.vel = DVec3::ZERO;
+        let t = self.t_days();
+        let pos = self.ship_position();
+        let ship = Kinematics {
+            pos: pos.to_array(),
+            vel: (self.ship.vel + self.velocity_at(self.ship.frame, t)).to_array(),
+        };
+        // Pick how fast time runs so the flight plays out in a few seconds.
+        let distance = (self.position(target) - pos).length();
+        let estimate = flight::trip_seconds(distance, DRIVE_ACCEL);
+        let real = (2.0 + (distance / 1e7).max(1.0).log10() * 1.2).min(7.0);
         self.ship.spin = DVec3::ZERO;
+        self.ship.throttle = 0.0;
         self.mode = Mode::FastTravel(FastTravel {
             target,
-            from,
-            to,
+            ship,
             depart_s: self.clock_s,
-            travel_s,
+            warp: estimate / real,
             elapsed: 0.0,
-            duration,
         });
+    }
+
+    /// One frame of fast travel: fly `dt` real seconds of sped-up flight.
+    fn fast_travel(&mut self, mut trip: FastTravel, dt: f64) {
+        trip.elapsed += dt as f32;
+        let t0 = self.t_days();
+        let target = trip.target;
+        let arrived = flight::fly(&mut trip.ship, DRIVE_ACCEL, dt * trip.warp, |t, ship| {
+            let pos = DVec3::from_array(ship.pos);
+            self.fast_travel_goal(target, pos, t0 + t / SECONDS_PER_DAY)
+        });
+        // Galaxy time passes by exactly as long as the ship flew.
+        self.advance_clock(arrived.unwrap_or(dt * trip.warp));
+        let pos = DVec3::from_array(trip.ship.pos);
+        let vel = DVec3::from_array(trip.ship.vel);
+        // Face the way the drive is pushing: out along the route, then
+        // flipped round to brake.
+        let goal = self.fast_travel_goal(target, pos, self.t_days());
+        let thrust = DVec3::from_array(flight::autopilot(&trip.ship, &goal, DRIVE_ACCEL, 1.0));
+        if thrust.length() > DRIVE_ACCEL * 0.1 {
+            let k = 1.0 - (-4.0 * dt).exp();
+            self.ship.rot = self.ship.rot.slerp(look_rotation(thrust), k).normalize();
+        }
+        self.ship.frame = Place::Star;
+        self.ship.rel = pos;
+        self.ship.vel = vel;
+        match arrived {
+            Some(_) => self.arrive_fast_travel(target),
+            None => self.mode = Mode::FastTravel(trip),
+        }
     }
 
     pub fn update(&mut self, dt: f64, controls: Controls) {
@@ -584,21 +634,7 @@ impl World {
                 self.fly(dt, controls);
                 self.advance_clock(dt);
             }
-            Mode::FastTravel(mut trip) => {
-                trip.elapsed += dt as f32;
-                let k = (trip.elapsed / trip.duration).min(1.0) as f64;
-                // Ease in and out.
-                let s = k * k * (3.0 - 2.0 * k);
-                let clock = trip.depart_s + trip.travel_s * k;
-                self.advance_clock(clock - self.clock_s);
-                self.ship.frame = trip.target;
-                self.ship.rel = trip.from.lerp(trip.to, s);
-                if k >= 1.0 {
-                    self.arrive_fast_travel(trip.target);
-                } else {
-                    self.mode = Mode::FastTravel(trip);
-                }
-            }
+            Mode::FastTravel(trip) => self.fast_travel(trip, dt),
             Mode::Docked(_) => self.advance_clock(dt),
             Mode::Landed { city, body, timer } => {
                 self.mode = Mode::Landed {
@@ -622,11 +658,28 @@ impl World {
         self.update_camera(dt);
     }
 
+    /// Switch the ship into `frame`, keeping where it is and how it moves.
+    fn enter_frame(&mut self, frame: Place) {
+        let t = self.t_days();
+        let pos = self.ship_position();
+        let vel = self.ship.vel + self.velocity_at(self.ship.frame, t);
+        self.ship.frame = frame;
+        self.ship.rel = pos - self.position(frame);
+        self.ship.vel = vel - self.velocity_at(frame, t);
+    }
+
+    /// Stop the autopilot mid-trip: the ship carries on from wherever it
+    /// is, as fast as it's going.
+    fn drop_out(&mut self, _trip: FastTravel) {
+        self.mode = Mode::Normal;
+        let speed = self.ship.vel.length() / 1000.0;
+        self.say(format!("Dropped out of fast travel at {speed:.0} km/s"));
+    }
+
     fn arrive_fast_travel(&mut self, target: Place) {
-        // Already in the target's frame and facing it: nothing to snap.
-        self.ship.frame = target;
-        self.ship.vel = DVec3::ZERO;
-        self.ship.throttle = 0.0;
+        // At rest relative to the target, within a few m/s: carry on from
+        // exactly there.
+        self.enter_frame(target);
         self.mode = Mode::Normal;
         let name = self.name(target);
         self.say(format!("Arrived at {name}"));
@@ -912,7 +965,7 @@ mod tests {
             let before = world.clock_s;
             world.act(Action::FastTravel);
             assert!(matches!(world.mode, Mode::FastTravel(_)), "{target:?}");
-            run(&mut world, 10.0);
+            run(&mut world, 30.0);
             assert_eq!(world.mode, Mode::Normal, "{target:?}");
             let (d, expected) = (world.distance_to(target), world.arrival_distance(target));
             assert!(
@@ -925,30 +978,59 @@ mod tests {
     }
 
     #[test]
-    fn fast_travel_keeps_the_target_dead_ahead() {
+    fn fast_travel_is_a_real_flight() {
         let mut world = World::new(1);
         world.act(Action::Launch);
         for target in world.nav_places().into_iter().filter(|p| *p != Place::Star) {
             open_space(&mut world);
             world.target = Some(target);
             world.act(Action::FastTravel);
-            let start_rot = world.ship.rot;
-            while matches!(world.mode, Mode::FastTravel(_)) {
-                let ahead = world.ship.rot * DVec3::NEG_Z;
-                let to_target = (world.position(target) - world.ship_position()).normalize();
-                assert!(
-                    ahead.dot(to_target) > 0.9999,
-                    "{}: target drifted off the nose mid-trip",
-                    world.name(target)
-                );
-                world.update(1.0 / 60.0, Controls::default());
+            let name = world.name(target);
+            let dt = 1.0 / 60.0;
+            for frame in 0.. {
+                assert!(frame < 60 * 60, "{name}: still flying after a minute");
+                let (pos, vel, clock) = (world.ship_position(), world.ship.vel, world.clock_s);
+                world.update(dt, Controls::default());
+                // Moved only as far as its speed allows in the galaxy time
+                // that passed: no teleporting.
+                let moved = (world.ship_position() - pos).length();
+                let flown = world.clock_s - clock;
+                let reach = vel.length().max(world.ship.vel.length()) * flown;
+                if matches!(world.mode, Mode::FastTravel(_)) {
+                    assert!(
+                        moved <= reach * 1.01 + 1.0,
+                        "{name}: jumped {moved:.3e} m in a {flown:.0} s step"
+                    );
+                } else {
+                    break;
+                }
             }
+            // At rest next to the target, carrying on in its frame.
+            assert_eq!(world.ship.frame, target);
             assert!(
-                world.ship.rot.dot(start_rot).abs() > 0.9999,
-                "{}: ship snapped on arrival",
-                world.name(target)
+                world.ship.vel.length() <= flight::ARRIVE_SPEED + 1.0,
+                "{name}"
             );
         }
+    }
+
+    #[test]
+    fn dropping_out_keeps_position_and_speed() {
+        let mut world = World::new(1);
+        world.act(Action::Launch);
+        open_space(&mut world);
+        let target = world.view.bodies[0];
+        world.target = Some(Place::Body(target));
+        world.act(Action::FastTravel);
+        run(&mut world, 1.0);
+        let (pos, vel) = (world.ship_position(), world.ship.vel);
+        assert!(
+            vel.length() > COMBAT_SPEED,
+            "should be flying fast mid-trip"
+        );
+        world.act(Action::FastTravel);
+        assert_eq!(world.mode, Mode::Normal);
+        assert_eq!((world.ship_position(), world.ship.vel), (pos, vel));
     }
 
     #[test]

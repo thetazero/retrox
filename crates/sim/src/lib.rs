@@ -8,6 +8,7 @@ pub mod arena;
 pub mod bodies;
 pub mod economy;
 pub mod fields;
+pub mod flight;
 pub mod haul;
 pub mod history;
 pub mod phases;
