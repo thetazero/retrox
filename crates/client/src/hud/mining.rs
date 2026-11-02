@@ -83,7 +83,14 @@ pub fn draw(ctx: &egui::Context, h: &HudInput) {
             } else {
                 rock.lode.grade_letter().to_string()
             };
-            painter.text(p, Align2::CENTER_CENTER, text, mono(12.0), color);
+            crate::widgets::shadowed_text(
+                &painter,
+                p,
+                Align2::CENTER_CENTER,
+                text,
+                mono(12.0),
+                color,
+            );
         }
 
         // Loose ore: small diamonds, so nothing is lost in the dark.
@@ -165,57 +172,93 @@ pub fn draw(ctx: &egui::Context, h: &HudInput) {
             None => ship,
         };
         if let Some(p) = to_screen(pos) {
-            let size = 26.0;
+            // The brackets close round the rock as it looks on screen, and
+            // the readout stands beside them, not over the rock (issue
+            // #124): it's read while aiming at the rock.
+            let rel = (pos - h.camera).as_vec3();
+            let across = rel
+                .cross(glam::Vec3::Y)
+                .try_normalize()
+                .unwrap_or(glam::Vec3::X);
+            let on_screen =
+                super::project_any(h.view_proj, rel + across * rock.radius as f32, screen)
+                    .map_or(0.0, |e| (e - p).length());
+            let size = (on_screen + 8.0).clamp(26.0, screen.height() * 0.3);
             brackets(
                 &painter,
                 Rect::from_center_size(p, Vec2::splat(size * 2.0)),
                 7.0,
                 CREAM,
             );
-            let mut y = p.y - size;
-            let x = p.x + size + 10.0;
-            let line = |y: f32, text: String, color: Color32| {
-                painter.text(Pos2::new(x, y), Align2::LEFT_TOP, text, mono(12.0), color);
-            };
+            let mut lines: Vec<(String, Color32)> = Vec::new();
             let color = if rock.scanned {
                 good_color(rock.lode.good)
             } else {
                 CREAM
             };
-            line(y, describe(&rock), color);
-            y += 15.0;
+            lines.push((describe(&rock), color));
             if rock.scanned {
                 if rock.worked_out {
-                    line(y, "WORKED OUT".into(), CREAM_DIM);
+                    lines.push(("WORKED OUT".into(), CREAM_DIM));
                 } else {
-                    line(
-                        y,
+                    lines.push((
                         format!(
-                            "≈ {:.1} T PER FRACTURE · VEINS ×{:.1}",
+                            "ABOUT {:.1} T PER FRACTURE · VEINS ×{:.1}",
                             rock.yield_t(),
                             mining::VEIN_YIELD
                         ),
-                        CREAM_DIM,
-                    );
+                        CREAM,
+                    ));
                 }
-                y += 15.0;
                 if rock.lode.volatile {
-                    line(y, "VOLATILE · KEEP CLEAR".into(), ALARM);
-                    y += 15.0;
+                    lines.push(("VOLATILE · KEEP CLEAR".into(), ALARM));
                 }
             } else {
-                line(y, "G TO PROSPECT".into(), CREAM_DIM);
-                y += 15.0;
+                lines.push(("G TO PROSPECT".into(), CREAM));
             }
-            if aim.distance > stats.mining_range_m {
-                line(
-                    y,
+            let out_of_range = aim.distance > stats.mining_range_m;
+            if out_of_range {
+                lines.push((
                     format!("OUT OF LASER RANGE · {}", distance(aim.distance)),
                     CREAM_DIM,
-                );
-            } else if rock.damage > 0.0 {
+                ));
+            }
+            let bar = !out_of_range && rock.damage > 0.0;
+            let galleys: Vec<_> = lines
+                .into_iter()
+                .map(|(text, color)| painter.layout_no_wrap(text, mono(12.0), color))
+                .collect();
+            let line_h = 15.0;
+            let pad = Vec2::new(8.0, 5.0);
+            let inner = Vec2::new(
+                galleys.iter().map(|g| g.size().x).fold(120.0, f32::max),
+                galleys.len() as f32 * line_h + if bar { 9.0 } else { 0.0 },
+            );
+            let plate_size = inner + 2.0 * pad;
+            // Right of the rock, or left of it if that runs off the screen.
+            let right = p.x + size + 12.0;
+            let x = if right + plate_size.x <= screen.right() - 16.0 {
+                right
+            } else {
+                p.x - size - 12.0 - plate_size.x
+            };
+            let y = (p.y - plate_size.y / 2.0)
+                .clamp(screen.top() + 16.0, screen.bottom() - 16.0 - plate_size.y);
+            let plate = Rect::from_min_size(Pos2::new(x, y), plate_size);
+            painter.rect_filled(plate, 0.0, crate::widgets::BACKING);
+            painter.rect_filled(
+                Rect::from_min_size(plate.min, Vec2::new(2.0, plate.height())),
+                0.0,
+                color,
+            );
+            let mut at = plate.min + pad;
+            for g in galleys {
+                painter.galley(at, g, CREAM);
+                at.y += line_h;
+            }
+            if bar {
                 // Work done toward the fracture.
-                let rect = Rect::from_min_size(Pos2::new(x, y + 2.0), Vec2::new(120.0, 5.0));
+                let rect = Rect::from_min_size(at + Vec2::new(0.0, 3.0), Vec2::new(120.0, 5.0));
                 painter.rect_filled(rect, 0.0, super::VFD_DIM);
                 painter.rect_filled(
                     Rect::from_min_size(
@@ -295,7 +338,7 @@ pub fn draw(ctx: &egui::Context, h: &HudInput) {
                 if let Some((price, at)) = w.best_local_price(good) {
                     ui.label(
                         RichText::new(format!(
-                            "≈ {} at {} ({price:.1}/t)",
+                            "about {} at {} ({price:.1}/t)",
                             credits(t * price),
                             w.name(Place::Station(at))
                         ))
