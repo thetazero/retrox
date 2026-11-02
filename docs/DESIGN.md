@@ -98,6 +98,12 @@ Rules:
   player's filters.
 - **Contracts carry galaxy-time deadlines**, which is what makes time
   matter to the player.
+- **Skipped days play out, they don't freeze the screen** (code-health
+  audit, #75). A wait ticks as many days per frame as fit a small frame
+  budget, with a day counter and a stop button on the station screen;
+  undocking ends it. A hyperlane jump's days tick across its transit
+  sequence, so you arrive with the clock already caught up. Either way
+  the sim still steps one day at a time (§5.1).
 - Rough target pace: a trading-heavy hour ≈ 2–6 galaxy months; a
   combat-heavy hour ≈ a few days. (Tunable.)
 - **Detail level is a function of both distance and time rate** — the same

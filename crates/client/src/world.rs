@@ -398,7 +398,7 @@ impl World {
     }
 
     pub fn star_radius_m(&self) -> f64 {
-        star_radius_suns(self.star()) * SOLAR_RADIUS_M
+        self.star().radius_suns() * SOLAR_RADIUS_M
     }
 
     /// Position of a place in the system frame (metres, y up).
@@ -998,21 +998,4 @@ pub fn to_metres(p: [f64; 3]) -> DVec3 {
 
 pub fn rock_offset(rock: &Rock) -> DVec3 {
     DVec3::new(rock.offset[0], rock.offset[2], rock.offset[1])
-}
-
-/// Star radius in solar radii, by class (the sim doesn't model it).
-pub fn star_radius_suns(class: StarClass) -> f64 {
-    use StarClass::*;
-    match class {
-        O => 10.0,
-        B => 4.0,
-        A => 1.7,
-        F => 1.3,
-        G => 1.0,
-        K => 0.8,
-        M => 0.4,
-        WhiteDwarf => 0.012,
-        Neutron => 1.5e-5,
-        BlackHole => 4.3e-5,
-    }
 }
