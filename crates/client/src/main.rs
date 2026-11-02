@@ -17,7 +17,7 @@
 //! starting planet at the day's turn), `--interdict` (flying past a gang's lair until
 //! it interdicts), `--convoy` (alongside a trader fleet; with
 //! `--hostile-convoy`, its faction hostile),
-//! `--ship-view <deg>`, `--screenshot <path.ppm>`. `--menu <page>` opens a
+//! `--ship-view <deg>`, `--screenshot <path.png>`. `--menu <page>` opens a
 //! menu page instead (`title`, `new`, `load`, `settings`, `handbook[:chapter]`, or `pause` or `quit`
 //! over a fresh game), for screenshots. `--keys` plays a key script
 //! (see [`Flags::keys`]), and `--remote <file>` plays turn by turn from
@@ -1382,7 +1382,7 @@ impl Running {
         let new = text[*read..end].to_owned();
         *read = end;
         for step in new.split(['\n', ',']) {
-            let step = step.trim().to_lowercase();
+            let step = step_case(step.trim());
             if !step.is_empty() {
                 self.script.push_back(step);
             }
@@ -1399,7 +1399,8 @@ impl Running {
     /// - `click:X:Y` clicks the UI at that pixel of the window (as in a
     ///   screenshot), `move:X:Y` just points there;
     /// - `scroll:X:Y:DY` turns the mouse wheel there;
-    /// - `shot:PATH` saves this frame as a PPM;
+    /// - `shot:PATH` saves this frame as a PNG (a `.ppm` path becomes
+    ///   `.png`), about a megabyte at most;
     /// - `info:PATH` writes where things stand, as text;
     /// - `type:TEXT` types into the text field that has the keyboard.
     fn run_script(&mut self) {
@@ -1424,8 +1425,10 @@ impl Running {
             return;
         };
         let parts: Vec<&str> = step.split(':').collect();
+        // Clicks are in screenshot pixels, which may be shrunk from the
+        // window's.
         let points = |x: &str, y: &str| {
-            let ppp = self.egui_ctx.pixels_per_point();
+            let ppp = self.egui_ctx.pixels_per_point() / self.renderer.shot_scale() as f32;
             Some(egui::pos2(
                 x.parse::<f32>().ok()? / ppp,
                 y.parse::<f32>().ok()? / ppp,
@@ -3119,4 +3122,39 @@ fn remote_info(w: &World) -> String {
         }
     }
     out
+}
+
+/// A remote step, lowercased as steps are, except the path of `shot:` and
+/// `info:`, which keeps its case so it can name any folder (a Claude
+/// scratchpad has capitals in it).
+fn step_case(step: &str) -> String {
+    let (head, rest) = step.split_once(':').unwrap_or((step, ""));
+    let head = head.to_lowercase();
+    if matches!(head.as_str(), "shot" | "info") {
+        format!("{head}:{rest}")
+    } else {
+        step.to_lowercase()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::step_case;
+    use crate::render::png_path;
+    use std::path::Path;
+
+    #[test]
+    fn shot_and_info_paths_keep_their_case() {
+        assert_eq!(step_case("SHOT:/tmp/A/B.png"), "shot:/tmp/A/B.png");
+        assert_eq!(step_case("info:/tmp/Pad/i.txt"), "info:/tmp/Pad/i.txt");
+        assert_eq!(step_case("Hold:W:60"), "hold:w:60");
+        assert_eq!(step_case("ENTER"), "enter");
+    }
+
+    #[test]
+    fn screenshots_are_always_png() {
+        assert_eq!(png_path(Path::new("/t/a.ppm")), Path::new("/t/a.png"));
+        assert_eq!(png_path(Path::new("/t/a.PNG")), Path::new("/t/a.PNG"));
+        assert_eq!(png_path(Path::new("/t/a")), Path::new("/t/a.png"));
+    }
 }

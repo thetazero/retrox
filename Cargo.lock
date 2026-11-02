@@ -2937,6 +2937,7 @@ dependencies = [
  "flate2",
  "glam",
  "kira",
+ "png",
  "pollster",
  "retrox-content",
  "retrox-gen",
