@@ -7,8 +7,6 @@ struct Globals {
     star_color: vec4<f32>,
     // x: time, y: exposure, z: width, w: height
     misc: vec4<f32>,
-    // xyz: direction to the galactic core, w: how far out we are (0..1)
-    sky: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> g: Globals;
 @group(1) @binding(0) var src: texture_2d<f32>;
@@ -58,7 +56,23 @@ fn blur(uv: vec2<f32>, dir: vec2<f32>) -> vec4<f32> {
 fn fs_blur_h1(i: VOut) -> @location(0) vec4<f32> { return blur(i.uv, vec2<f32>(1.0, 0.0)); }
 @fragment
 fn fs_blur_v1(i: VOut) -> @location(0) vec4<f32> { return blur(i.uv, vec2<f32>(0.0, 1.0)); }
+// The wide glow: a dense gaussian (sigma 4 texels), so a single bright
+// pixel, like a star, spreads into a round halo rather than the grid of
+// dots a sparse wide kernel leaves.
+fn blur_wide(uv: vec2<f32>, dir: vec2<f32>) -> vec4<f32> {
+    let t = dir / vec2<f32>(textureDimensions(src));
+    var c = vec3<f32>(0.0);
+    var total = 0.0;
+    for (var k = -12; k <= 12; k = k + 1) {
+        let x = f32(k);
+        let w = exp(-x * x / 32.0);
+        c = c + textureSample(src, samp, uv + t * x).rgb * w;
+        total = total + w;
+    }
+    return vec4<f32>(c / total, 1.0);
+}
+
 @fragment
-fn fs_blur_h2(i: VOut) -> @location(0) vec4<f32> { return blur(i.uv, vec2<f32>(3.0, 0.0)); }
+fn fs_blur_h2(i: VOut) -> @location(0) vec4<f32> { return blur_wide(i.uv, vec2<f32>(1.0, 0.0)); }
 @fragment
-fn fs_blur_v2(i: VOut) -> @location(0) vec4<f32> { return blur(i.uv, vec2<f32>(0.0, 3.0)); }
+fn fs_blur_v2(i: VOut) -> @location(0) vec4<f32> { return blur_wide(i.uv, vec2<f32>(0.0, 1.0)); }

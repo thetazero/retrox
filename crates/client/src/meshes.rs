@@ -194,32 +194,11 @@ pub fn icosphere(subdivisions: u32) -> Mesh {
 
 /// A lumpy, faceted rock of roughly unit radius.
 pub fn rock(seed: u64) -> Mesh {
-    let mut rng = Rng::new(seed);
+    let shape = crate::mining::RockShape::new(seed);
     let mut sphere = icosphere(2);
-    // A few random "dents and bulges" plus overall squash.
-    let bumps: Vec<(Vec3, f32)> = (0..7)
-        .map(|_| {
-            let dir = Vec3::new(
-                rng.range(-1.0, 1.0) as f32,
-                rng.range(-1.0, 1.0) as f32,
-                rng.range(-1.0, 1.0) as f32,
-            )
-            .normalize_or(Vec3::Y);
-            (dir, rng.range(-0.35, 0.3) as f32)
-        })
-        .collect();
-    let squash = Vec3::new(
-        rng.range(0.7, 1.2) as f32,
-        rng.range(0.5, 0.9) as f32,
-        rng.range(0.7, 1.3) as f32,
-    );
     for v in &mut sphere.vertices {
         let p = Vec3::from(v.pos);
-        let mut r = 1.0;
-        for (dir, amount) in &bumps {
-            r += amount * p.dot(*dir).max(0.0).powi(3);
-        }
-        v.pos = (p * r * squash).into();
+        v.pos = shape.surface(p.normalize_or(Vec3::Y)).into();
     }
     sphere.flat()
 }

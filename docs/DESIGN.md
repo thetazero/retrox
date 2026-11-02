@@ -389,6 +389,26 @@ rather than space bugs.
 - An **activity**, not a timer: fracture asteroids, cut into them, collect
   chunks, manage heat/hold.
 - First thing a new player does; must feel good on its own.
+- **Gear:** a *mining laser* is a module for a weapon slot (the starting
+  courier has one in its chin mount). Its cut rate and reach come from the
+  module; its heat is a gauge of its own, shed by the ship's radiators.
+  Run it to the top and it locks out while it vents.
+- **Prospect:** a ping reads every rock nearby: ore or ice, a grade (A–D),
+  volatile or not, and its *veins* glow on the surface. Rocks you cut are
+  read too.
+- **Cut:** the laser cuts four times as fast on a vein and runs cooler
+  there, and a rock fractured through a vein yields half as much again.
+  Rocks spin, so veins turn away; the skill is chasing them.
+- **Fracture:** rocks up to ~60 m split into smaller rocks and shed ore
+  chunks; the smallest crumble. Bigger rocks are **quarries**: each
+  fracture calves a boulder off where the laser hit, until the quarry is
+  worked out. **Volatile** rocks are richer but burst when they fracture,
+  scattering ore and shoving the ship.
+- **Collect:** a tractor pulls loose chunks into the hold (as the market
+  goods ore and ice) when you fly close; when the hold is full, they stay
+  floating. Sell at any market.
+- Fields remember: broken and worked rocks stay that way for ~120 galaxy
+  days, then the field is whole again.
 
 ### 7.4 Ships
 
@@ -545,7 +565,6 @@ retrox/
 - Exact target pace (galaxy months per play-hour) — tune after milestone 3.
 - Capital-ship combat design in detail.
 - Nature of the aliens and the semi-scripted anomalies/discoveries.
-- Mining activity mechanics in detail.
 - Faction count and size at generation; agent budget in the bubble.
 - Gamepad support / control scheme.
 - Does the player's character age over a ~30-year save? (Probably ignored.)

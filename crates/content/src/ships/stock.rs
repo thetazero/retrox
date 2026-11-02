@@ -96,6 +96,7 @@ pub static STOCK: &[StockFit] = &[
         sections: &[(
             None,
             &[
+                &LIGHT_MINING_LASER,
                 &INTERCEPTOR_DRIVE,
                 &LIGHT_RCS,
                 &SMALL_REACTOR,

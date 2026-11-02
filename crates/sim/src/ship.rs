@@ -154,6 +154,13 @@ pub enum Function {
         fire_rate_hz: f64,
         range_km: f64,
     },
+    /// A mining laser: fits a weapon slot, and like a weapon draws its
+    /// power and heat only while firing.
+    MiningLaser {
+        /// Rock it cuts per second (see the client's mining module).
+        cut_rate: f64,
+        range_m: f64,
+    },
     Engine {
         thrust_kn: f64,
     },
@@ -191,7 +198,7 @@ pub enum Function {
 impl Function {
     pub fn kind(&self) -> SlotKind {
         match self {
-            Self::Weapon { .. } => SlotKind::Weapon,
+            Self::Weapon { .. } | Self::MiningLaser { .. } => SlotKind::Weapon,
             Self::Engine { .. } => SlotKind::Engine,
             Self::Rcs { .. } => SlotKind::Rcs,
             Self::Power { .. } => SlotKind::Power,
@@ -436,6 +443,11 @@ pub struct ShipStats {
     pub cruise: Load,
     pub dps: f64,
     pub weapon_range_km: f64,
+    /// Mining lasers: total cut per second, longest reach, and the heat
+    /// they make while firing.
+    pub mining_cut: f64,
+    pub mining_range_m: f64,
+    pub mining_heat_mw: f64,
     pub shield: f64,
     pub shield_regen_per_s: f64,
     pub radar_range_km: f64,
@@ -478,6 +490,11 @@ impl ShipStats {
             } => {
                 self.dps += damage * fire_rate_hz;
                 self.weapon_range_km = self.weapon_range_km.max(range_km);
+            }
+            Function::MiningLaser { cut_rate, range_m } => {
+                self.mining_cut += cut_rate;
+                self.mining_range_m = self.mining_range_m.max(range_m);
+                self.mining_heat_mw += module.heat_mw;
             }
             Function::Engine { thrust_kn } => self.thrust_kn += thrust_kn,
             Function::Rcs { torque_knm } => self.rcs_torque_knm += torque_knm,

@@ -31,6 +31,7 @@ use retrox_sim::ship::ShipStats;
 
 use crate::contracts;
 use crate::hangar::{self, Job, Player};
+use crate::mining::{self, Mining};
 use retrox_gen::{GalaxyConfig, Rock, generate, rocks};
 use retrox_sim::economy::Good;
 use retrox_sim::flight::{self, Goal, Kinematics};
@@ -188,6 +189,8 @@ pub struct Controls {
     pub strafe: f64,
     pub lift: f64,
     pub boost: bool,
+    /// The mining laser's trigger is held.
+    pub fire: bool,
 }
 
 /// One-shot actions.
@@ -221,6 +224,8 @@ pub enum Action {
     AcceptContract(usize),
     /// Give up one of the player's contracts (by index).
     AbandonContract(usize),
+    /// Ping the prospector: read the rocks around the ship.
+    Scan,
 }
 
 /// The screens of a station or city, while docked or landed.
@@ -271,6 +276,11 @@ pub struct World {
     pub cam_rot: DQuat,
     /// Rocks of the asteroid field the ship is in, if any.
     pub field_rocks: Option<(FieldId, Vec<Rock>)>,
+    /// The mining laser and what it has done to every field.
+    pub mining: Mining,
+    /// The mining laser's beam this frame, as offsets from the ship's
+    /// position: muzzle to where it stops.
+    pub beam: Option<(DVec3, DVec3)>,
     pub message: Option<(String, f32)>,
     /// The player's money and ships.
     pub player: Player,
@@ -336,6 +346,8 @@ impl World {
             cockpit: false,
             cam_rot: DQuat::IDENTITY,
             field_rocks: None,
+            mining: Mining::default(),
+            beam: None,
             message: None,
             player: Player::new(),
             screen: Screen::Hub,
@@ -661,8 +673,10 @@ impl World {
                 (Mode::FastTravel(trip), _, _) => self.drop_out(trip),
                 _ => {}
             },
+            Action::Scan => self.scan(),
             Action::Dock => {
                 if let Some(s) = prompts.dock {
+                    self.mining.haul = Default::default();
                     self.mode = Mode::Docked(s);
                     self.screen = Screen::Hub;
                     self.ship.frame = Place::Station(s);
@@ -1000,6 +1014,7 @@ impl World {
         self.settle_contracts();
         self.refresh_board();
         self.update_field();
+        self.mine(dt, controls.fire);
         self.update_camera(dt);
     }
 
@@ -1093,8 +1108,13 @@ impl World {
         }
         if let Some((field, rocks)) = &self.field_rocks {
             let center = self.position(Place::Field(*field));
-            for rock in rocks {
-                solids.push((center + rock_offset(rock), rock.radius_m + 8.0));
+            for (i, rock) in rocks.iter().enumerate() {
+                if !self.mining.is_broken(*field, i) {
+                    solids.push((center + rock_offset(rock), rock.radius_m + 8.0));
+                }
+            }
+            for (pos, radius) in self.mining.frag_solids(*field) {
+                solids.push((center + pos, radius + 4.0));
             }
         }
         for (center, radius) in solids {
@@ -1120,9 +1140,164 @@ impl World {
         match (inside, &self.field_rocks) {
             (Some(f), Some((current, _))) if f == *current => {}
             (Some(f), _) => self.field_rocks = Some((f, rocks(&self.galaxy.fields[f]))),
-            (None, Some(_)) => self.field_rocks = None,
+            (None, Some((left, _))) => {
+                self.mining.leave(*left);
+                self.field_rocks = None;
+            }
             (None, None) => {}
         }
+    }
+
+    /// Where the mining laser's muzzle is, in ship space (metres, nose
+    /// toward -Z): the first fitted mining laser's slot, else the nose.
+    pub fn laser_muzzle(&self) -> DVec3 {
+        use retrox_sim::ship::Function;
+        self.player
+            .ship
+            .fit
+            .mounts()
+            .filter_map(|(_, s)| s)
+            .flat_map(|s| s.slots())
+            .find_map(|(slot, module)| {
+                matches!(module?.function, Function::MiningLaser { .. }).then(|| {
+                    let [x, y, z] = slot.position_m;
+                    DVec3::new(x, y, -z)
+                })
+            })
+            .unwrap_or(DVec3::new(0.0, 0.0, -self.stats().length_m / 2.0))
+    }
+
+    /// One frame of the mining laser and the tractor.
+    fn mine(&mut self, dt: f64, fire: bool) {
+        let stats = self.stats();
+        self.beam = None;
+        let Some((field, rocks)) = &self.field_rocks else {
+            if let Some(text) = self
+                .mining
+                .idle(dt, &stats, fire && self.mode == Mode::Normal)
+            {
+                self.say(text);
+            }
+            if self.mining.firing {
+                let muzzle = self.ship.rot * self.laser_muzzle();
+                let forward = self.ship.rot * DVec3::NEG_Z;
+                self.beam = Some((muzzle, muzzle + forward * stats.mining_range_m));
+            }
+            return;
+        };
+        let field = *field;
+        let centre = self.position(Place::Field(field));
+        let ship = self.ship_position() - centre;
+        let muzzle = self.ship.rot * self.laser_muzzle();
+        let forward = self.ship.rot * DVec3::NEG_Z;
+        let miner = mining::Miner {
+            nose: ship + muzzle,
+            forward,
+            centre: ship,
+            reach: stats.length_m * 0.6 + 6.0,
+            free_t: (stats.cargo_t - self.player.cargo_t()).max(0.0),
+            firing: fire && self.mode == Mode::Normal,
+        };
+        let out = self.mining.update(
+            dt,
+            field,
+            &self.galaxy.fields[field],
+            rocks,
+            self.clock_s,
+            &stats,
+            miner,
+        );
+        for (good, t) in out.collected {
+            self.player.cargo[good] += t;
+        }
+        self.ship.vel += out.kick;
+        if let Some(text) = out.messages.into_iter().last() {
+            self.say(text);
+        }
+        if self.mining.firing {
+            let end = match self.mining.aim {
+                Some(aim) if aim.distance <= stats.mining_range_m => aim.point - ship,
+                _ => muzzle + forward * stats.mining_range_m,
+            };
+            self.beam = Some((muzzle, end));
+        }
+    }
+
+    fn scan(&mut self) {
+        if self.mode != Mode::Normal {
+            return;
+        }
+        let Some((field, rocks)) = &self.field_rocks else {
+            self.say("Nothing to prospect: fly into an asteroid field");
+            return;
+        };
+        let centre = self.position(Place::Field(*field));
+        let from = self.ship_position() - centre;
+        let found = self.mining.scan(
+            *field,
+            &self.galaxy.fields[*field],
+            rocks,
+            self.clock_s,
+            from,
+        );
+        if let Some(n) = found {
+            self.say(format!("Prospector: {n} rocks read"));
+        }
+    }
+
+    /// The best price a tonne of `good` sells for in this system, and
+    /// where.
+    pub fn best_local_price(&self, good: Good) -> Option<(f64, SettlementId)> {
+        self.view
+            .stations
+            .iter()
+            .copied()
+            .chain(self.view.cities.iter().map(|&(c, _)| c))
+            .filter_map(|s| {
+                let settlement = self.galaxy.settlements.get(s)?;
+                let model = self.galaxy.factions.get(settlement.owner)?.economy;
+                let price = crate::trade::sell_value(&settlement.economy.market, model, good, 1.0);
+                Some((price, s))
+            })
+            .max_by(|a, b| a.0.total_cmp(&b.0))
+    }
+
+    /// Park in the first asteroid field of this system (or the nearest
+    /// system with one), facing a mid-sized rock a few hundred metres off
+    /// (for testing). Returns whether it found one.
+    pub fn start_at_field(&mut self) -> bool {
+        let here = SystemView::new(&self.galaxy, self.system);
+        if here.fields.is_empty() {
+            let found = self.galaxy.systems.iter().find_map(|(id, _)| {
+                (!SystemView::new(&self.galaxy, id).fields.is_empty()).then_some(id)
+            });
+            let Some(system) = found else {
+                return false;
+            };
+            self.arrive_jump(system);
+        }
+        let field = self.view.fields[0];
+        let rocks = rocks(&self.galaxy.fields[field]);
+        let Some(rock) = rocks
+            .iter()
+            .filter(|r| (12.0..40.0).contains(&r.radius_m))
+            .min_by(|a, b| rock_offset(a).length().total_cmp(&rock_offset(b).length()))
+        else {
+            return false;
+        };
+        let at = rock_offset(rock);
+        let back = (at.normalize_or(DVec3::Z) + DVec3::new(0.0, 0.3, 0.0)).normalize();
+        self.mode = Mode::Normal;
+        self.ship.frame = Place::Field(field);
+        self.ship.rel = at + back * (rock.radius_m * 3.0 + 150.0);
+        self.ship.vel = DVec3::ZERO;
+        self.ship.throttle = 0.0;
+        self.ship.rot = look_rotation(at - self.ship.rel);
+        self.cam_rot = self.ship.rot;
+        self.target = Some(Place::Field(field));
+        self.message = None;
+        self.update_field();
+        true
     }
 
     /// Move to the first system with a station and dock there (for
@@ -1151,7 +1326,9 @@ impl World {
         self.system = to;
         self.view = SystemView::new(&self.galaxy, to);
         self.system_generation += 1;
-        self.field_rocks = None;
+        if let Some((left, _)) = self.field_rocks.take() {
+            self.mining.leave(left);
+        }
         self.target = None;
         if self.course == Some(to) {
             self.course = None;
@@ -1402,6 +1579,66 @@ mod tests {
         world.player.ship.fit = retrox_content::ships::stock("bulk-freighter").unwrap();
         let (thrust, turn) = world.handling();
         assert!(thrust < 1.0 && turn < 1.0, "{thrust} {turn}");
+    }
+
+    #[test]
+    fn mine_a_rock_and_sell_the_ore() {
+        let mut world = World::new(1);
+        assert!(
+            world.stats().mining_cut > 0.0,
+            "the courier comes with a laser"
+        );
+        assert!(world.start_at_field());
+        world.act(Action::Scan);
+        let (field, _) = world.field_rocks.clone().expect("in a field");
+        let mine = Controls {
+            fire: true,
+            ..Default::default()
+        };
+        let dt = 1.0 / 60.0;
+        // Fire until something fractures, letting the laser vent.
+        let mut frames = 0;
+        while world
+            .mining
+            .field(field)
+            .is_none_or(|s| s.nuggets.is_empty())
+        {
+            frames += 1;
+            assert!(frames < 60 * 180, "nothing fractured in three minutes");
+            world.update(dt, mine);
+        }
+        // Sweep up: park by each loose chunk in turn and let the tractor
+        // pull it in.
+        for _ in 0..200 {
+            let Some(next) = world
+                .mining
+                .field(field)
+                .and_then(|s| s.nuggets.first())
+                .map(|n| n.pos)
+            else {
+                break;
+            };
+            world.ship.frame = Place::Field(field);
+            world.ship.rel = next + DVec3::Y * 20.0;
+            world.ship.vel = DVec3::ZERO;
+            run(&mut world, 3.0);
+        }
+        let mined = world.player.cargo[Good::Ore] + world.player.cargo[Good::Ice];
+        assert!(mined > 0.1, "hold has {mined} t");
+        assert!(world.player.cargo_t() <= world.stats().cargo_t + 1e-9);
+
+        // Sell it at a station.
+        world.start_at_station();
+        let credits = world.player.credits;
+        for good in [Good::Ore, Good::Ice] {
+            let t = world.player.cargo[good].floor();
+            if t >= 1.0 {
+                world.act(Action::Trade(good, -t));
+            }
+        }
+        if mined >= 1.0 {
+            assert!(world.player.credits > credits);
+        }
     }
 
     fn engine_slot(world: &World) -> (usize, usize) {

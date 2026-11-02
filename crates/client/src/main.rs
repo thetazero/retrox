@@ -10,6 +10,7 @@ mod hangar_ui;
 mod hud;
 mod hulls;
 mod meshes;
+mod mining;
 mod render;
 mod station_ui;
 mod trade;
@@ -43,6 +44,10 @@ fn main() {
     event_loop.set_control_flow(ControlFlow::Poll);
     let undocked = std::env::args().any(|a| a == "--undocked");
     let station = std::env::args().any(|a| a == "--station");
+    // `--field`: start in an asteroid field, facing a rock, prospected.
+    let field = std::env::args().any(|a| a == "--field");
+    // `--fire`: hold the mining laser's trigger down (for screenshots).
+    let fire = std::env::args().any(|a| a == "--fire");
     // `--map`: start with the galaxy map open.
     let map = std::env::args().any(|a| a == "--map");
     // `--ship <hull>`: start in that stock ship instead (for testing).
@@ -69,6 +74,8 @@ fn main() {
         take_contract,
         undocked,
         station,
+        field,
+        fire,
         map,
         ship,
         screenshot,
@@ -88,6 +95,10 @@ struct App {
     undocked: bool,
     /// Start docked at a station, in the first system that has one.
     station: bool,
+    /// Start in an asteroid field.
+    field: bool,
+    /// Hold the mining laser's trigger down.
+    fire: bool,
     /// Start with the galaxy map open.
     map: bool,
     ship: Option<String>,
@@ -119,6 +130,10 @@ struct Running {
     egui_state: egui_winit::State,
     keys: HashSet<KeyCode>,
     just_pressed: Vec<KeyCode>,
+    /// The left mouse button is held (while flying with the mouse).
+    trigger: bool,
+    /// `--fire`: the trigger is held down for good.
+    fire: bool,
     stick: DVec2,
     captured: bool,
     last_frame: Instant,
@@ -172,6 +187,10 @@ impl ApplicationHandler for App {
             world.cam_rot = world.ship.rot;
         }
 
+        if self.field && world.start_at_field() {
+            world.act(Action::Scan);
+        }
+
         world.map_open = self.map;
 
         let meshes = Meshes {
@@ -180,14 +199,13 @@ impl ApplicationHandler for App {
             ship_shape: meshes::ShipShape::default(),
             ship_cache: std::collections::HashMap::new(),
             hangar_bay: renderer.add_mesh(&meshes::hangar_bay()),
-            rocks: (0..8)
-                .map(|i| renderer.add_mesh(&meshes::rock(i * 7919 + 13)))
+            rocks: (0..mining::ROCK_MESHES)
+                .map(|i| renderer.add_mesh(&meshes::rock(mining::rock_mesh_seed(i))))
                 .collect(),
             stations: Vec::new(),
             system_generation: u64::MAX,
         };
-        let (core, out) = galactic_core(&world);
-        renderer.set_sky(&sky(&world), core, out);
+        renderer.set_sky(&sky(&world));
 
         let egui_ctx = egui::Context::default();
         hud::style(&egui_ctx);
@@ -208,6 +226,8 @@ impl ApplicationHandler for App {
             egui_state,
             keys: HashSet::new(),
             just_pressed: Vec::new(),
+            trigger: false,
+            fire: self.fire,
             stick: DVec2::ZERO,
             captured: false,
             last_frame: Instant::now(),
@@ -244,12 +264,20 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::MouseInput {
-                state: ElementState::Pressed,
+                state,
                 button: MouseButton::Left,
                 ..
-            } if !consumed && !r.captured && r.world.mode == Mode::Normal && !r.world.map_open => {
-                r.set_captured(true);
-            }
+            } => match state {
+                // Flying with the mouse, it's the mining laser's trigger.
+                ElementState::Pressed if r.captured => r.trigger = true,
+                ElementState::Pressed
+                    if !consumed && r.world.mode == Mode::Normal && !r.world.map_open =>
+                {
+                    r.set_captured(true);
+                }
+                ElementState::Released => r.trigger = false,
+                ElementState::Pressed => {}
+            },
             WindowEvent::Focused(false) => r.set_captured(false),
             WindowEvent::RedrawRequested => {
                 const SCREENSHOT_FRAME: u32 = 90;
@@ -301,6 +329,7 @@ impl Running {
             window.set_cursor_visible(true);
         }
         self.captured = captured;
+        self.trigger = false;
         self.stick = DVec2::ZERO;
     }
 
@@ -322,6 +351,7 @@ impl Running {
             strafe: axis(KeyCode::KeyD, KeyCode::KeyA),
             lift: axis(KeyCode::Space, KeyCode::ControlLeft),
             boost: down(KeyCode::ShiftLeft),
+            fire: (self.trigger && self.captured) || down(KeyCode::KeyR) || self.fire,
         };
 
         let mut actions = Vec::new();
@@ -334,6 +364,7 @@ impl Running {
                 KeyCode::KeyV => Some(Action::ToggleCamera),
                 KeyCode::KeyZ => Some(Action::ToggleFlightAssist),
                 KeyCode::KeyM => Some(Action::ToggleMap),
+                KeyCode::KeyG => Some(Action::Scan),
                 KeyCode::KeyX => {
                     self.world.ship.throttle = 0.0;
                     None
@@ -413,8 +444,7 @@ impl Running {
                 })
                 .collect();
             self.meshes.system_generation = self.world.system_generation;
-            let (core, out) = galactic_core(&self.world);
-            self.renderer.set_sky(&sky(&self.world), core, out);
+            self.renderer.set_sky(&sky(&self.world));
         }
 
         let (mut cam_pos, mut cam_rot) = self.world.camera();
@@ -582,33 +612,7 @@ fn scene(world: &World, meshes: &Meshes, cam: DVec3) -> Vec<(MeshId, Instance)> 
     }
 
     if let Some((field, rocks)) = &world.field_rocks {
-        let center = world.position(Place::Field(*field));
-        let color = if world.galaxy.fields[*field].is_icy() {
-            [0.6, 0.66, 0.72]
-        } else {
-            [0.42, 0.37, 0.33]
-        };
-        for rock in rocks {
-            let pos = center + world::rock_offset(rock);
-            let axis = DVec3::from_array(rock.spin_axis);
-            let spin =
-                DQuat::from_axis_angle(axis, rock.spin_rate * t % std::f64::consts::TAU).as_quat();
-            out.push((
-                meshes.rocks[(rock.seed % meshes.rocks.len() as u64) as usize],
-                Instance::new(
-                    Mat4::from_scale_rotation_translation(
-                        Vec3::splat(rock.radius_m as f32),
-                        spin,
-                        rel(pos),
-                    ),
-                    color,
-                    Surface::Plain,
-                    0.0,
-                    0.0,
-                    light(pos),
-                ),
-            ));
-        }
+        mining_scene(world, meshes, *field, rocks, cam, &mut out);
     }
 
     let hidden = world.cockpit || !matches!(world.mode, Mode::Normal | Mode::FastTravel(_));
@@ -647,8 +651,185 @@ fn scene(world: &World, meshes: &Meshes, cam: DVec3) -> Vec<(MeshId, Instance)> 
                 ),
             ));
         }
+        // The mining laser.
+        if let Some((from, to)) = world.beam {
+            let (a, b) = (pos + from, pos + to);
+            let len = (b - a).length();
+            let flicker = 0.8 + 0.2 * ((t * 53.0).sin() as f32);
+            let on_vein = world.mining.aim.is_some_and(|a| a.on_vein);
+            let color = if on_vein {
+                [1.0, 0.85, 0.35]
+            } else {
+                [1.0, 0.32, 0.18]
+            };
+            out.push((
+                meshes.sphere,
+                Instance::new(
+                    Mat4::from_scale_rotation_translation(
+                        Vec3::new(0.22, 0.22, len as f32 / 2.0),
+                        world::look_rotation(b - a).as_quat(),
+                        rel((a + b) / 2.0),
+                    ),
+                    color,
+                    Surface::Star,
+                    4.0 * flicker,
+                    0.0,
+                    [0.0, 1.0, 0.0, 1.0],
+                ),
+            ));
+            // Where it bites: a hot spot, bigger on a vein.
+            if world.mining.aim.is_some() {
+                let r = if on_vein { 2.2 } else { 1.3 } * flicker;
+                out.push((
+                    meshes.sphere,
+                    Instance::new(
+                        Mat4::from_scale_rotation_translation(
+                            Vec3::splat(r),
+                            Quat::IDENTITY,
+                            rel(b),
+                        ),
+                        color,
+                        Surface::Star,
+                        6.0,
+                        0.0,
+                        [0.0, 1.0, 0.0, 1.0],
+                    ),
+                ));
+            }
+        }
     }
     out
+}
+
+/// Glow colour of a good's veins and loose chunks.
+fn ore_glow(good: retrox_sim::economy::Good) -> [f32; 3] {
+    match good {
+        retrox_sim::economy::Good::Ice => [0.45, 0.85, 1.0],
+        _ => [1.0, 0.6, 0.18],
+    }
+}
+
+/// The rocks of the field the ship is in, as mined so far: rocks and
+/// fragments, the veins of rocks that have been read, loose ore and the
+/// flashes of fractures.
+fn mining_scene(
+    world: &World,
+    meshes: &Meshes,
+    field: retrox_sim::FieldId,
+    rocks: &[retrox_gen::Rock],
+    cam: DVec3,
+    out: &mut Vec<(MeshId, Instance)>,
+) {
+    let t = world.clock_s;
+    let center = world.position(Place::Field(field));
+    let rel = |p: DVec3| (p - cam).as_vec3();
+    let light = |p: DVec3| {
+        let dir = (-p).normalize_or(DVec3::Y).as_vec3();
+        [dir.x, dir.y, dir.z, 1.3]
+    };
+    let lit = light(center);
+    let pulse = (0.6 + 0.4 * (t * 4.0).sin()) as f32;
+    let f = &world.galaxy.fields[field];
+    for rock in world.mining.live_rocks(field, f, rocks, t) {
+        let pos = center + rock.pos;
+        let mut color = match rock.lode.good {
+            retrox_sim::economy::Good::Ice => [0.6, 0.66, 0.72],
+            _ => [0.42, 0.37, 0.33],
+        };
+        if rock.scanned && rock.lode.volatile {
+            color = [0.5, 0.3, 0.26];
+        }
+        if rock.worked_out {
+            color = color.map(|c| c * 0.6);
+        }
+        out.push((
+            meshes.rocks[mining::rock_mesh(rock.seed)],
+            Instance::new(
+                Mat4::from_scale_rotation_translation(
+                    Vec3::splat(rock.radius as f32),
+                    rock.rot.as_quat(),
+                    rel(pos),
+                ),
+                color,
+                Surface::Plain,
+                // Glowing from the laser's work.
+                (rock.damage as f32).powi(2) * 0.25,
+                0.0,
+                lit,
+            ),
+        ));
+        // Veins, once read, on rocks near enough to matter.
+        if rock.scanned && (pos - cam).length() < mining::SCAN_RANGE + rock.radius {
+            let (glow, strength) = if rock.lode.volatile {
+                ([1.0, 0.22, 0.12], 2.0 + 3.0 * pulse)
+            } else {
+                (ore_glow(rock.lode.good), 2.5)
+            };
+            let size = (rock.radius * 0.16).max(0.7) as f32;
+            for v in rock.vein_points() {
+                out.push((
+                    meshes.sphere,
+                    Instance::new(
+                        Mat4::from_scale_rotation_translation(
+                            Vec3::splat(size),
+                            Quat::IDENTITY,
+                            rel(center + v),
+                        ),
+                        glow,
+                        Surface::Star,
+                        strength,
+                        0.0,
+                        [0.0, 1.0, 0.0, 1.0],
+                    ),
+                ));
+            }
+        }
+    }
+    if let Some(state) = world.mining.field(field) {
+        for n in &state.nuggets {
+            let size = (0.5 + 1.1 * n.tonnes.cbrt()) as f32;
+            let spin = Quat::from_rotation_y((t * 0.7 + n.seed as f64 % 6.0) as f32)
+                * Quat::from_rotation_x((t * 0.4) as f32);
+            out.push((
+                meshes.rocks[mining::rock_mesh(n.seed)],
+                Instance::new(
+                    Mat4::from_scale_rotation_translation(
+                        Vec3::splat(size),
+                        spin,
+                        rel(center + n.pos),
+                    ),
+                    ore_glow(n.good),
+                    Surface::Plain,
+                    0.6 + 0.5 * pulse,
+                    0.0,
+                    lit,
+                ),
+            ));
+        }
+    }
+    for b in &world.mining.bursts {
+        let k = (b.age / b.life) as f32;
+        let glow = if b.volatile {
+            [1.0, 0.45, 0.2]
+        } else {
+            ore_glow(b.good)
+        };
+        out.push((
+            meshes.sphere,
+            Instance::new(
+                Mat4::from_scale_rotation_translation(
+                    Vec3::splat(b.radius as f32 * (0.25 + 0.75 * k.sqrt())),
+                    Quat::IDENTITY,
+                    rel(center + b.pos),
+                ),
+                glow,
+                Surface::Star,
+                5.0 * (1.0 - k).powi(2),
+                0.0,
+                [0.0, 1.0, 0.0, 1.0],
+            ),
+        ));
+    }
 }
 
 /// A ship on the hangar bay floor, the camera slowly circling it. The bay
@@ -766,21 +947,16 @@ fn gas_color(seed: u64) -> [f32; 3] {
     COLORS[(seed % COLORS.len() as u64) as usize]
 }
 
-/// The rest of the galaxy as background stars, in their true directions.
-/// The direction to the galaxy's centre from here (in the same axes as
-/// [`sky`]) and how far out we are, 0 at the centre to 1 at the rim.
-fn galactic_core(world: &World) -> (Vec3, f32) {
-    let here = world.galaxy.systems[world.system].position;
-    let rim = world
-        .galaxy
-        .systems
-        .iter()
-        .map(|(_, s)| s.position.x.hypot(s.position.y))
-        .fold(1.0, f64::max);
-    let dir = DVec3::new(-here.x, -here.z, -here.y).normalize_or(DVec3::X);
-    (dir.as_vec3(), (here.x.hypot(here.y) / rim) as f32)
-}
+/// How bright a point of starlight is drawn per unit of flux reaching us
+/// (solar luminosities per square light-year): the camera's sensitivity.
+/// Set so that a star at the naked-eye limit (magnitude ~6.5, the Sun seen
+/// from ~75 ly) is just visible and a magnitude-0 star blooms.
+const STARLIGHT_EXPOSURE: f64 = 150.0;
 
+/// The sky: every other system in the generated galaxy, in its true
+/// direction from here, carrying exactly the light its star sends us:
+/// luminosity over distance squared, in the star's own colour. Nothing else
+/// is drawn behind it; the galaxy's band is just these stars adding up.
 fn sky(world: &World) -> Vec<SkyVertex> {
     let here = world.galaxy.systems[world.system].position;
     world
@@ -788,27 +964,25 @@ fn sky(world: &World) -> Vec<SkyVertex> {
         .systems
         .iter()
         .filter(|(id, _)| *id != world.system)
-        .map(|(_, s)| {
+        .filter_map(|(_, s)| {
             let d = DVec3::new(
                 s.position.x - here.x,
                 s.position.z - here.z,
                 s.position.y - here.y,
             );
             let ly = d.length();
-            let brightness = (120.0 / ly).clamp(0.15, 6.0) as f32;
-            let c = match s.star {
-                StarClass::O | StarClass::B => [0.7, 0.8, 1.0],
-                StarClass::A | StarClass::F | StarClass::WhiteDwarf => [1.0, 1.0, 1.0],
-                StarClass::G => [1.0, 0.92, 0.75],
-                StarClass::K => [1.0, 0.78, 0.55],
-                StarClass::M => [1.0, 0.6, 0.45],
-                StarClass::Neutron => [0.6, 0.9, 1.0],
-                StarClass::BlackHole => [0.3, 0.2, 0.4],
-            };
-            SkyVertex {
-                dir: (d / ly).as_vec3().into(),
-                color: [c[0] * brightness, c[1] * brightness, c[2] * brightness],
+            let flux = s.star.luminosity_suns() / (ly * ly);
+            if flux <= 0.0 {
+                return None; // black holes send us nothing
             }
+            let brightness = (flux * STARLIGHT_EXPOSURE) as f32;
+            let c = star_color(s.star);
+            // Colour only: the flux carries the brightness.
+            let lum = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+            Some(SkyVertex {
+                dir: (d / ly).as_vec3().into(),
+                color: c.map(|x| x / lum * brightness),
+            })
         })
         .collect()
 }
