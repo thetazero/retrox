@@ -239,7 +239,9 @@ fn living(ui: &mut egui::Ui) {
          the next hostile. Shields soak hits first and come back once you stop taking them; \
          heat and power are shared, so burning hard and firing hot will lock your guns. Wrecks \
          spill salvage for the tractor. While raiders are near you can't fast travel, jump or \
-         save: fight, or run. Docking repairs the hull, for a price.",
+         save: fight, or run. Docking repairs the hull, for a price. Lose the ship and you go \
+         back to the last checkpoint, written every time you dock or land: the galaxy is as it \
+         was then and the same things happen again, unless you do something different.",
     );
     topic(
         ui,
