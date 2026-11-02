@@ -658,17 +658,80 @@ impl World {
             .or_else(|| self.cities_on(body).next())
     }
 
-    /// Every row of NAVIGATION, in order: each place, with a body's cities
-    /// right under it (`Some(city)`, the place being its body).
+    /// Every row of NAVIGATION, in order (issue #119): the star, then each
+    /// body with its cities right under it (`Some(city)`, the place being
+    /// its body), then the stations in orbit round it, then its moons, each
+    /// with theirs; then stations orbiting the star; fields last, as there
+    /// can be a dozen of them and nobody docks at a field.
     pub fn nav_entries(&self) -> Vec<(Place, Option<SettlementId>)> {
-        let mut out = Vec::new();
-        for place in self.nav_places() {
+        let mut out = vec![(Place::Star, None)];
+        for &b in &self.view.bodies {
+            let place = Place::Body(b);
             out.push((place, None));
-            if let Place::Body(b) = place {
-                out.extend(self.cities_on(b).map(|c| (place, Some(c))));
-            }
+            out.extend(self.cities_on(b).map(|c| (place, Some(c))));
+            out.extend(
+                self.view
+                    .stations
+                    .iter()
+                    .filter(|&&s| self.station_body(s) == Some(b))
+                    .map(|&s| (Place::Station(s), None)),
+            );
         }
+        out.extend(
+            self.view
+                .stations
+                .iter()
+                .filter(|&&s| self.station_body(s).is_none())
+                .map(|&s| (Place::Station(s), None)),
+        );
+        out.extend(self.view.fields.iter().map(|&f| (Place::Field(f), None)));
         out
+    }
+
+    /// The body of this system a station orbits, if it orbits one (rather
+    /// than the star).
+    pub fn station_body(&self, s: SettlementId) -> Option<BodyId> {
+        let Site::Space(orbit) = self.galaxy.settlements.get(s)?.site else {
+            return None;
+        };
+        match orbit.parent {
+            retrox_sim::Orbiting::Body(b) if self.view.bodies.contains(&b) => Some(b),
+            _ => None,
+        }
+    }
+
+    /// How far a NAVIGATION row hangs in under the one it belongs to:
+    /// moons off their planet, cities and stations off their body.
+    pub fn nav_depth(&self, (place, city): (Place, Option<SettlementId>)) -> usize {
+        let body_depth = |b: BodyId| usize::from(self.galaxy.bodies[b].kind == BodyKind::Moon);
+        match (place, city) {
+            (Place::Body(b), Some(_)) => body_depth(b) + 1,
+            (Place::Body(b), None) => body_depth(b),
+            (Place::Station(s), _) => self.station_body(s).map_or(0, |b| body_depth(b) + 1),
+            _ => 0,
+        }
+    }
+
+    /// A place's name as NAVIGATION and the markers in space show it: the
+    /// system's name is the panel's own context, so it is dropped from the
+    /// front of a field's or station's name, as is a field's "field"
+    /// ("Grabrar Deep Outer Belt field A" is "Outer Belt A"), so the letter
+    /// that tells fields apart is never what gets cut (issue #119).
+    pub fn short_name(&self, place: Place) -> String {
+        let name = self.name(place);
+        if !matches!(place, Place::Field(_) | Place::Station(_)) {
+            return name;
+        }
+        let system = &self.galaxy.systems[self.system].name;
+        let rest = name
+            .strip_prefix(system.as_str())
+            .map(str::trim_start)
+            .filter(|r| !r.is_empty())
+            .unwrap_or(&name);
+        match place {
+            Place::Field(_) => rest.replacen(" field ", " ", 1),
+            _ => rest.to_owned(),
+        }
     }
 
     /// The NAVIGATION row that's selected: a city row once one is picked.

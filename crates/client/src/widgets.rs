@@ -309,6 +309,30 @@ pub(crate) fn truncate(s: &str, n: usize) -> String {
     }
 }
 
+/// `s` cut from the end to fit `width` pixels in `font`, ending in an
+/// ellipsis if it was cut.
+pub(crate) fn fit(painter: &egui::Painter, s: &str, font: FontId, width: f32) -> String {
+    let wide = |t: &str| {
+        painter
+            .layout_no_wrap(t.to_owned(), font.clone(), Color32::WHITE)
+            .size()
+            .x
+    };
+    if wide(s) <= width {
+        return s.to_owned();
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let mut n = chars.len();
+    while n > 1 {
+        n -= 1;
+        let cut: String = chars[..n].iter().collect::<String>().trim_end().to_owned() + "…";
+        if wide(&cut) <= width {
+            return cut;
+        }
+    }
+    "…".to_owned()
+}
+
 /// The size of a keycap round a key's legend of `text` size.
 pub(crate) fn keycap_size(text: Vec2) -> Vec2 {
     Vec2::new((text.x + 10.0).max(20.0), text.y + 4.0)

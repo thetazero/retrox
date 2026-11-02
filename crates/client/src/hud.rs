@@ -191,7 +191,7 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
                 targeted,
                 dist,
                 p,
-                format!("{}  {}", w.name(place).to_uppercase(), distance(dist)),
+                format!("{}  {}", w.short_name(place).to_uppercase(), distance(dist)),
                 CREAM_DIM,
             ));
         }
@@ -571,13 +571,16 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
 fn nav_list(ui: &mut egui::Ui, w: &World, actions: &mut Vec<Action>) {
     ui.spacing_mut().item_spacing.y = 0.0;
     let rows = w.nav_entries();
+    let depths: Vec<usize> = rows.iter().map(|&r| w.nav_depth(r)).collect();
     let selected_row = w.nav_selected();
-    let is_moon =
-        |p: &Place| matches!(p, Place::Body(b) if w.galaxy.bodies[*b].kind == BodyKind::Moon);
     let bound: Vec<SettlementId> = w.player.contracts.iter().map(|c| c.offer.to).collect();
     let mut heading: Option<&str> = None;
     for (i, &(place, city)) in rows.iter().enumerate() {
+        let depth = depths[i];
+        // Stations round a body hang off it; only those round the star
+        // get a heading of their own.
         let group = match place {
+            _ if depth > 0 => heading,
             Place::Star | Place::Body(_) => None,
             Place::Field(_) => Some("Fields"),
             Place::Station(_) => Some("Stations"),
@@ -597,65 +600,59 @@ fn nav_list(ui: &mut egui::Ui, w: &World, actions: &mut Vec<Action>) {
                 None => Action::Target(place),
             });
         }
-        let moon = is_moon(&place);
-        // Moons sit one step in from planets, and cities one step in from
-        // the body they're on.
-        let depth = usize::from(moon) + usize::from(city.is_some());
         let painter = ui.painter();
-        let glyph_x = rect.left() + 16.0 + 16.0 * depth as f32;
+        let column = |d: usize| rect.left() + 16.0 + 16.0 * d as f32;
+        let glyph_x = column(depth);
         let c = Pos2::new(glyph_x, rect.center().y);
         let ink = if look.selected && !look.hot {
             AMBER
         } else {
             CREAM_DIM
         };
+        // The tree's brackets: an elbow from the row's parent, and the
+        // parent's (and grandparent's) line running on through to a later
+        // sibling.
         let stroke = Stroke::new(1.0, RULE);
-        // Is another moon of the same planet listed further down (past any
-        // cities in between)? Then the planet's bracket runs on through.
-        let moon_follows = rows[i + 1..]
-            .iter()
-            .take_while(|r| r.1.is_some() || is_moon(&r.0))
-            .any(|r| r.1.is_none());
-        let x = rect.left() + 16.0;
-        if moon && city.is_none() {
-            let bottom = if moon_follows { rect.bottom() } else { c.y };
-            painter.line_segment([Pos2::new(x, rect.top()), Pos2::new(x, bottom)], stroke);
-            painter.line_segment([Pos2::new(x, c.y), Pos2::new(c.x - 6.0, c.y)], stroke);
-        }
-        if city.is_some() {
-            if moon && moon_follows {
+        let sibling_follows = |d: usize| {
+            depths[i + 1..]
+                .iter()
+                .take_while(|&&e| e >= d)
+                .any(|&e| e == d)
+        };
+        for d in 1..=depth {
+            let x = column(d - 1);
+            let follows = sibling_follows(d);
+            if d == depth {
+                let bottom = if follows { rect.bottom() } else { c.y };
+                painter.line_segment([Pos2::new(x, rect.top()), Pos2::new(x, bottom)], stroke);
+                painter.line_segment([Pos2::new(x, c.y), Pos2::new(c.x - 6.0, c.y)], stroke);
+            } else if follows {
                 painter.line_segment(
                     [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
                     stroke,
                 );
             }
-            // The city's own bracket, back to the body above.
-            let bx = glyph_x - 16.0;
-            // A planet's cities share its bracket with its moons below.
-            let next_city = rows.get(i + 1).is_some_and(|r| r.1.is_some());
-            let bottom = if next_city || (!moon && moon_follows) {
-                rect.bottom()
-            } else {
-                c.y
-            };
-            painter.line_segment([Pos2::new(bx, rect.top()), Pos2::new(bx, bottom)], stroke);
-            painter.line_segment([Pos2::new(bx, c.y), Pos2::new(c.x - 6.0, c.y)], stroke);
         }
         match city {
             Some(_) => city_glyph(painter, c, ink),
             None => place_glyph(painter, w, place, c, ink),
         }
-        let label = match city {
-            Some(c) => w.galaxy.settlements[c].name.clone(),
-            None => w.name(place),
+        let label = match (place, city) {
+            (_, Some(c)) => w.galaxy.settlements[c].name.clone(),
+            // A station under its body: the bracket says whose it is.
+            (Place::Station(s), None) => {
+                let name = w.name(place);
+                w.station_body(s)
+                    .and_then(|b| {
+                        name.strip_prefix(w.galaxy.bodies[b].name.as_str())
+                            .map(str::trim_start)
+                            .filter(|r| !r.is_empty())
+                            .map(str::to_owned)
+                    })
+                    .unwrap_or_else(|| w.short_name(place))
+            }
+            _ => w.short_name(place),
         };
-        let name = painter.text(
-            Pos2::new(glyph_x + 14.0, c.y),
-            Align2::LEFT_CENTER,
-            crate::widgets::truncate(&label, 28 - 2 * depth),
-            mono(14.0),
-            look.text(AMBER),
-        );
         let tag = match (place, city) {
             // Pirates are known where they lair.
             (Place::Field(f), _) if w.gang_reported(f) => Some(("RAIDERS", ALARM)),
@@ -665,31 +662,46 @@ fn nav_list(ui: &mut egui::Ui, w: &World, actions: &mut Vec<Action>) {
             }
             _ => None,
         };
-        if let Some((tag, colour)) = tag {
-            painter.text(
-                Pos2::new(name.right() + 8.0, c.y),
-                Align2::LEFT_CENTER,
+        let tag = tag.map(|(text, colour)| painter.layout_no_wrap(text.into(), mono(11.0), colour));
+        // A city is as far as its planet: the range is on the planet's row.
+        let range = city.is_none().then(|| {
+            let colour = if look.hot {
+                CREAM
+            } else if look.selected {
+                AMBER.gamma_multiply(0.85)
+            } else {
+                VFD.gamma_multiply(0.85)
+            };
+            painter.layout_no_wrap(distance(w.distance_to(place)), mono(13.0), colour)
+        });
+        // The name gets what's left between the glyph and the range.
+        let name_x = glyph_x + 14.0;
+        let room = rect.right()
+            - 6.0
+            - range.as_ref().map_or(0.0, |g| g.size().x + 10.0)
+            - tag.as_ref().map_or(0.0, |g| g.size().x + 8.0)
+            - name_x;
+        let name = painter.text(
+            Pos2::new(name_x, c.y),
+            Align2::LEFT_CENTER,
+            crate::widgets::fit(painter, &label, mono(14.0), room),
+            mono(14.0),
+            look.text(AMBER),
+        );
+        if let Some(tag) = tag {
+            painter.galley(
+                Pos2::new(name.right() + 8.0, c.y - tag.size().y / 2.0),
                 tag,
-                mono(11.0),
-                colour,
+                Color32::PLACEHOLDER,
             );
         }
-        // A city is as far as its planet: the range is on the planet's row.
-        if city.is_some() {
-            continue;
+        if let Some(range) = range {
+            painter.galley(
+                Pos2::new(rect.right() - 6.0 - range.size().x, c.y - range.size().y / 2.0),
+                range,
+                Color32::PLACEHOLDER,
+            );
         }
-        let range = if look.selected { AMBER } else { VFD };
-        painter.text(
-            Pos2::new(rect.right() - 6.0, c.y),
-            Align2::RIGHT_CENTER,
-            distance(w.distance_to(place)),
-            mono(13.0),
-            if look.hot {
-                CREAM
-            } else {
-                range.gamma_multiply(0.85)
-            },
-        );
     }
 }
 
