@@ -21,3 +21,24 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets
       - run: cargo test --workspace
+
+  # Speed numbers for every change (DESIGN §5.1.1, #55). Reported in the job
+  # summary; doesn't fail the build.
+  bench:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p retrox-tools
+      - name: Bench
+        run: |
+          ./target/release/retrox bench --years 50 | tee bench.txt
+          {
+            echo '### retrox bench'
+            echo '```'
+            grep -v '^BENCH ' bench.txt
+            echo '```'
+            grep '^BENCH ' bench.txt
+          } >> "$GITHUB_STEP_SUMMARY"

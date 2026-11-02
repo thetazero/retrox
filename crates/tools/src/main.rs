@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use retrox_gen::{GalaxyConfig, generate};
 use retrox_sim::{GalaxyTime, PIPELINE, tick_profiled};
 
+mod bench;
 mod map;
 mod ship;
 
@@ -19,6 +20,8 @@ usage:
   retrox stats [--seed N]                  print generation statistics
   retrox prehistory [--seed N] [--years N] grow the galaxy from the cradle,
                                            printing it every 10 years
+  retrox bench [--seed N] [--years N]      time the sim per actor, and N years
+                                           of prehistory
   retrox ship [HULL]                       list stock ships, or show one in detail";
 
 fn main() -> ExitCode {
@@ -50,6 +53,7 @@ fn main() -> ExitCode {
         }
         "stats" => stats(seed),
         "prehistory" => prehistory(seed, years),
+        "bench" => bench::run_bench(seed, years),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::FAILURE;
