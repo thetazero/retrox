@@ -171,10 +171,22 @@ fn print_bodies(state: &retrox_sim::GalaxyState) {
         .iter()
         .filter(|b| !b.regions.is_empty())
         .count();
+    let systems_with_world = state
+        .systems
+        .as_slice()
+        .iter()
+        .filter(|s| {
+            s.bodies
+                .iter()
+                .any(|&b| !state.bodies[b].regions.is_empty())
+        })
+        .count();
     println!(
-        "  {} habitable worlds divided into {} regions; {} settlements",
+        "  {} habitable worlds divided into {} regions, in {} systems ({:.0}%); {} settlements",
         divided,
         state.regions.len(),
+        systems_with_world,
+        100.0 * systems_with_world as f64 / state.systems.len() as f64,
         state.settlements.len()
     );
 }

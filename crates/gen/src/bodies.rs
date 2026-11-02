@@ -21,7 +21,7 @@ pub const AU_KM: f64 = 1.496e8;
 /// Mean Earth radius, km.
 const EARTH_RADIUS_KM: f64 = 6371.0;
 /// Planets at least this habitable are split into regions.
-const REGION_THRESHOLD: f64 = 0.15;
+const REGION_THRESHOLD: f64 = 0.4;
 
 pub fn generate(rng: &mut Rng, state: &mut GalaxyState) {
     for i in 0..state.systems.len() {
@@ -102,7 +102,7 @@ fn pick_slot(r: &mut Rng, a: f64, hz: f64, frost: f64, belt_at_frost: &mut bool)
     let classes: (&[PlanetClass], &[f64]) = if a < 0.6 * hz {
         (&[Barren, Desert], &[0.6, 0.4])
     } else if a < 1.6 * hz {
-        (&[Terran, Ocean, Desert, Barren], &[0.35, 0.25, 0.25, 0.15])
+        (&[Terran, Ocean, Desert, Barren], &[0.12, 0.1, 0.38, 0.4])
     } else {
         (&[Barren, Desert, Ice], &[0.5, 0.2, 0.3])
     };
@@ -130,7 +130,7 @@ fn zone_factor(a: f64, hz: f64) -> f64 {
         return 0.0;
     }
     let x = (a / hz).ln();
-    (-(x * x) / (2.0 * 0.35 * 0.35)).exp()
+    (-(x * x) / (2.0 * 0.25 * 0.25)).exp()
 }
 
 fn ore_bias(star: StarClass) -> f64 {
@@ -229,7 +229,7 @@ fn make_body(
         }
     };
     let habitability =
-        class_hab * star_factor(star) * (0.15 + 0.85 * zone_factor(orbit.semi_major_au, hz));
+        class_hab * star_factor(star) * (0.03 + 0.97 * zone_factor(orbit.semi_major_au, hz));
     let body = state.add_body(Body {
         system,
         name,
