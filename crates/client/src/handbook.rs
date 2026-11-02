@@ -233,8 +233,9 @@ fn living(ui: &mut egui::Ui) {
     topic(
         ui,
         "Combat",
-        "Raiders lurk in asteroid fields away from faction capitals; NAVIGATION marks a field \
-         where they've been seen. They close in when you arrive. [LMB] or [R] fires every gun \
+        "Pirate gangs hole up in asteroid fields away from faction capitals; NAVIGATION marks a \
+         field where one lairs. They close in when you arrive, and they hunt: a gang that \
+         spots you in fast travel can pull you out of it. [LMB] or [R] fires every gun \
          you carry; put the boresight on the red lead pip and the guns swing onto it. [Y] picks \
          the next hostile. Shields soak hits first and come back once you stop taking them; \
          heat and power are shared, so burning hard and firing hot will lock your guns. Wrecks \
@@ -242,6 +243,22 @@ fn living(ui: &mut egui::Ui) {
          save: fight, or run. Docking repairs the hull, for a price. Lose the ship and you go \
          back to the last checkpoint, written every time you dock or land: the galaxy is as it \
          was then and the same things happen again, unless you do something different.",
+    );
+    topic(
+        ui,
+        "Bounties",
+        "The BOUNTIES office lists warrants on gangs within six jumps: who posted them, what \
+         each ship is worth, and where the gang lairs. PLOT COURSE there and fly into its field. \
+         The faction pays the moment a ship goes down, and thinks better of you for it.",
+    );
+    topic(
+        ui,
+        "Standing and piracy",
+        "Every faction keeps count of you. Hunting pirates raises your standing; failing its \
+         freight lowers it. [I] intercepts the trader in your sights and brings you alongside. \
+         Open fire and its whole faction turns on you: hostile factions refuse you clearance to \
+         dock or land and their armed ships shoot on sight. What a destroyed trader carried, \
+         the tractor takes. Grudges fade in a season or two.",
     );
     topic(
         ui,

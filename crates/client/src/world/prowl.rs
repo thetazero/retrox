@@ -194,10 +194,8 @@ impl World {
             pos + self.ship.rot * DVec3::NEG_Z * 10e3
         };
         self.engage(id, None, from - anchor, craft.pos);
-        self.say(format!(
-            "INTERDICTED · the {name} pulled us out of fast travel"
-        ));
-        self.interdicted = Some(0.0);
+        // The card says it; the comms line keeps "Raiders!".
+        self.interdicted = Some((0.0, name));
     }
 
     /// The fast-travel drive a gang's slowest ship has.
@@ -360,6 +358,46 @@ impl World {
     /// Whether we may dock or land at settlements of `faction`.
     pub fn welcome(&self, faction: FactionId) -> bool {
         !self.player.standing.hostile(faction)
+    }
+}
+
+impl World {
+    /// Fly at the nearest gang's lair from a third of an AU out until it
+    /// pulls the ship out of fast travel (for screenshots). Returns whether
+    /// it did.
+    pub fn stage_interdiction(&mut self) -> bool {
+        if !self.start_by_raiders() {
+            return false;
+        }
+        let Place::Field(field) = self.ship.frame else {
+            return false;
+        };
+        let centre = self.position(Place::Field(field));
+        self.combat.leave();
+        self.field_rocks = None;
+        self.mode = Mode::Normal;
+        self.ship.frame = Place::Star;
+        for side in [1.0, -1.0] {
+            self.ship.rel = centre + DVec3::new(side * 0.3 * 1.496e11, 0.006e11, 0.0);
+            if self.current_well().is_none() {
+                break;
+            }
+        }
+        self.ship.vel = DVec3::ZERO;
+        self.target = Some(Place::Field(field));
+        self.update(1.0 / 60.0, super::Controls::default());
+        self.act(super::Action::FastTravel);
+        for _ in 0..60 * 20 {
+            if !matches!(self.mode, Mode::FastTravel(_)) {
+                break;
+            }
+            self.update(1.0 / 60.0, super::Controls::default());
+        }
+        // A moment later, as the band slams in.
+        for _ in 0..20 {
+            self.update(1.0 / 60.0, super::Controls::default());
+        }
+        self.interdicted.is_some()
     }
 }
 

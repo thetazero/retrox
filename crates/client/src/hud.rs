@@ -197,6 +197,10 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
         // colour, labelled once they're near enough to matter.
         let me = w.ship_position();
         for c in &w.traffic.contacts {
+            // A fleet in the fight's scene is marked ship by ship there.
+            if w.combat.has_convoy(c.key) {
+                continue;
+            }
             let rel = (c.pos - h.camera).as_vec3();
             let Some(p) = project(h.view_proj, rel, screen) else {
                 continue;
@@ -425,6 +429,10 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
                     .show(ui, |ui| nav_list(ui, w, &mut actions));
             },
         );
+    }
+
+    if let Some((t, gang)) = &w.interdicted {
+        interdicted(ctx, screen, *t as f32, gang);
     }
 
     match w.mode {
@@ -1124,6 +1132,96 @@ pub(crate) fn segment_bar(ui: &mut egui::Ui, value: f32, width: f32, color: Colo
 }
 
 /// A big centred caption with a red rule and a subtitle, for transitions.
+/// The moment a gang pulls the ship out of fast travel: the view tears
+/// with interference, the edges flash red, and a red band slams across with
+/// INTERDICTED and who did it, then all of it fades.
+fn interdicted(ctx: &egui::Context, screen: Rect, t: f32, gang: &str) {
+    const SHOW: f32 = 3.2;
+    if t > SHOW {
+        return;
+    }
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::unique("interdicted"),
+    ));
+    let fade = (1.0 - ((t - SHOW + 0.8) / 0.8).clamp(0.0, 1.0)).min((t / 0.08).min(1.0));
+    // Interference: torn scan bands, thick at first, thinning out.
+    let tear = (1.0 - t / 1.2).clamp(0.0, 1.0);
+    if tear > 0.0 {
+        for i in 0..26 {
+            let h = ((i as f32 * 12.9898 + (t * 37.0).floor() * 78.233).sin() * 43758.545).fract();
+            let y = screen.top() + h.abs() * screen.height();
+            let thick = 1.0 + 5.0 * tear * ((i * 7 % 5) as f32 / 4.0);
+            let shift = (h - 0.5) * 60.0 * tear;
+            painter.rect_filled(
+                Rect::from_min_size(
+                    Pos2::new(screen.left() + shift, y),
+                    Vec2::new(screen.width(), thick),
+                ),
+                0.0,
+                ALARM.gamma_multiply(0.12 * tear),
+            );
+        }
+    }
+    // A red flash round the edges.
+    let flash = (1.0 - t / 0.6).clamp(0.0, 1.0);
+    for k in 0..6 {
+        painter.rect_stroke(
+            screen.shrink(k as f32 * 14.0),
+            0.0,
+            Stroke::new(
+                14.0,
+                RED.gamma_multiply(0.22 * flash * (1.0 - k as f32 / 6.0)),
+            ),
+            egui::StrokeKind::Inside,
+        );
+    }
+    // The band slams in from the left, then holds.
+    let slam = (t / 0.18).clamp(0.0, 1.0);
+    let ease = 1.0 - (1.0 - slam).powi(3);
+    let y = screen.top() + screen.height() * 0.24;
+    let off = screen.width() * (1.0 - ease);
+    let band = Rect::from_min_max(
+        Pos2::new(screen.left() - off, y - 46.0),
+        Pos2::new(screen.right() - off * 0.2, y + 46.0),
+    );
+    painter.rect_filled(band, 0.0, RED.gamma_multiply(0.92 * fade));
+    painter.rect_filled(
+        Rect::from_min_size(band.left_bottom(), Vec2::new(band.width(), 4.0)),
+        0.0,
+        RED_DARK.gamma_multiply(fade),
+    );
+    // Hazard slashes at the band's right end, as on the panel tabs.
+    for k in 0..5 {
+        let x = band.right() - 40.0 - k as f32 * 18.0;
+        painter.add(egui::Shape::convex_polygon(
+            vec![
+                Pos2::new(x, band.bottom()),
+                Pos2::new(x + 9.0, band.bottom()),
+                Pos2::new(x + 25.0, band.top()),
+                Pos2::new(x + 16.0, band.top()),
+            ],
+            RED_DARK.gamma_multiply(fade),
+            Stroke::NONE,
+        ));
+    }
+    let c = Pos2::new(screen.center().x - off, y);
+    painter.text(
+        c + Vec2::new(0.0, 8.0),
+        Align2::CENTER_BOTTOM,
+        "INTERDICTED",
+        display(72.0),
+        CREAM.gamma_multiply(fade),
+    );
+    painter.text(
+        c + Vec2::new(0.0, 12.0),
+        Align2::CENTER_TOP,
+        format!("pulled out of fast travel by the {gang}").to_uppercase(),
+        mono(18.0),
+        CREAM.gamma_multiply(0.85 * fade),
+    );
+}
+
 pub(crate) fn title_card(
     painter: &egui::Painter,
     centre: Pos2,

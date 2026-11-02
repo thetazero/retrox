@@ -21,9 +21,11 @@
 //!   another ship, up to [`MAX_SHIPS`]; a gang that goes
 //!   [`STARVE_DAYS`] without a raid loses one, and a gang with none left is
 //!   gone.
-//! - **Bounties.** At its monthly review a gang that has robbed a faction's
-//!   traders draws a bounty from the faction it has robbed most, priced by
-//!   how much it has taken, if the faction can afford it for the whole gang.
+//! - **Bounties.** The faction whose settlement the crews deserted posts a
+//!   warrant on them when they go. Otherwise, at its monthly review a gang
+//!   that has robbed a faction's traders draws a bounty from the faction it
+//!   has robbed most, if it can afford it for the whole gang. Either way
+//!   the price rises with how much the gang has taken.
 //!   It is paid from the faction's treasury for each of the gang's ships
 //!   destroyed (see [`claim_bounty`]).
 //!
@@ -368,6 +370,15 @@ pub fn found(state: &mut GalaxyState, origin: SettlementId, rng: &mut Rng) -> Op
         .map(|_| light[rng.below(light.len())].clone())
         .collect();
     let today = state.time;
+    // The crews' own faction wants its deserters back: it posts a warrant
+    // at once, if it can afford one.
+    let deserted = state.settlements[origin].owner;
+    let bounty = (ledger::spendable(state, Account::Faction(deserted)) >= BOUNTY_BASE * 4.0)
+        .then_some(Bounty {
+            faction: deserted,
+            per_ship: BOUNTY_BASE,
+            posted: today,
+        });
     let id = state.pirates.gangs.insert(Gang {
         name,
         lair,
@@ -379,7 +390,7 @@ pub fn found(state: &mut GalaxyState, origin: SettlementId, rng: &mut Rng) -> Op
         grown_t: 0.0,
         last_raid: today,
         victims: Vec::new(),
-        bounty: None,
+        bounty,
         lost: 0,
     });
     state.pirates.near.clear();

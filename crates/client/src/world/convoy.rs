@@ -95,10 +95,7 @@ impl World {
                     .join_convoy(c.key, faction, &c.fit, &slots, hostile);
                 if hostile {
                     let name = self.faction_name(faction);
-                    self.say(format!(
-                        "{} ({}) count us hostile: weapons free",
-                        c.company, name
-                    ));
+                    self.say(format!("Hostile convoy · {name} ships open fire"));
                 }
             }
         }
@@ -160,6 +157,33 @@ impl World {
             said.push(super::prowl::rank_news(&name, rank));
         }
         self.say(said.join(" · "));
+    }
+
+    /// Alongside the biggest trader fleet in view, in its frame, as an
+    /// intercept leaves the ship, with its faction counting us `hostile` or
+    /// not (for screenshots).
+    pub fn stage_convoy(&mut self, hostile: bool) -> bool {
+        if !self.start_by_traffic() {
+            return false;
+        }
+        let Some(c) = self
+            .traffic
+            .contacts
+            .iter()
+            .max_by_key(|c| c.ships)
+            .cloned()
+        else {
+            return false;
+        };
+        self.enter_frame(Place::Convoy(c.key));
+        self.ship.flight_assist = true;
+        if hostile && let Some(f) = self.fleet_faction(c.key) {
+            self.player.standing.change(f, -60.0);
+        }
+        for _ in 0..30 {
+            self.update(1.0 / 60.0, super::Controls::default());
+        }
+        true
     }
 
     /// The ship as saved: a convoy's frame isn't (it's rebuilt from the

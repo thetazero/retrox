@@ -76,6 +76,12 @@ struct Flags {
     field: bool,
     /// Start in space alongside a trader fleet.
     traffic: bool,
+    /// Fly past a pirate gang's lair until it pulls the ship out of fast
+    /// travel.
+    interdict: bool,
+    /// Alongside a trader fleet in its frame (and its faction hostile).
+    convoy: bool,
+    hostile_convoy: bool,
     /// Start in the nearest asteroid field with raiders, for them to find.
     combat: bool,
     /// With `combat`: the band close in front, battered, fighting at once.
@@ -133,6 +139,9 @@ impl Flags {
             station: has("--station"),
             field: has("--field"),
             traffic: has("--traffic"),
+            interdict: has("--interdict"),
+            convoy: has("--convoy") || has("--hostile-convoy"),
+            hostile_convoy: has("--hostile-convoy"),
             combat: has("--combat") || has("--brawl") || has("--lost") || has("--rewind"),
             brawl: has("--brawl") || has("--lost") || has("--rewind"),
             lost: value("--lost")
@@ -202,6 +211,7 @@ impl Flags {
             Some("hangar") => Some(Screen::Hangar),
             Some("shipyard") => Some(Screen::Shipyard),
             Some("contracts") => Some(Screen::Contracts),
+            Some("bounties") => Some(Screen::Bounties),
             Some(other) => {
                 eprintln!("--screen: no screen {other}");
                 None
@@ -235,6 +245,12 @@ impl Flags {
         }
         if self.traffic {
             world.start_by_traffic();
+        }
+        if self.interdict {
+            world.stage_interdiction();
+        }
+        if self.convoy {
+            world.stage_convoy(self.hostile_convoy);
         }
         if self.brawl {
             world.stage_brawl();

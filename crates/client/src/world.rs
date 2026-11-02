@@ -347,9 +347,9 @@ pub struct World {
     pub combat: Combat,
     /// How hard the ship's engines burned this frame, 0..1.
     pub burn: f64,
-    /// Seconds since a gang pulled us out of fast travel, while that's
-    /// news.
-    pub interdicted: Option<f64>,
+    /// Seconds since a gang pulled us out of fast travel, and which,
+    /// while that's news.
+    pub interdicted: Option<(f64, String)>,
     /// The convoy the ship flies alongside, as last seen: where, how fast,
     /// and the galaxy clock then.
     convoy_seen: Option<(retrox_sim::bubble::FleetKey, DVec3, DVec3, f64)>,
@@ -1003,7 +1003,7 @@ impl World {
         self.bump = 0.0;
         let from = self.ship_position();
         let clock0 = self.clock_s;
-        if let Some(t) = &mut self.interdicted {
+        if let Some((t, _)) = &mut self.interdicted {
             *t += dt;
             if *t > 6.0 {
                 self.interdicted = None;

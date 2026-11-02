@@ -204,7 +204,7 @@ fn warrant_card(ui: &mut egui::Ui, w: &World, id: GangId, jumps: usize, actions:
                 ui.spacing_mut().item_spacing.y = 1.0;
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("✶").color(ALARM));
+                    ui.label(RichText::new("▶").color(ALARM));
                     ui.label(
                         RichText::new(g.name.to_uppercase())
                             .font(display(26.0))
@@ -227,11 +227,15 @@ fn warrant_card(ui: &mut egui::Ui, w: &World, id: GangId, jumps: usize, actions:
                 ui.horizontal(|ui| {
                     glow_label(ui, &fleet_text(&g.ships), mono(14.0), ALARM);
                     ui.add_space(6.0);
+                    let record = if g.haul_t < 0.5 {
+                        "no raids yet".to_owned()
+                    } else {
+                        format!("{:.0} t taken", g.haul_t)
+                    };
                     ui.label(
                         RichText::new(format!(
-                            "posted by the {} · {:.0} t taken",
+                            "posted by the {} · {record}",
                             w.faction_name(b.faction),
-                            g.haul_t
                         ))
                         .size(11.0)
                         .color(CREAM_DIM),
