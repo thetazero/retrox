@@ -89,7 +89,7 @@ enum Holder {
     Ship,
 }
 
-/// A free site within a colony ship's reach of some system.
+/// The best free site in reach, as a launch chooses it.
 #[derive(Clone, Copy)]
 struct Candidate {
     system: SystemId,
@@ -99,19 +99,15 @@ struct Candidate {
     days: f64,
 }
 
-/// Free sites kept for each system's list: enough that a list lasts
-/// several launches before it runs out and has to be searched again.
-const LIST_LEN: usize = 8;
-
 /// Where colonists can go, prepared for the monthly reviews (DESIGN
-/// §5.1.1): which sites are taken, and for each system colonists have set
-/// out from, a short list of the best free sites in reach, best first.
+/// §5.1.1): which sites are taken, and each system's settleable sites,
+/// best first, with how many at the front are taken.
 ///
-/// Kept up to date as sites are taken: a list's entries are skipped once
-/// taken, and the list is searched again only when all of them are. Sites
-/// are only taken between searches, so the best free entry on a list is
-/// the best free site in reach, just as a full search would find. A site
-/// that comes free again (colonists who scatter) clears every list.
+/// Kept up to date as sites are taken: a system's list moves past its
+/// first free site once that is taken, and goes back to its start if a
+/// site comes free again (colonists who scatter). A launch compares the
+/// first free site of each system in reach, nearest first, which is
+/// what a search of every body in reach would find.
 ///
 /// Everything here follows from the state, so it isn't saved: a loaded
 /// game builds it again on its first launch and chooses the same.
@@ -119,9 +115,17 @@ const LIST_LEN: usize = 8;
 pub struct Sites {
     built: bool,
     taken: HashMap<Claim, Holder>,
-    /// By system index. `Some(empty)` means nowhere was free in reach;
-    /// sites don't come free without clearing the lists, so that holds.
-    near: Vec<Option<Vec<Candidate>>>,
+    /// By system index, made the first time a launch looks there.
+    systems: Vec<Option<SystemSites>>,
+}
+
+/// One system's settleable sites, best first. Sites and their scores
+/// don't change; only which are taken does.
+#[derive(Clone)]
+struct SystemSites {
+    sites: Vec<(Site, f64)>,
+    /// Every site before this one is taken.
+    first_free: usize,
 }
 
 impl Clone for Sites {
@@ -143,7 +147,7 @@ impl Sites {
             return;
         }
         self.taken.clear();
-        self.near.clear();
+        self.systems.clear();
         let ships = state.colony_ships.values().map(|c| (c.site, Holder::Ship));
         let settled = state
             .settlements
@@ -178,65 +182,84 @@ impl Sites {
         }
     }
 
-    /// Colonists bound for `site` gave up: it's free again, unless
-    /// someone settled it meanwhile.
-    fn release(&mut self, site: Site) {
+    /// Colonists bound for `site`, in `system`, gave up: it's free again,
+    /// unless someone settled it meanwhile.
+    fn release(&mut self, system: SystemId, site: Site) {
         if self.built
             && let Some(c) = claim(site)
             && self.taken.get(&c) == Some(&Holder::Ship)
         {
             self.taken.remove(&c);
-            self.near.clear();
+            if let Some(Some(here)) = self.systems.get_mut(system.index()) {
+                here.first_free = 0;
+            }
         }
     }
 
-    /// The best free site in reach of `origin`.
+    /// `system`'s best free site and its score.
+    fn first_free(&mut self, state: &GalaxyState, system: SystemId) -> Option<(Site, f64)> {
+        let i = system.index();
+        if self.systems.len() <= i {
+            self.systems.resize(i + 1, None);
+        }
+        let here = self.systems[i].get_or_insert_with(|| SystemSites {
+            sites: ranked(state, system),
+            first_free: 0,
+        });
+        let taken = &self.taken;
+        while let Some(&(site, _)) = here.sites.get(here.first_free)
+            && claim(site).is_some_and(|c| taken.contains_key(&c))
+        {
+            here.first_free += 1;
+        }
+        // Past the first free one, some may be taken too: only the first
+        // is ever read, and it is checked above.
+        here.sites.get(here.first_free).copied()
+    }
+
+    /// The best free site in reach of `origin`. Equal scores go to the
+    /// one found later, as they always have.
     fn best(&mut self, state: &GalaxyState, origin: SystemId) -> Option<Candidate> {
         self.build(state);
-        let i = origin.index();
-        if self.near.len() <= i {
-            self.near.resize(i + 1, None);
-        }
-        let taken = &self.taken;
-        let free = |c: &Candidate| claim(c.site).is_none_or(|k| !taken.contains_key(&k));
-        if let Some(list) = &mut self.near[i] {
-            let had = !list.is_empty();
-            list.retain(free);
-            if !list.is_empty() || !had {
-                return list.first().copied();
+        let mut best: Option<Candidate> = None;
+        for &(system, ly, _) in reach(state, origin).iter() {
+            let Some((site, score)) = self.first_free(state, system) else {
+                continue;
+            };
+            let days = 2.0 * IN_SYSTEM_DAYS + ly / JUMP_LY_PER_DAY;
+            let score = score / (1.0 + days / 20.0);
+            if best.is_none_or(|b| score >= b.score) {
+                best = Some(Candidate {
+                    system,
+                    site,
+                    score,
+                    days,
+                });
             }
         }
-        let mut list = search(state, &self.taken, origin);
-        list.truncate(LIST_LEN);
-        let best = list.first().copied();
-        self.near[i] = Some(list);
         best
     }
 }
 
-/// Every free site in reach of `origin`, best first. Equal scores go to
-/// the one found later, as they always have.
-fn search(state: &GalaxyState, taken: &HashMap<Claim, Holder>, origin: SystemId) -> Vec<Candidate> {
-    let mut out = Vec::new();
-    let reach = crate::haul::reach(
+/// Systems a colony ship can get to from `origin`.
+fn reach(state: &GalaxyState, origin: SystemId) -> crate::haul::Reached {
+    crate::haul::reach(
         state,
         origin,
         (MAX_DAYS - 2.0 * IN_SYSTEM_DAYS) * JUMP_LY_PER_DAY,
-    );
-    for &(system, ly, _) in reach.iter() {
-        let days = 2.0 * IN_SYSTEM_DAYS + ly / JUMP_LY_PER_DAY;
-        candidates(state, taken, system, |site, score| {
-            out.push(Candidate {
-                system,
-                site,
-                score: score / (1.0 + days / 20.0),
-                days,
-            });
-        });
-    }
-    let mut ranked: Vec<(usize, Candidate)> = out.into_iter().enumerate().collect();
-    ranked.sort_by(|(i, a), (j, b)| b.score.total_cmp(&a.score).then(j.cmp(i)));
-    ranked.into_iter().map(|(_, c)| c).collect()
+    )
+}
+
+/// Every settleable site in `system`, best first; equal scores put the
+/// later-found first.
+fn ranked(state: &GalaxyState, system: SystemId) -> Vec<(Site, f64)> {
+    let mut sites = Vec::new();
+    candidates(state, &HashMap::new(), system, |site, score| {
+        sites.push((site, score));
+    });
+    let mut indexed: Vec<(usize, (Site, f64))> = sites.into_iter().enumerate().collect();
+    indexed.sort_by(|(i, a), (j, b)| b.1.total_cmp(&a.1).then(j.cmp(i)));
+    indexed.into_iter().map(|(_, s)| s).collect()
 }
 
 /// The best free site in reach of `origin`'s colonists: the system and
@@ -248,14 +271,22 @@ pub fn best_free_site(state: &mut GalaxyState, origin: SystemId) -> Option<(Syst
     best.map(|c| (c.system, c.site))
 }
 
-/// The same as [`best_free_site`], found by searching every system in
+/// The same as [`best_free_site`], found by searching every body in
 /// reach: what the lists stand in for, kept to check them against.
 pub fn search_free_site(state: &GalaxyState, origin: SystemId) -> Option<(SystemId, Site)> {
     let mut sites = Sites::default();
     sites.build(state);
-    search(state, &sites.taken, origin)
-        .first()
-        .map(|c| (c.system, c.site))
+    let mut best: Option<(SystemId, Site, f64)> = None;
+    for &(system, ly, _) in reach(state, origin).iter() {
+        let days = 2.0 * IN_SYSTEM_DAYS + ly / JUMP_LY_PER_DAY;
+        candidates(state, &sites.taken, system, |site, score| {
+            let score = score / (1.0 + days / 20.0);
+            if best.is_none_or(|b| score >= b.2) {
+                best = Some((system, site, score));
+            }
+        });
+    }
+    best.map(|(system, site, _)| (system, site))
 }
 
 fn site_name(state: &GalaxyState, site: Site) -> String {
@@ -425,7 +456,7 @@ pub fn arrive(state: &mut GalaxyState) {
                 );
             }
             state.colony_ships.remove(key);
-            state.sites.release(ship.site);
+            state.sites.release(ship.system, ship.site);
             continue;
         };
         let mut economy = LocalEconomy {

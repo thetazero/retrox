@@ -14,7 +14,7 @@
 //!
 //! Every movement of money and goods goes through [`crate::ledger`].
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -1343,31 +1343,45 @@ fn pay_upkeep(state: &mut GalaxyState, key: CompanyId, n: usize) {
 
 /// At their monthly review, settlements with hull to sell, money to spare
 /// and a hold's worth of freight may found a company with one ship of the
-/// biggest class they can build, unless ships already sit idle in their
-/// system.
+/// biggest class they can build, unless ships sat idle in their system
+/// at the start of the month.
 fn found_companies(state: &mut GalaxyState) {
     let today = state.time;
-    // Systems where ships already sit with nothing to carry: a scan of
-    // every fleet, so made only once a settlement is otherwise ready to
-    // found, which most days none is.
-    let mut idle_systems: Option<HashSet<SystemId>> = None;
+    if today.days().is_multiple_of(REVIEW_DAYS) || state.idle_ports.is_none() {
+        state.idle_ports = Some(idle_ports(state));
+    }
     for i in crate::settlement::review_slots(today.days(), 0, state.settlements.slot_count()) {
         let Some(id) = state.settlements.key_at(i) else {
             continue;
         };
         crate::decisions::time(crate::decisions::Decision::Founding, || {
-            found_one(state, id, today, &mut idle_systems);
+            found_one(state, id, today);
         });
     }
 }
 
+/// Systems where ships sit docked with nothing to carry, sorted: what
+/// founding a company checks first. A scan of every fleet, so made once a
+/// month, not by each settlement that asks.
+fn idle_ports(state: &GalaxyState) -> Vec<SystemId> {
+    let mut out: Vec<SystemId> = state
+        .companies
+        .values()
+        .flat_map(|c| c.fleets.iter())
+        .filter_map(|f| match f.at {
+            Location::Docked(at) if f.idle || f.slack > 0 => {
+                Some(state.settlements.get(at)?.system)
+            }
+            _ => None,
+        })
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
 /// One settlement's monthly review of whether to found a company.
-fn found_one(
-    state: &mut GalaxyState,
-    id: SettlementId,
-    today: GalaxyTime,
-    idle_systems: &mut Option<HashSet<SystemId>>,
-) {
+fn found_one(state: &mut GalaxyState, id: SettlementId, today: GalaxyTime) {
     let entity = slotmap::Key::data(&id).as_ffi();
     let economy = &state.settlements[id].economy;
     if economy.population <= 0.0
@@ -1396,20 +1410,9 @@ fn found_one(
     else {
         return;
     };
-    let idle = idle_systems.get_or_insert_with(|| {
-        state
-            .companies
-            .values()
-            .flat_map(|c| c.fleets.iter())
-            .filter_map(|f| match f.at {
-                Location::Docked(at) if f.idle || f.slack > 0 => {
-                    Some(state.settlements.get(at)?.system)
-                }
-                _ => None,
-            })
-            .collect()
-    });
-    if idle.contains(&state.settlements[id].system) {
+    let system = state.settlements[id].system;
+    let idle = state.idle_ports.as_deref().unwrap_or_default();
+    if idle.binary_search(&system).is_ok() {
         return;
     }
     // The crew fetches the hull from the nearest yard that has it;
