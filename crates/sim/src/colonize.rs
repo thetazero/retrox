@@ -296,7 +296,8 @@ pub fn arrive(state: &mut GalaxyState) {
     }
 }
 
-/// A station orbiting whatever `site` is on.
+/// A station orbiting whatever `site` is on, at 3 radii: inside the
+/// planet's well (4 radii) with room for its arrival point (#112).
 fn station_near(state: &GalaxyState, site: Site) -> Site {
     let body: Option<BodyId> = match site {
         Site::Region(r) => Some(region_body(state, r)),
@@ -304,7 +305,7 @@ fn station_near(state: &GalaxyState, site: Site) -> Site {
         Site::Space(orbit) => return Site::Space(orbit),
     };
     let body = body.expect("set above");
-    let radius_au = state.bodies[body].radius_km * 4.0 / 1.496e8;
+    let radius_au = state.bodies[body].radius_km * 3.0 / 1.496e8;
     Site::Space(crate::Orbit::circular(
         crate::Orbiting::Body(body),
         radius_au,
