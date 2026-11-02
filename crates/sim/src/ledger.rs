@@ -166,7 +166,12 @@ pub fn sell(
 /// Use up to `wanted` of `good` from a market's own stock, with no money
 /// changing hands (construction materials, say). Returns the amount used.
 pub fn consume(state: &mut GalaxyState, market: SettlementId, good: Good, wanted: f64) -> f64 {
-    let stock = &mut state.settlements[market].economy.market.stock[good];
+    consume_from(&mut state.settlements[market].economy.market, good, wanted)
+}
+
+/// [`consume`], for a caller already holding the market.
+pub fn consume_from(market: &mut crate::economy::Market, good: Good, wanted: f64) -> f64 {
+    let stock = &mut market.stock[good];
     let amount = wanted.min(stock.max(0.0)).max(0.0);
     *stock -= amount;
     amount

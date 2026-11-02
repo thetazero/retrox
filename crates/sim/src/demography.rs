@@ -8,7 +8,8 @@
 //! buy all its food shrinks in proportion to the shortfall.
 
 use crate::economy::Good;
-use crate::{GalaxyState, HistoryKind, SettlementId, Site};
+use crate::economy::LocalEconomy;
+use crate::{Arena, Body, GalaxyState, Region, SettlementId, Site};
 
 /// Yearly growth rate of a fed population far below capacity.
 const GROWTH_PER_YEAR: f64 = 0.03;
@@ -32,9 +33,15 @@ const DAYS_PER_YEAR: f64 = crate::time::DAYS_PER_YEAR as f64;
 
 /// How many people a settlement's site can hold.
 pub fn capacity(state: &GalaxyState, id: SettlementId) -> f64 {
-    match state.settlements[id].site {
-        Site::Region(r) => REGION_CAPACITY * state.regions[r].habitability,
-        Site::Surface(b) => SURFACE_BASE + SURFACE_CAPACITY * state.bodies[b].habitability,
+    site_capacity(state.settlements[id].site, &state.regions, &state.bodies)
+}
+
+/// How many people `site` can hold: two lookups and a multiply, cheap
+/// enough for the daily books.
+pub fn site_capacity(site: Site, regions: &Arena<Region>, bodies: &Arena<Body>) -> f64 {
+    match site {
+        Site::Region(r) => REGION_CAPACITY * regions[r].habitability,
+        Site::Surface(b) => SURFACE_BASE + SURFACE_CAPACITY * bodies[b].habitability,
         Site::Space(_) => STATION_CAPACITY,
     }
 }
@@ -43,10 +50,10 @@ pub fn capacity(state: &GalaxyState, id: SettlementId) -> f64 {
 /// missing `hunger` (0..1) of its food.
 pub fn change(population: f64, capacity: f64, hunger: f64) -> f64 {
     if hunger > 0.0 {
-        return -population * STARVATION_PER_YEAR * hunger / DAYS_PER_YEAR;
+        return -population * (STARVATION_PER_YEAR / DAYS_PER_YEAR) * hunger;
     }
     let capacity = capacity.max(1e-6);
-    population * GROWTH_PER_YEAR / DAYS_PER_YEAR * (1.0 - population / capacity)
+    population * (GROWTH_PER_YEAR / DAYS_PER_YEAR) * (1.0 - population / capacity)
 }
 
 /// Recompute every faction's total population.
@@ -61,40 +68,31 @@ pub fn refresh_faction_populations(state: &mut GalaxyState) {
     }
 }
 
-/// Production phase, after production and consumption: populations change
-/// by what they ate today.
-pub fn grow(state: &mut GalaxyState) {
-    let ids: Vec<SettlementId> = state.settlements.keys().collect();
-    let capacities: Vec<f64> = ids.iter().map(|&id| capacity(state, id)).collect();
-    let now = state.time;
-    for (&id, &capacity) in ids.iter().zip(&capacities) {
-        let economy = &mut state.settlements[id].economy;
-        let population = economy.population;
-        if population <= 0.0 {
-            continue;
-        }
-        let wanted = crate::economy::per_capita(Good::Food) * population;
-        let hunger = if wanted > 0.0 {
-            (economy.market.shortfall[Good::Food] / wanted).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        economy.population = (population + change(population, capacity, hunger)).max(0.0);
-        economy.refresh_demand();
-        economy.hunger += (hunger - economy.hunger) / HUNGER_DAYS;
-        let famine = if economy.famine {
-            economy.hunger > FAMINE_ENDS
-        } else {
-            economy.hunger > FAMINE
-        };
-        if famine && !economy.famine {
-            state
-                .history
-                .record(now, HistoryKind::Famine { settlement: id });
-        }
-        state.settlements[id].economy.famine = famine;
+/// One day of population for a settlement that has just produced and
+/// eaten: grow or shrink, refresh demand, and track hunger. Returns
+/// whether a famine began today.
+pub fn live(economy: &mut LocalEconomy, capacity: f64) -> bool {
+    let population = economy.population;
+    if population <= 0.0 {
+        return false;
     }
-    refresh_faction_populations(state);
+    let wanted = crate::economy::per_capita(Good::Food) * population;
+    let hunger = if wanted > 0.0 {
+        (economy.market.shortfall[Good::Food] / wanted).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    economy.population = (population + change(population, capacity, hunger)).max(0.0);
+    economy.refresh_demand();
+    economy.hunger += (hunger - economy.hunger) * (1.0 / HUNGER_DAYS);
+    let famine = if economy.famine {
+        economy.hunger > FAMINE_ENDS
+    } else {
+        economy.hunger > FAMINE
+    };
+    let began = famine && !economy.famine;
+    economy.famine = famine;
+    began
 }
 
 #[cfg(test)]

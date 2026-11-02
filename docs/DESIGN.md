@@ -169,6 +169,7 @@ starting galaxy (§5.1).
   5. Conflict resolution
   6. Events & storylets
   7. News generation
+  8. Prices: every market reprices once, at the end of the day
 - **Multithreaded** via rayon within phases (read previous state, write
   phase outputs, merge) — but the cost model below is designed for one
   core first; threads are headroom, not the plan.
@@ -226,6 +227,57 @@ Consequences:
 - **Measured, not assumed.** Microbenchmarks track the per-settlement,
   per-event and per-decision costs, and a prehistory benchmark tracks the
   whole. The aims above will move as we learn where things land.
+
+#### 5.1.2 Settlement books as built (#56)
+
+- **The production phase is the daily books; planning is decisions.**
+  `settlement::books` walks the settlements once, in slot order. Each
+  one produces and consumes, its population changes by what it ate,
+  its project takes today's materials (planned factions pay wages), and
+  it settles tax and welfare with its faction as one ledger transfer.
+  Then companies pay their taxes and factions close their books. The
+  planning phase only holds monthly reviews: what to build, and whether
+  to send colonists.
+- **One walk, one thread.** Money moves through shared faction accounts,
+  which fixes the order. Running the part each settlement does alone
+  (production, population) on threads needs a second walk. Measured,
+  that costs more on one core (250 against 170 ns per settlement-day)
+  than threads win back on twenty, so the books stay one walk.
+- **Review days are by slot.** A settlement reviews when
+  `day ≡ slot index (mod 30)`, so a day's reviewers are found by a
+  stride through the pool, not by testing every settlement. Construction
+  and company founding review on that day, colonization fifteen days
+  later. A settlement founded in a reused slot takes that slot's day.
+  Founding draws its random stream only for settlements reviewing today.
+  The scan for idle ships in a system runs only once a reviewer is
+  otherwise ready to found a company.
+- **Prices without `powf`.** The scarcity curve (`scarcity^0.6`, held
+  between a quarter and five times base) comes from two written-out
+  tables: one for the power of two, one interpolated for the rest. It is
+  within 1e-5 of `powf`, and because the tables are literals it gives the
+  same price on every platform, which §5.1 asked for.
+- **Welfare runs a day behind.** Each day's books pay out the budget the
+  day before set aside, shared by the claims staked the day before, and
+  stake today's claims for tomorrow. That keeps the books to one walk.
+  The round is saved with the faction, so a loaded game pays the same.
+  A faction's head count is totted up during the walk and takes effect
+  when the books close, so its debt limit holds still within the day.
+- **Nothing allocated daily.** Per-faction sums live on the faction, and
+  the trade board (each system's best buyer and seller) is rebuilt in
+  place in a per-system table kept between days.
+- **Where it stands** (seed 0, static galaxy of ~3 750 settlements, one
+  core): books 170 ns per settlement-day, prices 17, monthly reviews 57
+  (spread over the month, about 2 µs per review). Before: about 240,
+  60–100 and 180. The books are not yet tens of ns. Production itself
+  is ~100 ns of it, and the cost is memory more than arithmetic: the same
+  code runs in ~50 ns on settlements packed together. The next lever is
+  layout. A settlement is ~480 bytes with its facilities in a separate
+  heap list. Facilities could sit inline, one slot per kind (there are
+  eight), and the fields the books touch could be kept together, apart
+  from names and history. Making reviews cheaper is #58's job.
+- **Politics** isn't built yet. When it is, a settlement's distance to
+  its capital is stored, and refreshed at its monthly review, never
+  searched for daily (§5.1.1).
 
 ### 5.2 Two tiers + LOD bubble
 
