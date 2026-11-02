@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
-use glam::{Mat4, Vec3};
+use glam::Mat4;
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
@@ -77,14 +77,6 @@ impl Instance {
         self.params[0] >= 20.0
     }
 
-    /// The pilot's own hull: it opens round the combat target where it
-    /// would hide it (see `Frame::reveal`). Seeds are never negative
-    /// otherwise.
-    pub fn own_hull(mut self) -> Self {
-        self.params[2] = -1.0;
-        self
-    }
-
     /// Built things: panel cells per object unit (0 for none). Ocean
     /// worlds: sea level.
     pub fn with_detail(mut self, detail: f32) -> Self {
@@ -100,9 +92,6 @@ struct Globals {
     inv_view_proj: [[f32; 4]; 4],
     star_color: [f32; 4],
     misc: [f32; 4],
-    /// Where the pilot's hull opens (mesh.wgsl): x, y in pixels, radius
-    /// in pixels, strength 0..1.
-    reveal: [f32; 4],
 }
 
 #[repr(C)]
@@ -129,10 +118,6 @@ pub struct Frame<'a> {
     pub time: f32,
     pub exposure: f32,
     pub instances: &'a [(MeshId, Instance)],
-    /// What the pilot is shooting at, if their own hull could hide it:
-    /// its position relative to the camera and its radius in metres.
-    /// The hull (`Instance::own_hull`) opens round it.
-    pub reveal: Option<(Vec3, f32)>,
     pub ui: Option<(&'a egui::Context, egui::FullOutput)>,
 }
 
@@ -657,10 +642,6 @@ impl Renderer {
                 1.0,
             ],
             misc: [frame.time, frame.exposure, w as f32, h as f32],
-            reveal: frame
-                .reveal
-                .and_then(|(rel, radius)| reveal_window(frame.view_proj, rel, radius, w, h))
-                .unwrap_or([0.0; 4]),
         };
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
@@ -1006,27 +987,6 @@ impl Targets {
     }
 }
 
-/// The window through the pilot's hull round a target at `rel` (camera
-/// relative) of `radius` metres: its centre and radius in pixels, at full
-/// strength. Never smaller than the HUD's bracket round the target, so
-/// the bracket frames open space, and wider than the target itself, so
-/// its whole silhouette shows (DESIGN §7.2.1).
-pub fn reveal_window(view_proj: Mat4, rel: Vec3, radius: f32, w: u32, h: u32) -> Option<[f32; 4]> {
-    let clip = view_proj * rel.extend(1.0);
-    if clip.w <= 0.0 {
-        return None;
-    }
-    let ndc = clip.truncate() / clip.w;
-    let (w, h) = (w as f32, h as f32);
-    // The lens's vertical scale (the length of clip y's row: the view's
-    // rotation keeps it), in pixels per metre at a metre's distance.
-    let row_y = Vec3::new(view_proj.x_axis.y, view_proj.y_axis.y, view_proj.z_axis.y);
-    let focal = row_y.length() * 0.5 * h;
-    let target_px = radius / clip.w * focal;
-    let r = (target_px * 1.4 + 0.01 * h).max(0.035 * h);
-    Some([(ndc.x + 1.0) * 0.5 * w, (1.0 - ndc.y) * 0.5 * h, r, 1.0])
-}
-
 fn instance_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
     device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("instances"),
@@ -1034,45 +994,4 @@ fn instance_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
         usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn lens() -> Mat4 {
-        // The game's own lens (main.rs).
-        glam::camera::rh::proj::directx::perspective_infinite_reverse(
-            70f32.to_radians(),
-            1920.0 / 1080.0,
-            0.5,
-        )
-    }
-
-    #[test]
-    fn the_window_is_centred_on_the_target() {
-        let [x, y, r, strength] =
-            reveal_window(lens(), Vec3::new(0.0, 0.0, -600.0), 8.0, 1920, 1080).unwrap();
-        assert!((x - 960.0).abs() < 0.5 && (y - 540.0).abs() < 0.5);
-        assert_eq!(strength, 1.0);
-        // A distant fighter is a few pixels: the window is the bracket's
-        // size, not the ship's.
-        assert!((r - 0.035 * 1080.0).abs() < 0.5, "{r}");
-    }
-
-    #[test]
-    fn a_close_target_gets_a_window_round_all_of_it() {
-        let near = Vec3::new(0.0, -20.0, -60.0);
-        let [_, y, r, _] = reveal_window(lens(), near, 12.0, 1920, 1080).unwrap();
-        assert!(y > 540.0, "below the centre");
-        // The window is wider than the target's own radius on screen.
-        let focal = 0.5 * 1080.0 / (35f32.to_radians()).tan();
-        let size = 12.0 / 60.0 * focal;
-        assert!(r > size, "{r} vs {size}");
-    }
-
-    #[test]
-    fn nothing_opens_for_a_target_behind_the_camera() {
-        assert!(reveal_window(lens(), Vec3::new(0.0, 0.0, 50.0), 8.0, 1920, 1080).is_none());
-    }
 }

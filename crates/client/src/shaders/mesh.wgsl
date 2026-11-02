@@ -4,11 +4,8 @@ struct Globals {
     view_proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
     star_color: vec4<f32>,
-    // x: time (s), y: exposure, z: width, w: height
+    // x: time (s), y: exposure
     misc: vec4<f32>,
-    // Where the pilot's own hull opens round the combat target: x, y in
-    // pixels, z: radius in pixels, w: strength (render.rs reveal_window).
-    reveal: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> g: Globals;
 
@@ -312,19 +309,6 @@ fn fs_glow(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32
 fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     let mode = u32(round(i.params.x));
     let fw = fwidth(i.obj * max(i.params.w, 0.0001));
-    // The pilot's own hull (seed < 0) is cut away round the target behind
-    // it, like a cutaway on a technical drawing, so what you're shooting
-    // at is never hidden (#123). The cut's edge is inked in amber, the
-    // target's colour, so the hole reads as deliberate.
-    if (i.params.z < 0.0 && g.reveal.w > 0.0) {
-        let d = distance(i.clip.xy, g.reveal.xy);
-        let r = g.reveal.z;
-        if (d < r) { discard; }
-        let ink = max(1.5, g.misc.w / 600.0);
-        if (d < r + ink) {
-            return vec4<f32>(vec3<f32>(1.0, 0.55, 0.12) * 0.9 * g.reveal.w, 1.0);
-        }
-    }
     // Spheres are wound consistently: only their front faces count. (Kit
     // meshes stay two-sided.)
     if (mode != PLAIN && !front) { discard; }

@@ -253,31 +253,6 @@ impl World {
         true
     }
 
-    /// With a brawl staged: put the target where the chase camera has the
-    /// ship's own hull in front of it, 600 m past the ship, unhurt (so it
-    /// doesn't run) and at rest, so it is still there when the
-    /// screenshot is taken (for screenshots of the hull opening round
-    /// it, #123).
-    pub fn stage_behind_hull(&mut self) {
-        let me = self.player_craft();
-        let eye = self.cam_rot * DVec3::new(0.0, 6.0, 28.0) * self.camera_scale();
-        let through = (-eye).normalize();
-        let Some(r) = self
-            .combat
-            .raiders
-            .iter_mut()
-            .find(|r| r.hostile && r.vessel.hull_left() > 0.0)
-        else {
-            return;
-        };
-        r.vessel.damage.sections.iter_mut().for_each(|s| *s = 0.0);
-        r.vessel.damage.frame = 0.0;
-        r.craft.pos = me.pos + through * 600.0;
-        r.craft.vel = me.vel;
-        r.craft.rot = me.rot;
-        self.combat.target = Some(r.id);
-    }
-
     /// Docked or landed: the yard repairs the ship, as far as the player
     /// can pay. The money goes to the settlement's treasury.
     pub(super) fn repair_docked(&mut self) {
