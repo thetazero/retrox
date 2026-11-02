@@ -58,6 +58,7 @@ fn system_resources(state: &GalaxyState, system: SystemId) -> Resources {
             Resources {
                 ore: acc.ore.max(r.ore),
                 ice: acc.ice.max(r.ice),
+                gas: acc.gas.max(r.gas),
             }
         })
 }
@@ -97,7 +98,13 @@ pub fn seed(rng: &mut Rng, state: &mut GalaxyState) {
         if pop > 0.0 && (pop > 20.0 || r.chance(0.75)) {
             placed.push((i, FacilityKind::Hydroponics, pop));
         }
-        if pop > 2.0 && (res.ice > 0.3 || r.chance(0.3)) {
+        // Fuel from a giant's gas where there is one to skim, else from
+        // ice. The ice test's roll is drawn either way, so the rolls after
+        // it are the same as before gas.
+        let fuel = pop > 2.0 && (res.ice > 0.3 || r.chance(0.3));
+        if pop > 2.0 && res.gas > 0.25 {
+            placed.push((i, FacilityKind::GasPlant, pop.sqrt()));
+        } else if fuel {
             placed.push((i, FacilityKind::FuelPlant, pop.sqrt()));
         }
         if pop > 3.0 && (res.ore > 0.2 || r.chance(0.3)) {
@@ -124,14 +131,29 @@ pub fn seed(rng: &mut Rng, state: &mut GalaxyState) {
         }
     }
 
-    let required = required_output(state);
+    // Where two kinds make one good (fuel from gas or ice), each makes its
+    // share by placed weight.
+    let weight =
+        |kind: FacilityKind| -> f64 { placed.iter().filter(|p| p.1 == kind).map(|p| p.2).sum() };
+    let share = |kind: FacilityKind| -> f64 {
+        let Some(&(good, _)) = kind.recipe().outputs.first() else {
+            return 1.0;
+        };
+        let all: f64 = FacilityKind::ALL
+            .into_iter()
+            .filter(|k| k.recipe().outputs.first().is_some_and(|o| o.0 == good))
+            .map(weight)
+            .sum();
+        if all > 0.0 { weight(kind) / all } else { 0.0 }
+    };
+    let required = required_output(state, &share);
     for kind in FacilityKind::ALL {
-        let total: f64 = placed.iter().filter(|p| p.1 == kind).map(|p| p.2).sum();
+        let total = weight(kind);
         if total <= 0.0 {
             continue;
         }
         let (good, per_scale) = kind.recipe().outputs[0];
-        let scale_per_weight = required[good] / per_scale / total;
+        let scale_per_weight = required[good] * share(kind) / per_scale / total;
         for &(i, k, weight) in placed.iter().filter(|p| p.1 == kind) {
             state.settlements[ids[i]]
                 .economy
@@ -158,7 +180,7 @@ pub fn seed(rng: &mut Rng, state: &mut GalaxyState) {
 }
 /// Daily output of each good the galaxy needs, working back up the supply
 /// chain from what the population consumes.
-fn required_output(state: &GalaxyState) -> GoodMap<f64> {
+fn required_output(state: &GalaxyState, share: &dyn Fn(FacilityKind) -> f64) -> GoodMap<f64> {
     let population: f64 = state
         .settlements
         .values()
@@ -191,11 +213,12 @@ fn required_output(state: &GalaxyState) -> GoodMap<f64> {
         FacilityKind::Refinery,
         FacilityKind::Hydroponics,
         FacilityKind::FuelPlant,
+        FacilityKind::GasPlant,
     ];
     for kind in order {
         let recipe = kind.recipe();
         let (out_good, per_scale) = recipe.outputs[0];
-        let runs = need[out_good] * SURPLUS / per_scale;
+        let runs = need[out_good] * SURPLUS * share(kind) / per_scale;
         for &(good, amount) in recipe.inputs {
             need[good] += amount * runs;
         }

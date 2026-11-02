@@ -86,6 +86,14 @@ impl World {
         );
         for (good, t) in out.collected {
             self.player.cargo[good] += t;
+            // Ice taken strains the field as NPC ice crews' does (#68).
+            if good == retrox_sim::economy::Good::Ice {
+                retrox_sim::harvest::strain(
+                    &mut self.galaxy,
+                    retrox_sim::harvest::Source::Field(field),
+                    t,
+                );
+            }
         }
         self.ship.vel += out.kick;
         if let Some(text) = out.messages.into_iter().last() {

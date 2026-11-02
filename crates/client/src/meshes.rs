@@ -566,6 +566,27 @@ pub fn station(kind: StationKind, seed: u64) -> Mesh {
                 );
             }
         }
+        StationKind::Facility(FacilityKind::GasPlant) => {
+            // Upright pressure cylinders ringed round the spine, braced to
+            // it, and a thin flare stack: a gas works.
+            for i in 0..6 {
+                let a = i as f32 / 6.0 * TAU;
+                let p = Vec3::new(a.cos() * 0.42, 0.0, a.sin() * 0.42);
+                m.paint(
+                    &cyl,
+                    strut(p - Vec3::Y * 0.45, p + Vec3::Y * 0.35, 0.11),
+                    1.0,
+                    Paint::Foil,
+                );
+                m.paint(&cyl, strut(Vec3::ZERO, p, 0.02), 1.0, Paint::Metal);
+            }
+            m.paint(
+                &cyl,
+                strut(Vec3::new(0.0, 0.4, 0.0), Vec3::new(0.0, 1.2, 0.0), 0.02),
+                1.0,
+                Paint::Metal,
+            );
+        }
         StationKind::Facility(FacilityKind::Hydroponics) => {
             // Long greenhouse arms.
             for side in [-1.0f32, 1.0] {

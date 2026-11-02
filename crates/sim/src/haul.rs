@@ -82,6 +82,10 @@ pub struct Fleet {
     /// carry are sold for scrap (see [`SLACK_REVIEWS`]).
     #[serde(default)]
     pub slack: u32,
+    /// Set for harvesters, which gather goods instead of buying them; see
+    /// [`crate::harvest`].
+    #[serde(default)]
+    pub harvest: Option<crate::harvest::Harvest>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -201,7 +205,7 @@ impl Traffic {
         self.inbound.get(&(to, good)).copied().unwrap_or(0.0)
     }
 
-    fn add(&mut self, to: SettlementId, good: Good, amount: f64) {
+    pub(crate) fn add(&mut self, to: SettlementId, good: Good, amount: f64) {
         let entry = self.inbound.entry((to, good)).or_default();
         *entry += amount;
         if *entry <= 1e-9 {
@@ -471,7 +475,7 @@ fn capacity(state: &GalaxyState, fleet: &Fleet) -> f64 {
     state.ship_classes[fleet.class].cargo_t * f64::from(fleet.ships)
 }
 
-fn fuel_per_day(state: &GalaxyState, fleet: &Fleet) -> f64 {
+pub(crate) fn fuel_per_day(state: &GalaxyState, fleet: &Fleet) -> f64 {
     f64::from(fleet.ships) * FUEL_PER_SHIP_DAY + capacity(state, fleet) * FUEL_PER_CARGO_T_DAY
 }
 
@@ -531,6 +535,7 @@ pub fn trade(state: &mut GalaxyState) {
     }
     crate::bubble::step(state, &contracts, &board);
     found_companies(state);
+    crate::harvest::found(state);
     crate::economy::update_all_prices(state);
 }
 
@@ -548,6 +553,7 @@ fn arrive(state: &mut GalaxyState, contracts: &Contracts, board: &Board, key: Co
     if jumps && !roll_losses(state, key, n, to) {
         return;
     }
+    crate::harvest::fill(state, key, n);
     dock(state, contracts, board, key, n, to, false);
 }
 
@@ -580,6 +586,14 @@ pub(crate) fn dock(
     buy_ship(state, key, n, to, full);
     let review_due = state.companies[key].fleets[n].review_due;
     if review_due && retire(state, key, n, to) {
+        return;
+    }
+    if crate::harvest::is_harvester(state, key, n) {
+        if replan || review_due {
+            state.companies[key].fleets[n].review_due = false;
+            crate::harvest::review(state, key, n, to);
+        }
+        crate::harvest::run(state, key, n, to);
         return;
     }
     if replan || review_due {
@@ -694,6 +708,11 @@ fn review(state: &mut GalaxyState, contracts: &Contracts, board: &Board, key: Co
         }
         Location::Docked(here) => {
             if retire(state, key, n, here) {
+                return;
+            }
+            if crate::harvest::is_harvester(state, key, n) {
+                crate::harvest::review(state, key, n, here);
+                crate::harvest::run(state, key, n, here);
                 return;
             }
             choose_route(state, contracts, board, key, n, here);
@@ -927,7 +946,7 @@ fn run_route(
 }
 
 /// Buy fuel for the trip and set off; schedule the arrival.
-fn depart(
+pub(crate) fn depart(
     state: &mut GalaxyState,
     key: CompanyId,
     n: usize,
@@ -1093,6 +1112,12 @@ fn retire(state: &mut GalaxyState, key: CompanyId, n: usize, here: SettlementId)
     true
 }
 
+/// Crew upkeep for a fleet, in credits a day.
+pub(crate) fn upkeep_per_day(state: &GalaxyState, fleet: &Fleet) -> f64 {
+    let class = &state.ship_classes[fleet.class];
+    f64::from(fleet.ships) * (UPKEEP_PER_SHIP_DAY + class.cargo_t * UPKEEP_PER_CARGO_T_DAY)
+}
+
 /// A month of crew upkeep for one fleet, paid at home.
 fn pay_upkeep(state: &mut GalaxyState, key: CompanyId, n: usize) {
     let company = &state.companies[key];
@@ -1203,6 +1228,7 @@ fn found_companies(state: &mut GalaxyState) {
                     idle: false,
                     loaded: false,
                     slack: 0,
+                    harvest: None,
                 }],
                 next_fleet: 0,
             },
@@ -1224,7 +1250,7 @@ fn found_companies(state: &mut GalaxyState) {
 /// nearest settlement in trading reach with the hull for it (`Ok`), or, if
 /// none has, where to order it (`Err`): the nearest shipyard in reach, or
 /// `id` itself.
-fn hull_source(
+pub(crate) fn hull_source(
     state: &GalaxyState,
     id: SettlementId,
     class: ShipClassId,

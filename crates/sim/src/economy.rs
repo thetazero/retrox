@@ -25,10 +25,12 @@ pub enum Good {
     Food,
     Fuel,
     Components,
+    /// Skimmed from gas giants and refined into fuel (issue #68).
+    Gas,
 }
 
 impl Good {
-    pub const COUNT: usize = 6;
+    pub const COUNT: usize = 7;
     pub const ALL: [Good; Self::COUNT] = [
         Good::Ore,
         Good::Ice,
@@ -36,6 +38,7 @@ impl Good {
         Good::Food,
         Good::Fuel,
         Good::Components,
+        Good::Gas,
     ];
 
     /// The reference price, in credits per unit. Planned economies sell at
@@ -48,6 +51,7 @@ impl Good {
             Good::Food => 15.0,
             Good::Fuel => 20.0,
             Good::Components => 80.0,
+            Good::Gas => 10.0,
         }
     }
 
@@ -59,6 +63,7 @@ impl Good {
             Good::Food => "food",
             Good::Fuel => "fuel",
             Good::Components => "components",
+            Good::Gas => "gas",
         }
     }
 }
@@ -110,10 +115,13 @@ pub enum FacilityKind {
     /// Builds ship hulls: its output goes to [`LocalEconomy::hull_t`], not
     /// the market.
     Shipyard,
+    /// Refines skimmed gas into fuel: cheaper to run than cracking ice in a
+    /// [`FacilityKind::FuelPlant`], but its gas comes from harvesters.
+    GasPlant,
 }
 
 impl FacilityKind {
-    pub const ALL: [FacilityKind; 7] = [
+    pub const ALL: [FacilityKind; 8] = [
         FacilityKind::Mine,
         FacilityKind::IceHarvester,
         FacilityKind::Refinery,
@@ -121,6 +129,7 @@ impl FacilityKind {
         FacilityKind::FuelPlant,
         FacilityKind::Factory,
         FacilityKind::Shipyard,
+        FacilityKind::GasPlant,
     ];
 
     pub const fn recipe(self) -> &'static Recipe {
@@ -149,6 +158,10 @@ impl FacilityKind {
             FacilityKind::Factory => &Recipe {
                 inputs: &[(Metal, 1.0), (Fuel, 0.5)],
                 outputs: &[(Components, 1.0)],
+            },
+            FacilityKind::GasPlant => &Recipe {
+                inputs: &[(Gas, 1.0)],
+                outputs: &[(Fuel, 1.4)],
             },
             // One tonne of hull per run; see `HULL_T_PER_RUN`.
             FacilityKind::Shipyard => &Recipe {
