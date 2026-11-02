@@ -262,8 +262,10 @@ fn living(ui: &mut egui::Ui) {
         "Combat",
         "Pirate gangs hole up in asteroid fields away from faction capitals; NAVIGATION marks a \
          field where one lairs. They close in when you arrive, and they hunt: a gang that \
-         spots you in fast travel can pull you out of it. [LMB] or [R] fires every gun \
-         you carry; put the boresight on the red lead pip and the guns swing onto it. [Y] picks \
+         spots you in fast travel can pull you out of it. With hostiles within 20 km your \
+         guns are hot and [LMB] or [R] fires every gun you carry instead of the mining laser; \
+         [B] arms them by hand, to fire on a ship that isn't hostile (its faction won't forget). \
+         Put the boresight on the red lead pip and the guns swing onto it. [Y] picks \
          the next hostile. Shields soak hits first and come back once you stop taking them; \
          heat and power are shared, so burning hard and firing hot will lock your guns. Wrecks \
          spill salvage for the tractor. While raiders are near you can't fast travel, jump or \
