@@ -8,6 +8,7 @@ pub mod arena;
 pub mod economy;
 pub mod history;
 pub mod phases;
+pub mod ship;
 pub mod state;
 pub mod tick;
 pub mod time;
