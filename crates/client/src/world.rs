@@ -1293,9 +1293,9 @@ impl World {
     }
 
     /// In orbit of the first planet with two cities or more (this system's
-    /// or the nearest system's), with a contract for 12 t of food to the last of
-    /// them and nothing targeted: the case of issue #116 (for testing).
-    /// Returns the planet.
+    /// or the nearest system's), with a contract for 12 t of food to the
+    /// last of them and nothing targeted: the case of issue #116 (for
+    /// testing). Returns the planet.
     pub fn start_by_cities(&mut self) -> Option<BodyId> {
         let two_cities = |w: &Self, id: SystemId| {
             let view = SystemView::new(&w.galaxy, id);
