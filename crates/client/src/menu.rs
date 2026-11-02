@@ -21,6 +21,7 @@ pub const TOAST_SECONDS: f32 = 3.0;
 const COLUMN_X: f32 = 72.0;
 const COLUMN_W: f32 = 420.0;
 const PAGE_W: f32 = 600.0;
+const HANDBOOK_W: f32 = 720.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Page {
@@ -29,6 +30,8 @@ pub enum Page {
     NewGame,
     Load,
     Settings,
+    /// The pilot's handbook: how to start, the controls, making a living.
+    Handbook,
     /// "Leave this game?" — from the pause menu.
     ConfirmQuit,
 }
@@ -42,6 +45,8 @@ pub struct Menu {
     seed_text: String,
     /// The menu entry under the mouse or picked with the arrow keys.
     cursor: Option<usize>,
+    /// The handbook's open chapter.
+    chapter: usize,
 }
 
 /// Keyboard navigation of the menu column.
@@ -213,6 +218,22 @@ impl Menu {
             Page::NewGame => self.new_game_page(ctx, page_pos, &mut actions),
             Page::Load => load_page(ctx, page_pos, &input, &mut actions),
             Page::Settings => settings_page(ctx, page_pos, input.settings, &mut actions),
+            Page::Handbook => {
+                let max_h = (screen.bottom() - page_pos[1] - 150.0).max(240.0);
+                let chapter = &mut self.chapter;
+                panel(
+                    ctx,
+                    Panel {
+                        id: "handbook",
+                        title: "Pilot's handbook",
+                        anchor: Align2::LEFT_TOP,
+                        offset: page_pos,
+                        width: HANDBOOK_W,
+                        collapsible: None,
+                    },
+                    |ui| crate::handbook::draw(ui, chapter, max_h),
+                );
+            }
             Page::ConfirmQuit => {
                 if let Some(g) = &input.game {
                     self.confirm_quit_page(ctx, page_pos, g, &mut actions);
@@ -261,6 +282,7 @@ impl Menu {
                 enabled: !saves.is_empty(),
                 ..Item::page("Load", &load_note, Page::Load)
             },
+            Item::page("Handbook", "how to fly and get started", Page::Handbook),
             Item::page("Settings", "controls and display", Page::Settings),
             Item::action("Quit", "back to the desktop", MenuAction::Quit),
         ]
@@ -284,6 +306,7 @@ impl Menu {
                 ..Item::action("Save", &save_note, MenuAction::Save)
             },
             Item::page("Load", "a save or checkpoint", Page::Load),
+            Item::page("Handbook", "controls and how to get started", Page::Handbook),
             Item::page("Settings", "controls and display", Page::Settings),
             Item::page("Quit to title", "leave this game", Page::ConfirmQuit),
         ]
@@ -387,7 +410,15 @@ impl Menu {
                 format!("the word makes seed {}", seed_from_text(&self.seed_text))
             };
             ui.label(RichText::new(note).size(12.0).color(CREAM_DIM));
-            ui.add_space(14.0);
+            ui.add_space(10.0);
+            ui.label(
+                RichText::new(
+                    "New here? The HANDBOOK explains how to get started, and in the game                      H shows the controls.",
+                )
+                .size(12.0)
+                .color(AMBER),
+            );
+            ui.add_space(10.0);
             ui.horizontal(|ui| {
                 if primary(ui, "Start").clicked() {
                     actions.push(MenuAction::NewGame(seed_from_text(&self.seed_text)));
@@ -635,6 +666,16 @@ fn settings_page(
         });
         ui.label(
             RichText::new("inverted: push the mouse forward to pull the nose up")
+                .size(11.0)
+                .color(CREAM_DIM),
+        );
+        ui.add_space(10.0);
+        section(ui, "Help");
+        setting_row(ui, "First-steps notes", |ui| {
+            changed |= switch(ui, &mut settings.first_steps);
+        });
+        ui.label(
+            RichText::new("a checklist with hints in flight, until you've made your first credits")
                 .size(11.0)
                 .color(CREAM_DIM),
         );

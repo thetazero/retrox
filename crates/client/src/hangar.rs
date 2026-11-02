@@ -58,6 +58,9 @@ pub struct Player {
     pub contracts: Vec<crate::contracts::Contract>,
     /// Ships bought so far, for naming.
     bought: u32,
+    /// What the player has done, for the first-steps notes.
+    #[serde(default)]
+    pub progress: crate::guide::Progress,
 }
 
 impl Player {
@@ -73,6 +76,7 @@ impl Player {
             cargo: GoodMap::default(),
             contracts: Vec::new(),
             bought: 1,
+            progress: Default::default(),
         }
     }
 

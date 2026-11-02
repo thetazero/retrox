@@ -799,6 +799,7 @@ impl World {
                     return;
                 };
                 let capacity = self.stats().cargo_t;
+                let before = self.player.credits;
                 let settlement = &mut self.galaxy.settlements[here];
                 let model = self.galaxy.factions[settlement.owner].economy;
                 let result = crate::trade::trade(
@@ -809,6 +810,7 @@ impl World {
                     good,
                     amount,
                 );
+                self.player.progress.earned |= self.player.credits > before;
                 match result {
                     Ok(text) | Err(text) => self.say(text),
                 }
@@ -856,10 +858,12 @@ impl World {
         if self.player.contracts.is_empty() {
             return;
         }
+        let before = self.player.credits;
         let mut said = contracts::expire(&mut self.player, &mut self.galaxy);
         if let Some(here) = self.docked_at() {
             said.extend(contracts::deliver(&mut self.player, &mut self.galaxy, here));
         }
+        self.player.progress.earned |= self.player.credits > before;
         if !said.is_empty() {
             self.say(said.join(" · "));
         }
@@ -1036,6 +1040,9 @@ impl World {
         self.update_field();
         self.mine(dt, controls.fire);
         self.update_camera(dt);
+        let mut progress = std::mem::take(&mut self.player.progress);
+        progress.observe(self);
+        self.player.progress = progress;
     }
 
     /// Switch the ship into `frame`, keeping where it is and how it moves.
