@@ -30,7 +30,7 @@
 //! Positions here are relative to the field's centre, in the client's
 //! axes (metres, y up), like [`crate::world::rock_offset`].
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::f64::consts::TAU;
 use std::sync::LazyLock;
 
@@ -39,6 +39,7 @@ use retrox_gen::{Rng, Rock};
 use retrox_sim::economy::{Good, GoodMap};
 use retrox_sim::ship::ShipStats;
 use retrox_sim::{AsteroidField, FieldId};
+use serde::{Deserialize, Serialize};
 
 use crate::world::{SECONDS_PER_DAY, rock_offset};
 
@@ -187,7 +188,7 @@ pub fn shape(seed: u64) -> &'static RockShape {
 }
 
 /// What's in a rock.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Lode {
     pub good: Good,
     /// 0..1; how much ore a tonne of rock gives.
@@ -257,7 +258,7 @@ impl Lode {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum RockId {
     /// One of the field's own rocks, by index.
     Base(usize),
@@ -266,7 +267,7 @@ pub enum RockId {
 }
 
 /// A piece of a broken rock, drifting.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Frag {
     pub id: u32,
     pub pos: DVec3,
@@ -281,7 +282,7 @@ pub struct Frag {
 }
 
 /// Loose ore, waiting for the tractor.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Nugget {
     pub pos: DVec3,
     pub vel: DVec3,
@@ -302,19 +303,23 @@ pub struct Burst {
     pub life: f64,
 }
 
-/// What we've done to one field.
-#[derive(Clone, Debug, Default)]
+/// What we've done to one field. Saved with the game.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct FieldState {
     /// Base rocks broken up, and the galaxy day it happened.
+    #[serde(with = "crate::save::pairs")]
     broken: HashMap<usize, f64>,
     /// Boulders calved off each quarried base rock.
+    #[serde(with = "crate::save::pairs")]
     calved: HashMap<usize, u32>,
     /// Laser work done toward each rock's next fracture.
+    #[serde(with = "crate::save::pairs")]
     damage: HashMap<RockId, f64>,
     /// Rocks the prospector (or the laser) has read.
-    scanned: HashSet<RockId>,
+    scanned: BTreeSet<RockId>,
     /// Galaxy day each base rock in `scanned`, `calved` or `damage` was
     /// last touched, so it all regrows together.
+    #[serde(with = "crate::save::pairs")]
     touched: HashMap<usize, f64>,
     pub frags: Vec<Frag>,
     pub nuggets: Vec<Nugget>,
@@ -434,19 +439,25 @@ pub fn laser_cooling(stats: &ShipStats) -> f64 {
     0.11 * (stats.heat_dissipation_mw / 16.0).sqrt().clamp(0.5, 3.0)
 }
 
-/// The player's mining gear and everything it has done.
-#[derive(Clone, Debug, Default)]
+/// The player's mining gear and everything it has done. What it has done
+/// to each field, and the haul, are saved with the game; what's only of
+/// the moment (aim, flashes, the trigger) isn't.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Mining {
+    #[serde(with = "crate::save::pairs")]
     fields: HashMap<FieldId, FieldState>,
     /// 0..1; locked out at 1 until it cools to [`UNLOCK_HEAT`].
     pub heat: f64,
     pub locked: bool,
     /// The laser fired this frame.
+    #[serde(skip)]
     pub firing: bool,
+    #[serde(skip)]
     pub aim: Option<Aim>,
     scan_cooldown: f64,
     /// Seconds since the last prospector ping, for the HUD's ripple.
     pub since_scan: f64,
+    #[serde(skip)]
     pub bursts: Vec<Burst>,
     /// Tonnes mined since last docking.
     pub haul: GoodMap<f64>,
