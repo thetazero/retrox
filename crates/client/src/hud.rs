@@ -234,7 +234,12 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
             };
             let dist = (c.pos - me).length();
             let hunting = c.aim == retrox_sim::pirates::Aim::Stalk;
-            let color = if hunting { ALARM } else { RED_HOT };
+            // A gang about its own business is a dimmer red.
+            let color = if hunting {
+                ALARM
+            } else {
+                ALARM.gamma_multiply(0.7)
+            };
             diamond(&painter, p, 4.5, color);
             if hunting {
                 diamond(&painter, p, 8.0, color.gamma_multiply(0.7));
@@ -352,10 +357,12 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
     let mut lines: Vec<(Option<&str>, String)> = Vec::new();
     let hostiles = w.hostiles_near();
     if hostiles > 0 && w.combat.lost.is_none() {
-        let plural = if hostiles == 1 { "" } else { "s" };
         lines.push((
             Some("Y"),
-            format!("{hostiles} hostile{plural} near · next target · no fast travel or jumps"),
+            format!(
+                "{} near · next target · no fast travel or jumps",
+                count(hostiles, "hostile")
+            ),
         ));
     }
     if w.mode == Mode::Normal && w.combat.lost.is_none() {
@@ -382,10 +389,12 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
             // More than one city down there (issue #116): say how to pick.
             let others = w.cities_on(body).count() - 1;
             if others > 0 {
-                let plural = if others == 1 { "y" } else { "ies" };
                 lines.push((
                     Some("T"),
-                    format!("{others} more cit{plural} here · pick one in NAVIGATION"),
+                    format!(
+                        "{} here · pick one in NAVIGATION",
+                        count_as(others, "more city", "more cities")
+                    ),
                 ));
             }
         }
@@ -510,8 +519,11 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
             let km_s = w.ship.vel.length() / 1000.0;
             let (title, detail) = match trip.leg {
                 Leg::To(place) => {
-                    let au = w.distance_to(place) / AU;
-                    ("Fast travel", format!("{} · {au:.2} AU", w.name(place)))
+                    let d = w.distance_to(place);
+                    (
+                        "Fast travel",
+                        format!("{} · {}", w.name(place), distance(d)),
+                    )
                 }
                 Leg::Intercept(fleet) => {
                     let company = w
@@ -1243,7 +1255,6 @@ pub(crate) fn segment_bar(ui: &mut egui::Ui, value: f32, width: f32, color: Colo
     }
 }
 
-/// A big centred caption with a red rule and a subtitle, for transitions.
 /// The moment a gang pulls the ship out of fast travel: the view tears
 /// with interference, the edges flash red, and a red band slams across with
 /// INTERDICTED and who did it, then all of it fades.
@@ -1334,6 +1345,7 @@ fn interdicted(ctx: &egui::Context, screen: Rect, t: f32, gang: &str) {
     );
 }
 
+/// A big centred caption with a red rule and a subtitle, for transitions.
 pub(crate) fn title_card(
     painter: &egui::Painter,
     centre: Pos2,
@@ -1424,28 +1436,22 @@ fn edge_arrow_dir(view_proj: Mat4, rel: glam::Vec3) -> Vec2 {
     }
 }
 
-/// Credits with thin-space thousands separators.
 /// Fleets nearer than this get a label.
 const TRAFFIC_LABEL_M: f64 = 2.0e9;
 
-/// "KESSA HAULERS · 3× LIGHT TRADER · 120 T FOOD  42 KM"
-fn diamond(painter: &egui::Painter, c: Pos2, r: f32, color: Color32) {
+/// A hostile's marker, here and in the fight's HUD: a red diamond.
+pub(crate) fn diamond(painter: &egui::Painter, c: Pos2, r: f32, color: Color32) {
     let pts = vec![
         c + Vec2::new(0.0, -r),
         c + Vec2::new(r, 0.0),
         c + Vec2::new(0.0, r),
         c + Vec2::new(-r, 0.0),
     ];
-    painter.add(egui::Shape::closed_line(pts, Stroke::new(1.2, color)));
+    painter.add(egui::Shape::closed_line(pts, Stroke::new(1.5, color)));
 }
 
 fn pirate_label(c: &crate::traffic::PirateContact, dist: f64) -> String {
-    let n = c.fits.len();
-    let ships = if n == 1 {
-        "1 SHIP".to_owned()
-    } else {
-        format!("{n} SHIPS")
-    };
+    let ships = count(c.fits.len(), "ship").to_uppercase();
     let wanted = c
         .bounty
         .map(|b| format!(" · WANTED {}", credits(b).to_uppercase()))
@@ -1457,6 +1463,7 @@ fn pirate_label(c: &crate::traffic::PirateContact, dist: f64) -> String {
     )
 }
 
+/// "KESSA HAULERS · 3× LIGHT TRADER · 120 T FOOD  42 KM"
 fn contact_label(c: &crate::traffic::Contact, dist: f64) -> String {
     let class = c.fit.hull().name.to_uppercase();
     let ships = if c.ships > 1 {
@@ -1471,8 +1478,8 @@ fn contact_label(c: &crate::traffic::Contact, dist: f64) -> String {
                 Good::Gas => "SKIMMING GAS",
                 _ => "CUTTING ICE",
             };
-            let days = if w.days_left == 1 { "DAY" } else { "DAYS" };
-            format!("{doing} · {} {days} LEFT", w.days_left)
+            let days = count(w.days_left as usize, "day").to_uppercase();
+            format!("{doing} · {days} LEFT")
         }
         (Some(w), _) => format!("BOUND FOR {}", w.source.to_uppercase()),
         (None, Some((good, t))) => format!("{:.0} T {}", t, good.name().to_uppercase()),
@@ -1487,10 +1494,15 @@ fn contact_label(c: &crate::traffic::Contact, dist: f64) -> String {
 
 /// `n` of `thing`, with the plural `s` when it needs one.
 pub fn count(n: usize, thing: &str) -> String {
+    count_as(n, thing, &format!("{thing}s"))
+}
+
+/// `n` of something whose plural isn't just an `s`: "2 cities".
+pub fn count_as(n: usize, one: &str, many: &str) -> String {
     if n == 1 {
-        format!("1 {thing}")
+        format!("1 {one}")
     } else {
-        format!("{n} {thing}s")
+        format!("{n} {many}")
     }
 }
 

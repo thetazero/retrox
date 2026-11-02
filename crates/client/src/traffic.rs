@@ -264,11 +264,16 @@ impl Traffic {
                 Some(g) => flight::autopilot(&track.ship, &g, accel, 1.0),
                 None => track.ship.vel,
             };
-            let fits = gang
-                .ships
-                .iter()
-                .filter_map(|h| retrox_content::ships::stock(h))
-                .collect();
+            let mut fits = Vec::with_capacity(gang.ships.len());
+            for h in &gang.ships {
+                if !self.fits.contains_key(h) {
+                    let Some(fit) = retrox_content::ships::stock(h) else {
+                        continue;
+                    };
+                    self.fits.insert(h.clone(), fit);
+                }
+                fits.push(self.fits[h].clone());
+            }
             out.push(PirateContact {
                 gang: id,
                 name: gang.name.clone(),
