@@ -308,16 +308,20 @@ report to check them on a long run.
 - **People before industry.** Each day a settlement's population takes
   what it needs first; facilities then share what is left of each input
   in proportion to what they want of it. Nothing gets first pick because
-  of where it sits in a list.
+  of where it sits in a list. A facility stopped because its output store
+  is full wants nothing that day, so it isn't counted as short.
 - **Ships follow freight.** A company buys a ship only when a fleet came
   in with its holds ≥ 90 % full and none of its fleets is idle. A
   settlement founds a company only when it has a full hold's worth of
-  surplus and no ships sit idle in its system. A fleet that carries nothing
-  for two monthly reviews running sells half its ships (at least one) for
-  scrap: half their mass, as metal, to the port it's in. A company whose
-  last fleet goes winds up.
+  surplus and no ships sit idle in its system; the crew fetches its hull
+  from the nearest yard in trading reach that has it. A fleet that has
+  carried nothing for three monthly reviews running (cargo aboard counts
+  as carrying) sells half its ships, at least one, for scrap: half their
+  mass, as metal, to the port it's in. A company whose last fleet goes
+  winds up.
 - **Shipyards build to orders.** A captain who wants a ship where there
-  isn't enough hull leaves an order (`hull_wanted`, halving monthly). Yards
+  isn't enough hull leaves an order (`hull_wanted`, halving monthly) at
+  the nearest yard in reach, or at home if there's none. Yards
   keep about a month of their own output on hand plus the orders, and
   otherwise stand idle and decay like any idle facility. A shipyard is
   built only where orders exceed the hull on hand; planned settlements
@@ -329,6 +333,13 @@ report to check them on a long run.
   before. A faction without money prints only for settlements below their
   reserve, in proportion to how far below they are, and within its debt
   limit.
+- **Debt reins in spending.** What a faction spends by choice (delivery
+  premiums, construction wages, printed relief) scales with its *thrift*:
+  full with money in hand, falling to nothing as its debt reaches a quarter
+  of its limit. Planned economies run a structural deficit (they pay
+  premiums and wages, and the money drains to market economies through
+  trade), so this brake is what bounds their debt: on a 60-year run it
+  settles just under a quarter of the limit.
 - **Trips cost what flying them costs.** One estimate serves the coarse
   tier and the bubble: the burn out to a jump point, each lane in whole
   days, each crossing of a system on the way (jump point to jump point),
