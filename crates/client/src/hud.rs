@@ -536,9 +536,9 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
             let text = if h.captured {
                 "mouse steer · W/S throttle · X stop · A/D strafe · SPACE/CTRL lift · Q/E roll · SHIFT boost\n\
                  J fast travel · T next target · M galaxy map · V camera · Z flight assist · TAB free mouse\n\
-                 LMB or R mining laser · G prospect"
+                 LMB or R mining laser · G prospect · ESC menu"
             } else {
-                "TAB or click the view to fly with the mouse · arrow keys also steer · M galaxy map"
+                "TAB or click the view to fly with the mouse · arrow keys also steer · M galaxy map · ESC menu"
             };
             ui.label(RichText::new(text).size(11.0).color(CREAM_DIM));
         });
@@ -837,7 +837,7 @@ pub(crate) fn tag(ui: &mut egui::Ui, text: &str, color: Color32) {
 }
 
 /// A key, drawn as a cream keycap.
-fn keycap(ui: &mut egui::Ui, key: &str) {
+pub(crate) fn keycap(ui: &mut egui::Ui, key: &str) {
     let galley = ui.painter().layout_no_wrap(key.to_owned(), mono(13.0), INK);
     let size = Vec2::new((galley.size().x + 10.0).max(20.0), galley.size().y + 4.0);
     let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
@@ -884,7 +884,13 @@ pub(crate) fn segment_bar(ui: &mut egui::Ui, value: f32, width: f32, color: Colo
 }
 
 /// A big centred caption with a red rule and a subtitle, for transitions.
-fn title_card(painter: &egui::Painter, centre: Pos2, title: &str, subtitle: &str, color: Color32) {
+pub(crate) fn title_card(
+    painter: &egui::Painter,
+    centre: Pos2,
+    title: &str,
+    subtitle: &str,
+    color: Color32,
+) {
     let r = painter.text(
         centre,
         Align2::CENTER_BOTTOM,

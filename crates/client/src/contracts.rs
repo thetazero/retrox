@@ -17,7 +17,7 @@ use retrox_sim::{GalaxyState, GalaxyTime, SettlementId};
 use crate::hangar::Player;
 
 /// A contract the player has taken.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Contract {
     pub offer: Offer,
     pub accepted: GalaxyTime,

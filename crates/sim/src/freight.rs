@@ -35,6 +35,8 @@
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
 
+use serde::{Deserialize, Serialize};
+
 use crate::economy::Good;
 use crate::settlement::{SettlementId, Site};
 use crate::{EconomyModel, GalaxyState, GalaxyTime, SystemId};
@@ -72,7 +74,7 @@ pub const GRACE_DAYS: u64 = 10;
 const MAX_SPEND_SHARE: f64 = 0.2;
 
 /// A contract on the board.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Offer {
     /// Where the goods are loaded: the settlement whose board this is.
     pub from: SettlementId,

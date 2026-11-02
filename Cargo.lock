@@ -1284,6 +1284,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "54af5066834d6c2d404eb26ea036a15b15d9ff80db510b9a73ff95ab07f30831"
 dependencies = [
  "bytemuck",
+ "serde_core",
 ]
 
 [[package]]
@@ -2744,11 +2745,14 @@ dependencies = [
  "egui",
  "egui-wgpu",
  "egui-winit",
+ "flate2",
  "glam",
  "pollster",
  "retrox-content",
  "retrox-gen",
  "retrox-sim",
+ "serde",
+ "serde_json",
  "slotmap",
  "wgpu",
  "winit",
