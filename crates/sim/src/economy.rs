@@ -370,17 +370,30 @@ fn models(state: &GalaxyState) -> Vec<EconomyModel> {
 /// Production phase: every settlement produces and consumes, in parallel.
 pub fn production(state: &mut GalaxyState) {
     let mut settlements: Vec<_> = state.settlements.values_mut().collect();
-    settlements.par_iter_mut().for_each(|s| s.economy.produce());
+    if settlements.len() < PARALLEL_MIN {
+        settlements.iter_mut().for_each(|s| s.economy.produce());
+    } else {
+        settlements.par_iter_mut().for_each(|s| s.economy.produce());
+    }
 }
+
+/// Below this many settlements, starting threads costs more than the work.
+const PARALLEL_MIN: usize = 1024;
 
 /// Recompute every settlement's prices from its stock.
 pub fn update_all_prices(state: &mut GalaxyState) {
     let models = models(state);
     let mut settlements: Vec<_> = state.settlements.values_mut().collect();
-    settlements
-        .par_iter_mut()
-        .zip(models.par_iter())
-        .for_each(|(s, &model)| s.economy.update_prices(model));
+    if settlements.len() < PARALLEL_MIN {
+        for (s, &model) in settlements.iter_mut().zip(&models) {
+            s.economy.update_prices(model);
+        }
+    } else {
+        settlements
+            .par_iter_mut()
+            .zip(models.par_iter())
+            .for_each(|(s, &model)| s.economy.update_prices(model));
+    }
 }
 
 /// Galaxy-wide totals, for tools and tests.
