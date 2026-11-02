@@ -84,8 +84,7 @@ fn buildable(state: &GalaxyState, id: SettlementId) -> impl Iterator<Item = Faci
                 .fold((0.0, true), |(scale, busy), f| {
                     (scale + f.scale, busy && f.utilization >= BUSY)
                 });
-            busy
-                && scale < SCALE_PER_POPULATION * economy.population + SCALE_BASE
+            busy && scale < SCALE_PER_POPULATION * economy.population + SCALE_BASE
                 && kind
                     .recipe()
                     .inputs

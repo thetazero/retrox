@@ -349,7 +349,9 @@ pub fn price_curve(scarcity: f64) -> f64 {
     const HIGH: f64 = 14.620088691064332;
     const MANTISSA_BITS: u32 = 52;
     const STEPS_BITS: u32 = 6;
-    // `max` first, so NaN reads as plenty.
+    // Not `clamp`: `max` first, so NaN reads as plenty instead of
+    // indexing past the tables.
+    #[allow(clippy::manual_clamp)]
     let x = scarcity.max(LOW).min(HIGH);
     let bits = x.to_bits();
     // x is 2^e · m with m in [1, 2), and e in -4..=3 between the clamps.
@@ -418,6 +420,7 @@ pub struct LocalEconomy {
 impl LocalEconomy {
     /// Recompute full-rate demand from population and facilities. Call after
     /// changing either.
+    #[allow(clippy::needless_range_loop)] // several rows, one index
     pub fn refresh_demand(&mut self) {
         const N: usize = Good::COUNT;
         let mut demand = [0.0; N];
@@ -444,6 +447,7 @@ impl LocalEconomy {
     /// to what they want of it, so no facility comes first because of where
     /// it sits in the list. Runs over [`DenseRecipe`] rows: every step is
     /// the same few multiplies for every good.
+    #[allow(clippy::needless_range_loop)] // several rows, one index
     pub(crate) fn produce(&mut self) {
         const N: usize = Good::COUNT;
         let market = &mut self.market;
@@ -471,8 +475,7 @@ impl LocalEconomy {
         let open = |facility: &Facility| {
             DENSE[facility.kind as usize].output_mask & full == 0
                 && (facility.kind != FacilityKind::Shipyard
-                    || hull_t
-                        < hull_wanted + facility.scale * HULL_T_PER_RUN * HULL_STORAGE_DAYS)
+                    || hull_t < hull_wanted + facility.scale * HULL_T_PER_RUN * HULL_STORAGE_DAYS)
         };
 
         // Facilities by kind are few (one each, normally), so which are
@@ -511,7 +514,11 @@ impl LocalEconomy {
             let rate = if on {
                 let mut rate: f64 = 1.0;
                 for (g, &s) in share.iter().enumerate() {
-                    let s = if recipe.input_mask & (1 << g) != 0 { s } else { 1.0 };
+                    let s = if recipe.input_mask & (1 << g) != 0 {
+                        s
+                    } else {
+                        1.0
+                    };
                     rate = if s < rate { s } else { rate };
                 }
                 rate

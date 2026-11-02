@@ -237,4 +237,3 @@ pub(crate) fn close_books(state: &mut GalaxyState) {
         };
     }
 }
-
