@@ -1260,7 +1260,8 @@ impl World {
     /// the whole lot.
     pub fn buyers(&self, good: Good, tonnes: f64, max: usize) -> Vec<Buyer> {
         let tonnes = tonnes.max(1.0);
-        let systems = std::iter::once((self.system, 0)).chain(self.lanes().into_iter().map(|l| (l.to, 1)));
+        let systems =
+            std::iter::once((self.system, 0)).chain(self.lanes().into_iter().map(|l| (l.to, 1)));
         let mut out: Vec<Buyer> = systems
             .flat_map(|(system, jumps)| {
                 self.galaxy
@@ -1268,7 +1269,8 @@ impl World {
                     .filter(|(_, s)| !matches!(s.site, Site::Surface(_)))
                     .filter_map(move |(at, s)| {
                         let model = self.galaxy.factions.get(s.owner)?.economy;
-                        let value = crate::trade::sell_value(&s.economy.market, model, good, tonnes);
+                        let value =
+                            crate::trade::sell_value(&s.economy.market, model, good, tonnes);
                         Some(Buyer {
                             at,
                             jumps,

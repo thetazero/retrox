@@ -5,8 +5,8 @@ use egui::{Align2, Color32, Pos2, Rect, RichText, Sense, Stroke, Vec2};
 use retrox_sim::economy::Good;
 
 use super::{
-    ALARM, AMBER, CREAM, CREAM_DIM, HudInput, Panel, RULE, VFD, VFD_DIM, glow_label,
-    keycap, lamp, mono, panel, segment_bar, tag,
+    ALARM, AMBER, CREAM, CREAM_DIM, HudInput, Panel, RULE, VFD, VFD_DIM, glow_label, keycap, lamp,
+    mono, panel, segment_bar, tag,
 };
 use crate::skim::{self, BAND_M};
 use crate::world::Place;

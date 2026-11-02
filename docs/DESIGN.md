@@ -1045,32 +1045,45 @@ play an hour of each career in a fresh game, seeds 1–4. They fly the real
 world, with turning, nudging around a field and menus charged at a
 practised pilot's pace. They play well, so a new player should expect
 somewhat less, contracts most of all (the bot reads a board instantly).
+Since #122 the bench pays the travel a player pays, no more and no less:
+it climbs out of wells with [J], docks, lands or starts cutting where
+fast travel stops (§7.1.2, §7.3), and fast travels again if raiders cut
+a trip short. It used to fly out of every well and in to every station
+and field by hand, up to 30 minutes of an hour.
 
 | Career, ship | cr per hour (seeds 1–4) |
 |---|---|
-| Mining, courier (12 t, light laser) | 1 950 · 2 990 · 970 · 1 670 |
-| Freight contracts, courier | 2 840 · 3 920 · 2 340 · 2 530 |
-| Trading, courier | 16 510 · 4 360 · 8 920 · −980 |
-| Mining, gunship refit (180 t, 2 lasers) | 1 520 · 8 080 · 1 120 · 1 720 |
-| Freight contracts, hauler (360 t) | 8 900 · 7 180 · 7 620 · 8 210 |
-| Trading, hauler | 27 280 · 9 870 · 17 110 · 7 470 |
+| Mining, courier (12 t, light laser) | 1 720 · 2 640 · 2 220 · 830 |
+| Freight contracts, courier | 5 640 · 5 150 · 4 530 · 5 430 |
+| Trading, courier | 45 750 · 12 420 · 31 550 · 28 350 |
+| Mining, gunship refit (180 t, 2 lasers) | 2 210 · 8 540 · 1 670 · 460 |
+| Freight contracts, hauler (360 t) | 11 320 · 16 280 · 19 250 · 16 750 |
+| Trading, hauler | 67 910 · 78 070 · 22 080 · 66 840 |
 
-In a courier, contracts earn about 1.5× mining on average (1.3× to 2.4×
-by seed). Mining needs no capital and never meets a bare board. Trading
-pays best and swings most. Planned economies hold one price everywhere,
-so the money is in market space and across the border (§5.4). A trader
-who guesses wrong loses money. The bot trader also knows prices two jumps
+In a courier, contracts now earn about 2.8× mining (they were ~1.5×
+with the bench's hand flying, which cost contracts most: they travel
+most). Short runs head the board (§7.5.1), so a courier delivers ~80 an
+hour. A miner's hour is ~25 minutes of cutting and ~20 of hops between
+rocks, and gluts at the local market set the price; mining is now the
+clear laggard, a balance question left to #149. Mining needs no capital
+and never meets a bare board. Trading pays best and swings most (the bot
+trader also used to plan sales to markets that couldn't pay for the lot,
+and loop when refused). Planned economies hold one price everywhere, so
+the money is in market space and across the border (§5.4). A trader who
+guesses wrong loses money. The bot trader also knows prices two jumps
 out, which a player has to learn.
 
 **The ladder** (stock fits): racer 4 060, courier 5 930, interceptor
 6 180, light trader 6 590, heavy fighter 10 150; blockade runner 38 800,
 hauler 41 200, gunship 50 500; express freighter 243 000, bulk freighter
 302 000, frigate 413 000. From the courier and 2 000 cr, the light
-trader (twice the hold) is about 2 hours of contracts or 2–4 of mining
-away; a medium ship is ~15–20 hours of either, less for a good trader. A
-medium freighter on contracts takes ~30 hours to buy a large ship (a
-trader, half that), which leaves fleets and capital ships (§7.5) the
-rest of the ~100-hour arc (§2).
+trader (twice the hold) is about 1 hour of contracts or 2–4 of mining
+away; a medium ship is ~8 hours of contracts or ~20 of mining, less for
+a good trader. A medium freighter on contracts takes ~15 hours to buy a
+large ship (a trader, a few), which leaves fleets and capital ships
+(§7.5) the rest of the ~100-hour arc (§2). These hours shrank with the
+bench's travel times (#122); whether the ladder needs stretching again
+goes with #149.
 
 ## 8. Art direction & audio
 

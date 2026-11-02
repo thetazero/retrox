@@ -320,7 +320,10 @@ mod tests {
         // With a short run on it already, or none to be had, nothing
         // changes.
         let board = pick([offer(30, 1)].into_iter().chain(long.clone()));
-        assert_eq!(board.iter().filter(|o| o.jumps <= SHORT_RUN_JUMPS).count(), 1);
+        assert_eq!(
+            board.iter().filter(|o| o.jumps <= SHORT_RUN_JUMPS).count(),
+            1
+        );
         let board = pick(long);
         assert!(board.iter().all(|o| o.jumps == 4));
     }

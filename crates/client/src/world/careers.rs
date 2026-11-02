@@ -245,7 +245,12 @@ impl Bot {
         if self.w.current_well().is_some() && !matches!(place, Place::Body(_)) {
             self.leave();
         }
-        if self.w.distance_to(place) > self.w.arrival_distance(place) * 1.2 {
+        // Again if the trip was cut short (raiders pull ships out of fast
+        // travel), as a player would.
+        for _ in 0..5 {
+            if self.w.distance_to(place) <= self.w.arrival_distance(place) * 1.2 {
+                break;
+            }
             if self.w.current_well().is_some() {
                 self.leave();
             }
@@ -582,7 +587,21 @@ fn ports_near(w: &World, jumps: usize) -> Vec<SettlementId> {
             s.system == w.system || w.route(s.system).is_some_and(|r| r.len() <= jumps + 1)
         })
         .map(|(id, _)| id)
+        .filter(|&id| listed(w, id))
         .collect()
+}
+
+/// Whether a player could pick this settlement in NAVIGATION: anywhere
+/// in another system (listed on arrival), or here if this system's list
+/// has it. A city founded since the player arrived isn't listed yet.
+fn listed(w: &World, id: SettlementId) -> bool {
+    let s = &w.galaxy.settlements[id];
+    s.system != w.system
+        || match s.site {
+            Site::Space(_) => w.view.stations.contains(&id),
+            Site::Region(_) => w.city_body(id).is_some(),
+            Site::Surface(_) => false,
+        }
 }
 
 fn model(w: &World, s: SettlementId) -> retrox_sim::EconomyModel {
@@ -671,6 +690,7 @@ fn trading_hour(seed: u64) {
                                 && *id != here
                                 && !visited.contains(id)
                                 && model(&b.w, *id) == retrox_sim::EconomyModel::Market
+                                && listed(&b.w, *id)
                         })
                         .filter_map(|(id, s)| Some((b.w.route(s.system)?.len(), id)))
                         .min_by_key(|&(jumps, _)| jumps)
@@ -703,16 +723,19 @@ fn contracts_hour(seed: u64) {
     while b.real_s - begin < HOUR {
         let here = b.w.docked_at().expect("docked");
         // Pay per real minute: about a minute per system and per jump.
-        let pick =
-            b.w.board
-                .iter()
-                .enumerate()
-                .filter(|(_, o)| o.value <= b.w.player.credits && b.place_of(o.to).is_some())
-                .max_by(|(_, a), (_, c)| {
-                    let r = |o: &Offer| o.fee / (1.5 + o.jumps as f64);
-                    r(a).total_cmp(&r(c))
-                })
-                .map(|(i, o)| (i, o.to));
+        let pick = b
+            .w
+            .board
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| {
+                o.value <= b.w.player.credits && b.place_of(o.to).is_some() && listed(&b.w, o.to)
+            })
+            .max_by(|(_, a), (_, c)| {
+                let r = |o: &Offer| o.fee / (1.5 + o.jumps as f64);
+                r(a).total_cmp(&r(c))
+            })
+            .map(|(i, o)| (i, o.to));
         if let Some((i, to)) = pick {
             b.w.act(Action::Open(Screen::Contracts));
             let o = b.w.board[i].clone();

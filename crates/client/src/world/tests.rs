@@ -1198,23 +1198,14 @@ fn fast_travel_into_a_field_stops_in_laser_reach_of_a_rock() {
         .map(|r| (r.pos - ship).length() - r.radius)
         .fold(f64::INFINITY, f64::min);
     let reach = world.stats().mining_range_m;
-    assert!(nearest < reach, "nearest rock {nearest:.0} m off, laser reaches {reach:.0}");
+    assert!(
+        nearest < reach,
+        "nearest rock {nearest:.0} m off, laser reaches {reach:.0}"
+    );
     // Turned nose-on to it: prospect and fire.
     real_seconds_until(&mut world, 8.0, |w| w.turn_over.is_none());
     assert!(
         world.mining.aim.is_some_and(|a| a.distance < reach),
         "the laser is on a rock as the trip ends"
     );
-}
-
-#[test]
-#[ignore]
-fn scratch_first_board() {
-    for seed in [266135087u64, 1, 2, 3, 4] {
-        let w = World::new(seed);
-        println!("seed {seed}: at {}", w.galaxy.settlements[w.docked_at().unwrap()].name);
-        for o in &w.board {
-            println!("  {} j {:.0} d {:.0} t fee {:.0} dep {:.0} -> {}", o.jumps, o.trip_days, o.amount, o.fee, o.value, w.galaxy.settlements[o.to].name);
-        }
-    }
 }
