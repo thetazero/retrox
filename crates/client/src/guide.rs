@@ -222,8 +222,13 @@ pub fn hint(w: &World) -> Option<String> {
             Screen::Trade if own_cargo => "YOUR CARGO SELLS AT shows where each good fetches \
                  most within one jump: GO sets the course, or sell here in the teal bank."
                 .into(),
+            Screen::Trade if w.trade_runs(1).is_empty() && w.nearest_market_space().is_some() => {
+                "Nothing here sells for more within one jump. TRADE RUNS names the nearest \
+                 market space: PLOT COURSE and go look."
+                    .into()
+            }
             Screen::Trade if w.trade_runs(1).is_empty() => "Nothing here sells for more within \
-                 one jump. TRADE RUNS names the nearest market space: PLOT COURSE and go look."
+                 one jump today. Markets move daily: wait, or take a contract or go mining."
                 .into(),
             Screen::Trade => "TRADE RUNS lists what sells for more within one jump. BUY & GO \
                  buys the lot and sets your course; sell it there."
