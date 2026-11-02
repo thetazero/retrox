@@ -25,7 +25,15 @@ use crate::{
 const STABILITY_DAYS: f64 = 720.0;
 /// Stability lost per `DISTANCE_SCALE_LY` of lanes from the capital.
 pub const DISTANCE_WEIGHT: f64 = 0.5;
-pub const DISTANCE_SCALE_LY: f64 = 100.0;
+pub const DISTANCE_SCALE_LY: f64 = 60.0;
+
+/// Stability lost everywhere in a faction per e-fold of its people past
+/// `OVEREXTENSION_PEOPLE`: big realms are harder to hold together.
+pub const OVEREXTENSION_WEIGHT: f64 = 0.2;
+pub const OVEREXTENSION_PEOPLE: f64 = 2000.0;
+/// A breakaway needs at least this share of its parent's people, so a
+/// great power isn't nibbled to dust by its outposts.
+pub const SECESSION_SHARE: f64 = 0.02;
 /// Stability lost at total hunger, and on top of that during a famine.
 const HUNGER_WEIGHT: f64 = 0.4;
 const FAMINE_SHOCK: f64 = 0.3;
@@ -46,6 +54,9 @@ const ECONOMY_FLIP: f64 = 0.3;
 /// Chance a breakaway names itself after its parent rather than its own
 /// capital, when that name is free.
 const PARENT_NAME: f64 = 0.5;
+/// At most this many factions share a stem, so a family's names stay
+/// telling apart.
+const STEM_FAMILY: usize = 3;
 /// Day of the year when secessions happen.
 const SECESSION_DAY: u64 = 180;
 /// Day in the review cycle when settlements reconsider their loyalty;
@@ -106,7 +117,10 @@ pub fn target(state: &GalaxyState, id: SettlementId, distance_ly: Option<f64>) -
     }
     let distance = distance_ly.unwrap_or(f64::INFINITY) / DISTANCE_SCALE_LY;
     let famine = if s.economy.famine { FAMINE_SHOCK } else { 0.0 };
-    (1.0 - DISTANCE_WEIGHT * distance - HUNGER_WEIGHT * s.economy.hunger - famine).clamp(0.0, 1.0)
+    let people = state.factions.get(s.owner).map_or(0.0, |f| f.population);
+    let overextension = OVEREXTENSION_WEIGHT * (people / OVEREXTENSION_PEOPLE).max(1.0).ln();
+    (1.0 - DISTANCE_WEIGHT * distance - overextension - HUNGER_WEIGHT * s.economy.hunger - famine)
+        .clamp(0.0, 1.0)
 }
 
 /// Planning phase, politics part: the settlements reviewing today move
@@ -193,9 +207,10 @@ pub fn secessions(state: &mut GalaxyState) {
             continue;
         }
         let population: HashMap<SystemId, f64> = unstable.iter().copied().collect();
+        let needed = needed(state, faction);
         for region in regions(state, &unstable) {
             let people: f64 = region.iter().map(|s| population[s]).sum();
-            if people < SECESSION_POPULATION {
+            if people < needed {
                 continue;
             }
             let key = region[0].index() as u64;
@@ -204,6 +219,12 @@ pub fn secessions(state: &mut GalaxyState) {
             }
         }
     }
+}
+
+/// People a region of `faction` needs to break away.
+fn needed(state: &GalaxyState, faction: FactionId) -> f64 {
+    let share = SECESSION_SHARE * state.factions[faction].population;
+    share.max(SECESSION_POPULATION)
 }
 
 /// Settlements of `faction` in `systems`.
@@ -251,7 +272,7 @@ fn secede(state: &mut GalaxyState, parent: FactionId, region: &[SystemId]) {
         .iter()
         .map(|&id| state.settlements[id].economy.population)
         .sum();
-    if people < SECESSION_POPULATION {
+    if people < needed(state, parent) {
         return;
     }
 
@@ -323,11 +344,12 @@ fn breakaway_name(
     economy: EconomyModel,
 ) -> (String, String) {
     let taken: HashSet<&str> = state.factions.values().map(|f| f.name.as_str()).collect();
-    let stems = if rng.chance(PARENT_NAME) {
-        [parent_stem, capital_stem]
-    } else {
-        [capital_stem, parent_stem]
-    };
+    let carrying = |stem: &str| state.factions.values().filter(|f| f.stem == stem).count();
+    let mut stems = Vec::with_capacity(2);
+    if rng.chance(PARENT_NAME) && carrying(parent_stem) < STEM_FAMILY {
+        stems.push(parent_stem);
+    }
+    stems.push(capital_stem);
     for stem in stems {
         for _ in 0..4 {
             let name = names::faction_name(rng, stem, economy);

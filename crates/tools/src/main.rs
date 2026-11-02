@@ -270,6 +270,15 @@ fn simulate(seed: u64, years: u64, csv: Option<&str>) -> std::io::Result<()> {
         );
     }
     println!("history: {} events", state.history.events().len());
+    let b = retrox_sim::politics::balance(&state);
+    println!(
+        "politics: {} factions standing, {} powers, largest {:.0}%, effective {:.1}",
+        b.living,
+        b.major,
+        b.largest_share * 100.0,
+        b.effective
+    );
+    print_lineages(&state);
     print_economy(&state);
     health::print(&state);
     Ok(())
