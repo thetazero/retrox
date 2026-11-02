@@ -117,6 +117,7 @@ const FOIL: u32 = 4u;
 const WINDOWS: u32 = 5u;
 const METAL: u32 = 6u;
 const BEACON: u32 = 7u;
+const LAMP: u32 = 8u;
 
 // Sovietwave ambient: a cool teal sky above, a dusky violet below.
 fn ambient_light(n: vec3<f32>) -> vec3<f32> {
@@ -181,6 +182,9 @@ fn built(i: VOut, n: vec3<f32>, mu: f32, fw: vec3<f32>) -> vec3<f32> {
         let on = step(0.8, fract(g.misc.x * 0.6 + i.params.z * 0.13));
         base = vec3<f32>(0.3, 0.02, 0.02);
         emissive = vec3<f32>(1.0, 0.08, 0.04) * (0.3 + 12.0 * on);
+    } else if (paint == LAMP) {
+        base = vec3<f32>(0.9, 0.85, 0.75);
+        emissive = vec3<f32>(1.0, 0.86, 0.62) * 5.0;
     }
     if (scale > 0.0 && (paint == HULL || paint == RED)) {
         base = base * (1.0 - 0.3 * seams(p, fw));

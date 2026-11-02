@@ -54,6 +54,8 @@ pub enum Paint {
     Metal = 6,
     /// A blinking red beacon.
     Beacon = 7,
+    /// A steady work lamp.
+    Lamp = 8,
 }
 
 #[derive(Clone, Default)]
@@ -720,4 +722,149 @@ pub fn ship(fit: &retrox_sim::ship::Loadout) -> (Mesh, ShipShape) {
         );
     }
     (m, shape)
+}
+
+/// A hangar bay, in units of the ship it holds (the ship is about one unit
+/// long, centred at the origin): a long hall along Z with a deck below,
+/// steel ribs, ceiling lamps, a landing ring and control-room windows.
+pub fn hangar_bay() -> Mesh {
+    let (cube, cyl) = (cube(), cylinder(24));
+    let ring = torus(0.02, 64, 6);
+    let mut m = Mesh::default();
+    let (half_w, half_l, floor, ceiling) = (1.5, 1.9, -0.3, 0.75);
+    let height = ceiling - floor;
+    // Deck, walls, ceiling and the far ends.
+    m.paint(
+        &cube,
+        boxed(
+            Vec3::new(0.0, floor - 0.01, 0.0),
+            Vec3::new(half_w * 2.0, 0.02, half_l * 2.0),
+        ),
+        0.5,
+        Paint::Metal,
+    );
+    for side in [-1.0f32, 1.0] {
+        m.add(
+            &cube,
+            boxed(
+                Vec3::new(side * half_w, floor + height / 2.0, 0.0),
+                Vec3::new(0.02, height, half_l * 2.0),
+            ),
+            0.9,
+        );
+        m.add(
+            &cube,
+            boxed(
+                Vec3::new(0.0, floor + height / 2.0, side * half_l),
+                Vec3::new(half_w * 2.0, height, 0.02),
+            ),
+            0.8,
+        );
+        // A strip of lit control-room windows along each wall.
+        m.paint(
+            &cube,
+            boxed(
+                Vec3::new(side * (half_w - 0.015), floor + height * 0.62, 0.0),
+                Vec3::new(0.01, height * 0.08, half_l * 1.6),
+            ),
+            1.0,
+            Paint::Windows,
+        );
+        // Red hazard bands along the deck edges.
+        m.paint(
+            &cube,
+            boxed(
+                Vec3::new(side * (half_w - 0.08), floor, 0.0),
+                Vec3::new(0.05, 0.005, half_l * 2.0),
+            ),
+            1.0,
+            Paint::Red,
+        );
+        // A big red panel on each end wall.
+        m.paint(
+            &cube,
+            boxed(
+                Vec3::new(
+                    side * half_w * 0.45,
+                    floor + height * 0.5,
+                    side * (half_l - 0.015),
+                ),
+                Vec3::new(half_w * 0.35, height * 0.75, 0.01),
+            ),
+            1.0,
+            Paint::Red,
+        );
+    }
+    m.add(
+        &cube,
+        boxed(
+            Vec3::new(0.0, ceiling, 0.0),
+            Vec3::new(half_w * 2.0, 0.02, half_l * 2.0),
+        ),
+        0.7,
+    );
+    // Steel ribs: up each wall and across the ceiling.
+    let ribs = 11;
+    for i in 0..ribs {
+        let z = -half_l + (i as f32 + 0.5) * (half_l * 2.0 / ribs as f32);
+        for side in [-1.0f32, 1.0] {
+            m.paint(
+                &cube,
+                boxed(
+                    Vec3::new(side * (half_w - 0.03), floor + height / 2.0, z),
+                    Vec3::new(0.05, height, 0.06),
+                ),
+                1.0,
+                Paint::Metal,
+            );
+        }
+        m.paint(
+            &cube,
+            boxed(
+                Vec3::new(0.0, ceiling - 0.03, z),
+                Vec3::new(half_w * 2.0, 0.05, 0.06),
+            ),
+            1.0,
+            Paint::Metal,
+        );
+        // Lamps between the ribs.
+        if i + 1 < ribs {
+            let lz = z + half_l / ribs as f32;
+            for x in [-0.7f32, 0.0, 0.7] {
+                m.paint(
+                    &cube,
+                    boxed(
+                        Vec3::new(x, ceiling - 0.02, lz),
+                        Vec3::new(0.18, 0.01, 0.04),
+                    ),
+                    1.0,
+                    Paint::Lamp,
+                );
+            }
+        }
+    }
+    // The landing ring on the deck, and a cradle under the ship.
+    m.paint(
+        &ring,
+        Mat4::from_scale_rotation_translation(
+            Vec3::new(0.65, 0.65, 0.65),
+            Quat::IDENTITY,
+            Vec3::new(0.0, floor + 0.005, 0.0),
+        ),
+        1.0,
+        Paint::Red,
+    );
+    for z in [-0.25f32, 0.25] {
+        m.paint(
+            &cyl,
+            strut(
+                Vec3::new(0.0, floor, z),
+                Vec3::new(0.0, floor + 0.18, z),
+                0.03,
+            ),
+            1.0,
+            Paint::Metal,
+        );
+    }
+    m
 }

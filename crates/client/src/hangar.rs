@@ -16,8 +16,8 @@
 
 use retrox_content::ships::{price, stock};
 use retrox_sim::SettlementId;
-use retrox_sim::economy::LocalEconomy;
 use retrox_sim::economy::{FacilityKind, HULL_T_PER_RUN};
+use retrox_sim::economy::{GoodMap, LocalEconomy};
 use retrox_sim::ship::{Hull, Loadout, Module, Mount, Section, Size};
 
 const HOUR: f64 = 3600.0;
@@ -48,6 +48,8 @@ pub struct Player {
     /// The ship being flown.
     pub ship: OwnedShip,
     pub stored: Vec<StoredShip>,
+    /// Goods in the hold of the ship being flown, tonnes.
+    pub cargo: GoodMap<f64>,
     /// Ships bought so far, for naming.
     bought: u32,
 }
@@ -62,8 +64,14 @@ impl Player {
                 fit,
             },
             stored: Vec::new(),
+            cargo: GoodMap::default(),
             bought: 1,
         }
+    }
+
+    /// Tonnes in the hold.
+    pub fn cargo_t(&self) -> f64 {
+        self.cargo.0.iter().sum()
     }
 }
 
@@ -273,6 +281,16 @@ pub fn run(
     }
     if -cost > economy.treasury {
         return Err("The settlement can't afford to buy that".into());
+    }
+    // The cargo stays aboard the ship being flown, so its hold must still
+    // take it.
+    if let Some(next) = preview(player, job) {
+        let room = next.stats().cargo_t;
+        if room + 1e-9 < player.cargo_t() {
+            return Err(format!(
+                "Sell some cargo first: the hold would only take {room:.0} t"
+            ));
+        }
     }
 
     let done = match job {
@@ -534,6 +552,18 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn cargo_must_fit_the_new_hold() {
+        let (mut p, at, mut eco) = (Player::new(), here(), yard());
+        p.cargo[retrox_sim::economy::Good::Ore] = 10.0;
+        // A racer's hold is smaller than the courier's 12 t.
+        let racer = hull("racer").unwrap();
+        assert!(stock("racer").unwrap().stats().cargo_t < 10.0);
+        assert!(run(&mut p, at, &mut eco, Job::BuyShip(racer)).is_err());
+        p.cargo[retrox_sim::economy::Good::Ore] = 0.0;
+        run(&mut p, at, &mut eco, Job::BuyShip(racer)).unwrap();
     }
 
     #[test]

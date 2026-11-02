@@ -31,6 +31,7 @@ use retrox_sim::ship::ShipStats;
 
 use crate::hangar::{self, Job, Player};
 use retrox_gen::{GalaxyConfig, Rock, generate, rocks};
+use retrox_sim::economy::Good;
 use retrox_sim::flight::{self, Goal, Kinematics};
 use retrox_sim::{
     BodyId, BodyKind, FieldId, GalaxyState, GalaxyTime, SettlementId, Site, StarClass, SystemId,
@@ -201,6 +202,25 @@ pub enum Action {
     Wait(u64),
     /// A job in the hangar of the settlement we're docked or landed at.
     Hangar(Job),
+    /// Go to one of the docked screens.
+    Open(Screen),
+    /// Put a stock ship on the shipyard floor to look at.
+    Inspect(&'static retrox_sim::ship::Hull),
+    /// Buy (positive) or sell (negative) tonnes of a good.
+    Trade(Good, f64),
+}
+
+/// The screens of a station or city, while docked or landed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Screen {
+    /// The menu: where you are, and where to go.
+    #[default]
+    Hub,
+    Trade,
+    /// Your ship in the bay: refits and stored ships.
+    Hangar,
+    /// Ships for sale, on the bay floor.
+    Shipyard,
 }
 
 /// What the player could do right now (shown as prompts).
@@ -239,6 +259,10 @@ pub struct World {
     pub message: Option<(String, f32)>,
     /// The player's money and ships.
     pub player: Player,
+    /// Which docked screen is showing.
+    pub screen: Screen,
+    /// The stock ship being looked at in the shipyard.
+    pub inspect: Option<&'static retrox_sim::ship::Hull>,
     /// Bumped whenever the system changes, so the client re-uploads meshes.
     pub system_generation: u64,
 }
@@ -290,6 +314,8 @@ impl World {
             field_rocks: None,
             message: None,
             player: Player::new(),
+            screen: Screen::Hub,
+            inspect: None,
             system_generation: 0,
         }
     }
@@ -534,6 +560,7 @@ impl World {
             Action::Dock => {
                 if let Some(s) = prompts.dock {
                     self.mode = Mode::Docked(s);
+                    self.screen = Screen::Hub;
                     self.ship.frame = Place::Station(s);
                     self.ship.rel = DVec3::ZERO;
                     self.ship.vel = DVec3::ZERO;
@@ -560,6 +587,7 @@ impl World {
                         body,
                         timer: LANDING_DURATION,
                     };
+                    self.screen = Screen::Hub;
                 }
             }
             Action::Launch => {
@@ -599,6 +627,31 @@ impl World {
                         "Waited {days} day{}",
                         if days == 1 { "" } else { "s" }
                     ));
+                }
+            }
+            Action::Open(screen) => {
+                if self.docked_at().is_some() {
+                    self.screen = screen;
+                }
+            }
+            Action::Inspect(hull) => self.inspect = Some(hull),
+            Action::Trade(good, amount) => {
+                let Some(here) = self.docked_at() else {
+                    return;
+                };
+                let capacity = self.stats().cargo_t;
+                let settlement = &mut self.galaxy.settlements[here];
+                let model = self.galaxy.factions[settlement.owner].economy;
+                let result = crate::trade::trade(
+                    &mut self.player,
+                    capacity,
+                    &mut settlement.economy,
+                    model,
+                    good,
+                    amount,
+                );
+                match result {
+                    Ok(text) | Err(text) => self.say(text),
                 }
             }
             Action::Hangar(job) => {
@@ -1122,6 +1175,27 @@ mod tests {
         }));
         world.act(Action::Launch);
         assert_eq!(world.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn trading_from_the_station_menu() {
+        let mut world = World::new(1);
+        assert_eq!(world.screen, Screen::Hub);
+        world.act(Action::Open(Screen::Trade));
+        assert_eq!(world.screen, Screen::Trade);
+        let credits = world.player.credits;
+        world.act(Action::Trade(Good::Food, 5.0));
+        assert_eq!(world.player.cargo[Good::Food], 5.0);
+        assert!(world.player.credits < credits);
+        // More than the hold takes is refused.
+        world.act(Action::Trade(Good::Food, 1000.0));
+        assert_eq!(world.player.cargo[Good::Food], 5.0);
+        world.act(Action::Open(Screen::Hub));
+        world.act(Action::Launch);
+        // Screens only open while docked or landed.
+        world.act(Action::Open(Screen::Trade));
+        assert_eq!(world.mode, Mode::Normal);
+        assert_eq!(world.docked_at(), None);
     }
 
     #[test]

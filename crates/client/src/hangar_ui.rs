@@ -1,127 +1,252 @@
-//! The hangar screen, beside the settlement screen whenever you're docked
-//! or landed: refit the ship you're flying, buy ships off the lot, and
-//! manage the ships you keep in storage. Hovering anything that would
-//! change your ship previews its stats against the current fit.
+//! The hangar and shipyard screens, around the ship standing in the bay
+//! (drawn by `main`): refit the ship you're flying and manage the ships you
+//! keep in storage, or look over and buy ships off the lot. Hovering any
+//! refit option previews its stats against the current fit.
 
-use egui::{Align2, Color32, RichText, Sense, Stroke, Vec2};
+use egui::{Align2, Color32, RichText, Stroke, Vec2};
 use retrox_content::ships::{MODULES, SECTIONS, price};
 use retrox_sim::SettlementId;
 use retrox_sim::ship::{Loadout, Mount, ShipStats, Size, SlotKind};
 
 use crate::hangar::{self, Job, Services};
 use crate::hud::{
-    ALARM, AMBER, CREAM, CREAM_DIM, Panel, RED, RED_DARK, RULE, VFD, credits, display, glow_label,
-    mono, panel, section,
+    ALARM, AMBER, CREAM, CREAM_DIM, Panel, RED, RED_DARK, VFD, credits, display, panel, section,
 };
+use crate::station_ui::screen_header;
 use crate::world::{Action, World};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-enum Tab {
-    #[default]
-    Ship,
-    Shipyard,
-    Storage,
-}
-
-/// What's picked on the ship tab: a slot to fill, or a mount to re-section.
+/// What's picked on the loadout: a slot to fill, or a mount to re-section.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Pick {
     Slot { mount: usize, slot: usize },
     Mount(usize),
 }
 
-pub fn draw(ctx: &egui::Context, w: &World, here: SettlementId, actions: &mut Vec<Action>) {
+const SIDE_WIDTH: f32 = 440.0;
+
+/// Your ship in the bay: the loadout to refit on the left, its stats and
+/// your stored ships on the right.
+pub fn hangar_screen(
+    ctx: &egui::Context,
+    w: &World,
+    here: SettlementId,
+    actions: &mut Vec<Action>,
+) {
     let Some(settlement) = w.galaxy.settlements.get(here) else {
         return;
     };
-    let economy = &settlement.economy;
-    let services = hangar::services(economy);
-    let id = |name: &str| egui::Id::unique(name);
-    let mut tab: Tab = ctx
-        .data(|d| d.get_temp(id("hangar-tab")))
-        .unwrap_or_default();
-    let mut pick: Option<Pick> = ctx.data(|d| d.get_temp(id("hangar-pick"))).flatten();
-    // Hover is read a frame late: the stats are drawn before the lists.
-    let hovered: Option<Job> = ctx.data(|d| d.get_temp(id("hangar-hover"))).flatten();
-    let mut hover_now: Option<Job> = None;
+    let services = hangar::services(&settlement.economy);
+    let pick_id = egui::Id::unique("hangar-pick");
+    let mut pick: Option<Pick> = ctx.data(|d| d.get_temp(pick_id)).flatten();
+    let mut hovered: Option<Job> = None;
     let screen = ctx.content_rect();
 
     panel(
         ctx,
         Panel {
-            id: "hangar",
-            title: "Hangar",
-            anchor: Align2::RIGHT_TOP,
-            offset: [-24.0, 24.0],
-            width: 520.0,
+            id: "hangar-loadout",
+            title: "Hangar · refit",
+            anchor: Align2::LEFT_TOP,
+            offset: [24.0, 150.0],
+            width: SIDE_WIDTH,
             collapsible: None,
         },
         |ui| {
-            ui.horizontal(|ui| {
-                for (t, name) in [
-                    (Tab::Ship, "Ship"),
-                    (Tab::Shipyard, "Shipyard"),
-                    (Tab::Storage, "Storage"),
-                ] {
-                    if tab_button(ui, name, tab == t) {
-                        tab = t;
-                    }
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    glow_label(ui, &credits(w.player.credits), mono(18.0), AMBER);
-                });
-            });
-            ui.add_space(6.0);
+            screen_header(ui, w, actions);
             egui::ScrollArea::vertical()
-                .max_height(screen.height() - 190.0)
-                // Without this an area's scroll view stays at its first
-                // frame's height.
-                .min_scrolled_height(screen.height() - 190.0)
+                .max_height(screen.height() - 300.0)
+                .min_scrolled_height(screen.height() - 300.0)
                 .auto_shrink([false, true])
-                .show(ui, |ui| match tab {
-                    Tab::Ship => {
-                        ship_tab(ui, w, services, &mut pick, hovered, &mut hover_now, actions)
+                .show(ui, |ui| {
+                    loadout(ui, w, services, &mut pick, &mut hovered, actions)
+                });
+        },
+    );
+
+    panel(
+        ctx,
+        Panel {
+            id: "hangar-ship",
+            title: "Your ship",
+            anchor: Align2::RIGHT_TOP,
+            offset: [-24.0, 24.0],
+            width: 400.0,
+            collapsible: None,
+        },
+        |ui| {
+            let player = &w.player;
+            ship_heading(ui, &player.ship.name, &player.ship.fit);
+            let preview = hovered.and_then(|j| hangar::preview(player, j));
+            stats_block(ui, &player.ship.fit, preview.as_ref());
+            ui.add_space(8.0);
+            fleet(ui, w, here, services, actions);
+        },
+    );
+    ctx.data_mut(|d| d.insert_temp(pick_id, pick));
+}
+
+/// Ships for sale: the lot on the left (click one to put it on the bay
+/// floor), and the chosen ship against yours on the right.
+pub fn shipyard_screen(
+    ctx: &egui::Context,
+    w: &World,
+    here: SettlementId,
+    actions: &mut Vec<Action>,
+) {
+    let Some(settlement) = w.galaxy.settlements.get(here) else {
+        return;
+    };
+    let economy = &settlement.economy;
+    let offers = hangar::lot();
+    panel(
+        ctx,
+        Panel {
+            id: "shipyard-lot",
+            title: "Shipyard · the lot",
+            anchor: Align2::LEFT_TOP,
+            offset: [24.0, 150.0],
+            width: SIDE_WIDTH,
+            collapsible: None,
+        },
+        |ui| {
+            screen_header(ui, w, actions);
+            ui.label(
+                RichText::new(format!(
+                    "yard stock {:.0} t of hull · builds up to {:.0} t a day",
+                    economy.hull_t,
+                    hangar::yard_output_t_per_day(economy)
+                ))
+                .color(CREAM_DIM),
+            );
+            ui.add_space(4.0);
+            egui::Grid::new("lot")
+                .num_columns(3)
+                .spacing([12.0, 3.0])
+                .striped(true)
+                .show(ui, |ui| {
+                    for head in ["SHIP", "ROLE", "PRICE"] {
+                        ui.label(RichText::new(head).size(11.0).color(CREAM_DIM));
                     }
-                    Tab::Shipyard => {
-                        shipyard_tab(ui, w, economy, services, hovered, &mut hover_now, actions);
-                    }
-                    Tab::Storage => {
-                        storage_tab(ui, w, here, services, hovered, &mut hover_now, actions)
+                    ui.end_row();
+                    for offer in &offers {
+                        let built = hangar::can_build(economy, offer);
+                        let chosen = w.inspect.is_some_and(|h| h.id == offer.hull.id);
+                        let name = RichText::new(offer.hull.name).color(if built {
+                            CREAM
+                        } else {
+                            CREAM_DIM
+                        });
+                        if ui.selectable_label(chosen, name).clicked() {
+                            actions.push(Action::Inspect(offer.hull));
+                        }
+                        ui.label(
+                            RichText::new(format!(
+                                "{:?} {}",
+                                offer.hull.role,
+                                size_letter(offer.hull.size)
+                            ))
+                            .color(CREAM_DIM),
+                        );
+                        let color = if offer.price > w.player.credits {
+                            ALARM
+                        } else if built {
+                            VFD
+                        } else {
+                            CREAM_DIM
+                        };
+                        ui.label(RichText::new(credits(offer.price)).color(color));
+                        ui.end_row();
                     }
                 });
         },
     );
 
-    ctx.data_mut(|d| {
-        d.insert_temp(id("hangar-tab"), tab);
-        d.insert_temp(id("hangar-pick"), pick);
-        d.insert_temp(id("hangar-hover"), hover_now);
-    });
+    panel(
+        ctx,
+        Panel {
+            id: "shipyard-ship",
+            title: "On the floor",
+            anchor: Align2::RIGHT_TOP,
+            offset: [-24.0, 24.0],
+            width: 400.0,
+            collapsible: None,
+        },
+        |ui| {
+            let Some(offer) = w
+                .inspect
+                .and_then(|h| offers.iter().find(|o| o.hull.id == h.id))
+            else {
+                ui.label(RichText::new("Pick a ship on the lot to look it over.").color(CREAM_DIM));
+                ui.add_space(6.0);
+                ship_heading(ui, &w.player.ship.name, &w.player.ship.fit);
+                stats_block(ui, &w.player.ship.fit, None);
+                return;
+            };
+            let job = Job::BuyShip(offer.hull);
+            let fit = hangar::preview(&w.player, job);
+            ship_heading(
+                ui,
+                offer.hull.name,
+                fit.as_ref().unwrap_or(&w.player.ship.fit),
+            );
+            ui.label(
+                RichText::new("compared with your ship")
+                    .size(11.0)
+                    .color(CREAM_DIM),
+            );
+            stats_block(ui, &w.player.ship.fit, fit.as_ref());
+            ui.add_space(10.0);
+            let built = hangar::can_build(economy, offer);
+            let affordable = offer.price <= w.player.credits;
+            ui.horizontal(|ui| {
+                let buy = egui::Button::new(
+                    RichText::new(format!("BUY · {}", credits(offer.price)))
+                        .font(display(24.0))
+                        .color(CREAM),
+                )
+                .fill(RED)
+                .min_size(Vec2::new(ui.available_width(), 38.0));
+                if ui.add_enabled(built && affordable, buy).clicked() {
+                    actions.push(Action::Hangar(job));
+                }
+            });
+            let why = if !built {
+                format!(
+                    "the yard needs {:.0} t of hull for one · it has {:.0} t",
+                    offer.mass_t, economy.hull_t
+                )
+            } else if !affordable {
+                format!("you're {} short", credits(offer.price - w.player.credits))
+            } else {
+                "takes a day · your current ship stays here in storage".to_owned()
+            };
+            ui.label(RichText::new(why).size(11.0).color(if built && affordable {
+                CREAM_DIM
+            } else {
+                AMBER
+            }));
+        },
+    );
 }
 
-fn ship_tab(
+fn loadout(
     ui: &mut egui::Ui,
     w: &World,
     services: Services,
     pick: &mut Option<Pick>,
-    hovered: Option<Job>,
     hover_now: &mut Option<Job>,
     actions: &mut Vec<Action>,
 ) {
-    let player = &w.player;
-    let fit = &player.ship.fit;
-    ship_heading(ui, &player.ship.name, fit);
-    stats_block(
-        ui,
-        fit,
-        hovered.and_then(|j| hangar::preview(player, j)).as_ref(),
-    );
-    ui.add_space(8.0);
-    section(ui, "Loadout");
+    let fit = &w.player.ship.fit;
     if !services.outfitter {
         ui.label(RichText::new("No outfitter here: refits unavailable").color(AMBER));
+    } else {
+        ui.label(
+            RichText::new("click a slot to change what's in it")
+                .size(11.0)
+                .color(CREAM_DIM),
+        );
     }
-
     for (m, (mount, fitted)) in fit.mounts().enumerate() {
         ui.add_space(4.0);
         ui.horizontal(|ui| {
@@ -175,6 +300,56 @@ fn ship_tab(
             }
         }
     }
+}
+
+/// Your ships: the one you fly, and those in storage here and elsewhere.
+fn fleet(
+    ui: &mut egui::Ui,
+    w: &World,
+    here: SettlementId,
+    services: Services,
+    actions: &mut Vec<Action>,
+) {
+    let player = &w.player;
+    section(ui, "Stored ships");
+    if player.stored.is_empty() {
+        ui.label(RichText::new("none · ships you replace are kept here").color(CREAM_DIM));
+        return;
+    }
+    egui::Grid::new("stored")
+        .num_columns(3)
+        .spacing([10.0, 4.0])
+        .striped(true)
+        .show(ui, |ui| {
+            for (i, stored) in player.stored.iter().enumerate() {
+                ui.label(RichText::new(&stored.ship.name).color(CREAM));
+                let at_here = stored.at == here;
+                let place = if at_here {
+                    "here".to_owned()
+                } else {
+                    w.galaxy
+                        .settlements
+                        .get(stored.at)
+                        .map_or("lost".to_owned(), |s| s.name.clone())
+                };
+                ui.label(RichText::new(place).color(if at_here { VFD } else { CREAM_DIM }));
+                ui.horizontal(|ui| {
+                    if !at_here {
+                        return;
+                    }
+                    if ui.button("BOARD").clicked() {
+                        actions.push(Action::Hangar(Job::Board(i)));
+                    }
+                    if services.shipyard {
+                        let refund = -hangar::quote(player, Job::SellShip(i)).unwrap_or(0.0);
+                        if ui.button(format!("SELL {}", credits(refund))).clicked() {
+                            actions.push(Action::Hangar(Job::SellShip(i)));
+                        }
+                    }
+                });
+                ui.end_row();
+            }
+        });
 }
 
 /// Modules that fit a slot, with what each costs after selling the old one.
@@ -262,162 +437,6 @@ fn section_choices(
     );
 }
 
-fn shipyard_tab(
-    ui: &mut egui::Ui,
-    w: &World,
-    economy: &retrox_sim::economy::LocalEconomy,
-    services: Services,
-    hovered: Option<Job>,
-    hover_now: &mut Option<Job>,
-    actions: &mut Vec<Action>,
-) {
-    if !services.shipyard {
-        ui.label(RichText::new("No shipyard here.").color(AMBER));
-        ui.label(
-            RichText::new("Ships are sold where a shipyard has built the hull for them.")
-                .color(CREAM_DIM),
-        );
-        return;
-    }
-    // Compare against whichever ship is hovered.
-    if let Some(Job::BuyShip(hull)) = hovered {
-        let preview = hangar::preview(&w.player, Job::BuyShip(hull));
-        ship_heading(
-            ui,
-            hull.name,
-            preview.as_ref().unwrap_or(&w.player.ship.fit),
-        );
-        stats_block(ui, &w.player.ship.fit, preview.as_ref());
-    } else {
-        ui.label(RichText::new("hover a ship to compare it with yours").color(CREAM_DIM));
-    }
-    ui.add_space(6.0);
-    section(ui, "On the lot");
-    ui.label(
-        RichText::new(format!(
-            "yard stock: {:.0} t of finished hull · builds up to {:.0} t a day",
-            economy.hull_t,
-            hangar::yard_output_t_per_day(economy)
-        ))
-        .color(CREAM_DIM),
-    );
-    ui.label(
-        RichText::new("the ship you fly now stays here in storage")
-            .size(11.0)
-            .color(CREAM_DIM),
-    );
-    ui.add_space(4.0);
-    egui::Grid::new("lot")
-        .num_columns(4)
-        .spacing([12.0, 4.0])
-        .striped(true)
-        .show(ui, |ui| {
-            for head in ["SHIP", "ROLE", "PRICE", ""] {
-                ui.label(RichText::new(head).size(11.0).color(CREAM_DIM));
-            }
-            ui.end_row();
-            for offer in hangar::lot() {
-                let job = Job::BuyShip(offer.hull);
-                let built = hangar::can_build(economy, &offer);
-                let affordable = offer.price <= w.player.credits;
-                let name = ui.label(RichText::new(offer.hull.name).color(CREAM));
-                ui.label(
-                    RichText::new(format!(
-                        "{:?} {}",
-                        offer.hull.role,
-                        size_letter(offer.hull.size)
-                    ))
-                    .color(CREAM_DIM),
-                );
-                let price_color = if affordable { VFD } else { ALARM };
-                ui.label(RichText::new(credits(offer.price)).color(price_color));
-                if built {
-                    let buy = ui.add_enabled(affordable, egui::Button::new("BUY"));
-                    if buy.hovered() || name.hovered() {
-                        *hover_now = Some(job);
-                    }
-                    if buy.clicked() {
-                        actions.push(Action::Hangar(job));
-                    }
-                } else {
-                    let r = ui.label(
-                        RichText::new(format!("needs {:.0} t", offer.mass_t))
-                            .size(11.0)
-                            .color(CREAM_DIM),
-                    );
-                    if r.hovered() || name.hovered() {
-                        *hover_now = Some(job);
-                    }
-                }
-                ui.end_row();
-            }
-        });
-}
-
-fn storage_tab(
-    ui: &mut egui::Ui,
-    w: &World,
-    here: SettlementId,
-    services: Services,
-    hovered: Option<Job>,
-    hover_now: &mut Option<Job>,
-    actions: &mut Vec<Action>,
-) {
-    let player = &w.player;
-    section(ui, "Flying");
-    ui.label(
-        RichText::new(player.ship.name.to_uppercase())
-            .font(display(22.0))
-            .color(CREAM),
-    );
-    if let Some(job @ Job::Board(_)) = hovered {
-        stats_block(ui, &player.ship.fit, hangar::preview(player, job).as_ref());
-    }
-    ui.add_space(8.0);
-    section(ui, "Stored");
-    if player.stored.is_empty() {
-        ui.label(RichText::new("no ships in storage").color(CREAM_DIM));
-        return;
-    }
-    egui::Grid::new("stored")
-        .num_columns(3)
-        .spacing([12.0, 4.0])
-        .striped(true)
-        .show(ui, |ui| {
-            for (i, stored) in player.stored.iter().enumerate() {
-                ui.label(RichText::new(&stored.ship.name).color(CREAM));
-                let at_here = stored.at == here;
-                let place = if at_here {
-                    "here".to_owned()
-                } else {
-                    w.galaxy
-                        .settlements
-                        .get(stored.at)
-                        .map_or("lost".to_owned(), |s| s.name.clone())
-                };
-                ui.label(RichText::new(place).color(if at_here { VFD } else { CREAM_DIM }));
-                ui.horizontal(|ui| {
-                    if at_here {
-                        let board = ui.button("BOARD");
-                        if board.hovered() {
-                            *hover_now = Some(Job::Board(i));
-                        }
-                        if board.clicked() {
-                            actions.push(Action::Hangar(Job::Board(i)));
-                        }
-                        if services.shipyard {
-                            let refund = -hangar::quote(player, Job::SellShip(i)).unwrap_or(0.0);
-                            if ui.button(format!("SELL {}", credits(refund))).clicked() {
-                                actions.push(Action::Hangar(Job::SellShip(i)));
-                            }
-                        }
-                    }
-                });
-                ui.end_row();
-            }
-        });
-}
-
 /// One option in a choice list: name, detail, cost and a button.
 #[allow(clippy::too_many_arguments)]
 fn choice_row(
@@ -472,33 +491,6 @@ fn choices_frame(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
             ui.set_width(ui.available_width());
             add(ui);
         });
-}
-
-fn tab_button(ui: &mut egui::Ui, name: &str, active: bool) -> bool {
-    let galley = ui
-        .painter()
-        .layout_no_wrap(name.to_uppercase(), display(20.0), CREAM);
-    let size = galley.size() + Vec2::new(18.0, 6.0);
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let painter = ui.painter();
-    if active {
-        painter.rect_filled(rect, 0.0, RED);
-    } else if response.hovered() {
-        painter.rect_filled(rect, 0.0, RED_DARK);
-    } else {
-        painter.rect_stroke(rect, 0.0, Stroke::new(1.0, RULE), egui::StrokeKind::Inside);
-    }
-    let color = if active || response.hovered() {
-        CREAM
-    } else {
-        CREAM_DIM
-    };
-    painter.galley_with_override_text_color(
-        rect.center() - galley.size() / 2.0 + Vec2::new(0.0, 1.0),
-        galley,
-        color,
-    );
-    response.clicked()
 }
 
 fn ship_heading(ui: &mut egui::Ui, name: &str, fit: &Loadout) {
