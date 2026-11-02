@@ -1273,6 +1273,7 @@ impl Running {
             time,
             exposure: 1.0,
             instances: &instances,
+            reveal: (self.game.as_ref()).and_then(|g| hull_reveal(&g.world, cam_pos)),
             ui: Some((&ctx, output)),
         });
     }
@@ -1668,7 +1669,8 @@ fn scene(
                 light(pos),
             )
             .with_detail(0.5)
-            .with_scorch(battle_scorch(world.combat.player.hull_left())),
+            .with_scorch(battle_scorch(world.combat.player.hull_left()))
+            .own_hull(),
         ));
         // Engine plumes, growing with the throttle.
         let thrust = world.ship.throttle.max(0.0) as f32;
@@ -2020,6 +2022,19 @@ fn harvest_glow(
 }
 
 /// How scorched a ship looks with this much hull left.
+/// The combat target, where the chase camera has the pilot's own hull
+/// between it and the eye: camera relative, with its radius in metres.
+/// The renderer opens the hull round it (DESIGN §7.2.1, #123).
+fn hull_reveal(world: &World, cam: DVec3) -> Option<(Vec3, f32)> {
+    let c = &world.combat;
+    if world.cockpit || c.lost.is_some() || world.mode != Mode::Normal {
+        return None;
+    }
+    let r = c.raider(c.target?)?;
+    let rel = (world.combat_origin() + r.craft.pos - cam).as_vec3();
+    Some((rel, (r.vessel.stats.length_m * 0.5) as f32))
+}
+
 fn battle_scorch(hull_left: f64) -> f32 {
     (((1.0 - hull_left) * 0.8) as f32).clamp(0.0, 0.8)
 }

@@ -4,8 +4,11 @@ struct Globals {
     view_proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
     star_color: vec4<f32>,
-    // x: time (s), y: exposure
+    // x: time (s), y: exposure, z: width, w: height
     misc: vec4<f32>,
+    // Where the pilot's own hull opens round the combat target: x, y in
+    // pixels, z: radius in pixels, w: strength (render.rs reveal_window).
+    reveal: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> g: Globals;
 
@@ -305,10 +308,29 @@ fn fs_glow(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32
     return vec4<f32>(i.color.rgb * rim * fade * i.params.y, 1.0);
 }
 
+// A 4x4 ordered-dither threshold for a pixel, 0..1.
+fn bayer4(p: vec2<f32>) -> f32 {
+    var m = array<f32, 16>(0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0,
+                           3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+    let x = u32(p.x) % 4u;
+    let y = u32(p.y) % 4u;
+    return (m[y * 4u + x] + 0.5) / 16.0;
+}
+
 @fragment
 fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     let mode = u32(round(i.params.x));
     let fw = fwidth(i.obj * max(i.params.w, 0.0001));
+    // The pilot's own hull (seed < 0) opens round the target behind it in
+    // a halftone screen, so what you're shooting at is never hidden
+    // (#123): most of the pixels go, a sparse grid of the hull stays as a
+    // ghost, and the edge feathers out through the dither.
+    if (i.params.z < 0.0 && g.reveal.w > 0.0) {
+        let d = distance(i.clip.xy, g.reveal.xy);
+        let r = g.reveal.z;
+        let open = g.reveal.w * (1.0 - smoothstep(r * 0.55, r, d));
+        if (bayer4(i.clip.xy) < open * 0.82) { discard; }
+    }
     // Spheres are wound consistently: only their front faces count. (Kit
     // meshes stay two-sided.)
     if (mode != PLAIN && !front) { discard; }
