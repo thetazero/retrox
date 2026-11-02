@@ -70,28 +70,28 @@ fn reachable_resources(state: &GalaxyState, id: SettlementId) -> Resources {
 /// Facility kinds this settlement could sensibly build now: the resources
 /// are there, the inputs are on hand, existing facilities of the kind are
 /// busy, and it isn't over its cap.
-fn buildable(state: &GalaxyState, id: SettlementId) -> Vec<FacilityKind> {
+fn buildable(state: &GalaxyState, id: SettlementId) -> impl Iterator<Item = FacilityKind> + '_ {
     let resources = reachable_resources(state, id);
     let economy = &state.settlements[id].economy;
     let market = &economy.market;
     FacilityKind::ALL
         .into_iter()
-        .filter(|&kind| {
-            let existing: Vec<&Facility> = economy
+        .filter(move |&kind| {
+            let (scale, busy) = economy
                 .facilities
                 .iter()
                 .filter(|f| f.kind == kind)
-                .collect();
-            let scale: f64 = existing.iter().map(|f| f.scale).sum();
-            existing.iter().all(|f| f.utilization >= BUSY)
-                && scale < SCALE_PER_POPULATION * economy.population + SCALE_BASE
+                .fold((0.0, true), |(scale, busy), f| {
+                    (scale + f.scale, busy && f.utilization >= BUSY)
+                });
+            busy && scale < SCALE_PER_POPULATION * economy.population + SCALE_BASE
                 && kind
                     .recipe()
                     .inputs
                     .iter()
                     .all(|&(g, _)| market.fill(g) >= INPUT_FILL)
         })
-        .filter(|&kind| match kind {
+        .filter(move |&kind| match kind {
             FacilityKind::Mine => resources.ore > MINEABLE,
             FacilityKind::IceHarvester => resources.ice > MINEABLE,
             // Gas plants sit by a giant their harvesters can skim.
@@ -107,7 +107,6 @@ fn buildable(state: &GalaxyState, id: SettlementId) -> Vec<FacilityKind> {
             }
             _ => true,
         })
-        .collect()
 }
 
 /// Daily margin per unit of scale at local prices.
@@ -200,52 +199,56 @@ pub fn choose(state: &GalaxyState, id: SettlementId) -> Option<Project> {
     })
 }
 
-/// Planning phase, construction part: start projects, make progress on
-/// them, and let idle facilities decay. Each settlement reviews once a
-/// month, on its own day.
-pub fn build(state: &mut GalaxyState) {
+/// Monthly reviews, construction part: today's reviewing settlements let
+/// idle facilities decay, forget half their old hull orders, and start a
+/// project if they have none.
+pub fn review(state: &mut GalaxyState) {
     let day = state.time.days();
-    let ids: Vec<SettlementId> = state.settlements.keys().collect();
-    for id in ids {
-        if state.settlements[id].economy.population <= 0.0 {
-            continue;
+    for i in crate::settlement::review_slots(day, 0, state.settlements.slot_count()) {
+        if let Some(id) = state.settlements.key_at(i) {
+            review_one(state, id);
         }
-        let review = (slotmap::Key::data(&id).as_ffi() % 30) == day % 30;
-        if review {
-            decay(state, id);
-            state.settlements[id].economy.hull_wanted *= 0.5;
-            if state.settlements[id].economy.project.is_none() {
-                let project = choose(state, id);
-                let economy = &mut state.settlements[id].economy;
-                economy.project = project;
-                economy.refresh_demand();
-            }
-        }
-        progress(state, id);
     }
 }
 
-/// Use today's share of materials from the local market; finish when
-/// nothing is left to use.
-fn progress(state: &mut GalaxyState, id: SettlementId) {
-    let owner = state.settlements[id].owner;
-    let planned = state.factions[owner].economy == EconomyModel::Planned;
-    let Some(project) = state.settlements[id].economy.project.clone() else {
+fn review_one(state: &mut GalaxyState, id: SettlementId) {
+    if state.settlements[id].economy.population <= 0.0 {
+        return;
+    }
+    decay(state, id);
+    state.settlements[id].economy.hull_wanted *= 0.5;
+    if state.settlements[id].economy.project.is_none() {
+        let project = choose(state, id);
+        let economy = &mut state.settlements[id].economy;
+        economy.project = project;
+        economy.refresh_demand();
+    }
+}
+
+/// Daily books, construction part: use today's share of materials from
+/// the local market; finish when nothing is left to use.
+pub(crate) fn progress(state: &mut GalaxyState, id: SettlementId) {
+    let today = state.time;
+    let settlement = &mut state.settlements[id];
+    let owner = settlement.owner;
+    let economy = &mut settlement.economy;
+    let Some(project) = economy.project.as_mut() else {
         return;
     };
     let total = materials(project.scale);
-    let mut needs = project.needs;
     let mut used = 0.0;
     for good in Good::ALL {
-        let today = ledger::consume(state, id, good, (total[good] / BUILD_DAYS).min(needs[good]));
-        needs[good] -= today;
-        used += today;
+        if project.needs[good] <= 0.0 {
+            continue;
+        }
+        let wanted = (total[good] / BUILD_DAYS).min(project.needs[good]);
+        let got = ledger::consume_from(&mut economy.market, good, wanted);
+        project.needs[good] -= got;
+        used += got;
     }
-    let done = Good::ALL.iter().all(|&g| needs[g] <= 1e-9);
-    if let Some(p) = state.settlements[id].economy.project.as_mut() {
-        p.needs = needs;
-    }
-    if planned && used > 0.0 {
+    let done = Good::ALL.iter().all(|&g| project.needs[g] <= 1e-9);
+    let started = project.started;
+    if used > 0.0 && state.factions[owner].economy == EconomyModel::Planned {
         let wages = used * WAGE_PER_UNIT * crate::fiscal::thrift(state, owner);
         ledger::pay(
             state,
@@ -254,7 +257,7 @@ fn progress(state: &mut GalaxyState, id: SettlementId) {
             wages,
         );
     }
-    let late = state.time.days().saturating_sub(project.started.days()) > PATIENCE_DAYS;
+    let late = today.days().saturating_sub(started.days()) > PATIENCE_DAYS;
     let economy = &mut state.settlements[id].economy;
     if done || late {
         // A project that can't get the rest of its materials is cut short:

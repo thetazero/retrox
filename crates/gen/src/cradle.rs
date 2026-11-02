@@ -89,6 +89,7 @@ pub fn found(rng: &mut Rng, state: &mut GalaxyState, config: &GalaxyConfig) -> V
             founded: GalaxyTime::ZERO,
             treasury: 0.0,
             population: 0.0,
+            welfare: Default::default(),
         });
         state
             .history

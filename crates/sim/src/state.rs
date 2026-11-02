@@ -38,6 +38,10 @@ pub struct GalaxyState {
     pub calendar: crate::haul::Calendar,
     /// Cargo on its way to each market.
     pub traffic: crate::haul::Traffic,
+    /// Each system's best buyers and sellers, rebuilt in place every trade
+    /// phase; see [`crate::haul`].
+    #[serde(skip)]
+    pub(crate) board: crate::haul::Board,
     /// Remembered lane distances; see [`crate::haul::ReachCache`].
     #[serde(skip)]
     pub reach_cache: crate::haul::ReachCache,
@@ -354,6 +358,10 @@ pub struct Faction {
     pub treasury: f64,
     /// Total population of its settlements, refreshed daily.
     pub population: f64,
+    /// What it pays out in welfare tomorrow, and to whom; see
+    /// [`crate::fiscal::Welfare`].
+    #[serde(default)]
+    pub welfare: crate::fiscal::Welfare,
 }
 
 /// How a faction runs its economy (§5.4).

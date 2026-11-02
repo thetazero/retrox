@@ -13,8 +13,8 @@
 //!   system.
 //! - **Raids.** In the coarse tier, a trader trip that starts or ends in a
 //!   lair system, or a system next to one, may be robbed on arrival: the
-//!   gang takes up to [`RAID_T_PER_SHIP`] tonnes per ship, and now and then a
-//!   ship. In the bubble (§5.2) gangs are ships: they lurk at their field,
+//!   gang takes up to [`RAID_T_PER_SHIP`] tonnes per ship, and one time in
+//!   twenty a ship. In the bubble (§5.2) gangs are ships: they lurk at their field,
 //!   fly out under the shared autopilot to intercept a laden trader or the
 //!   player, and fly home again (see [`Prowl`]).
 //! - **Growth and decline.** Every [`GROW_T`] tonnes taken buys a gang
@@ -56,6 +56,8 @@ const SECONDS_PER_DAY: f64 = 86_400.0;
 pub const MAX_SHIPS: usize = 5;
 /// Tonnes stolen that buy a gang another ship.
 pub const GROW_T: f64 = 80.0;
+/// Chance a raid also destroys a ship: pirates are after cargo.
+const SHIP_TAKEN: f64 = 0.05;
 /// Most a raid takes, per raiding ship, in tonnes.
 pub const RAID_T_PER_SHIP: f64 = 25.0;
 /// A gang this long without a raid loses a ship at its review.
@@ -644,7 +646,7 @@ fn rob(
         state.traffic.add(to, good, -take);
     }
     let mut alive = true;
-    if rng.chance(0.2) {
+    if rng.chance(SHIP_TAKEN) {
         robbery.ships_lost = 1;
         let fleet = &mut state.companies[key].fleets[n];
         if fleet.ships > 1 {

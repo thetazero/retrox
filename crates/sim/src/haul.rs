@@ -240,11 +240,13 @@ pub(crate) type Contracts = SecondaryMap<FactionId, f64>;
 
 /// Each system's best buyer of every good, and its most valuable surplus:
 /// what route choice reads instead of scanning every market. Rebuilt at the
-/// start of every trade phase in one pass over settlements.
-/// Only settled systems have an entry.
+/// start of every trade phase in one pass over settlements, in place: it
+/// lives on the [`GalaxyState`] between days so the pass allocates
+/// nothing. Only settled systems have an entry.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Board {
-    systems: HashMap<SystemId, Listing>,
+    /// By system index.
+    systems: Vec<Option<Listing>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -257,11 +259,11 @@ struct Listing {
 }
 
 impl Board {
-    fn build(state: &GalaxyState) -> Self {
-        let mut systems: HashMap<SystemId, Listing> =
-            HashMap::with_capacity(state.settlements.len());
-        for (id, s) in &state.settlements {
-            let listing = systems.entry(s.system).or_insert(Listing {
+    fn rebuild(&mut self, state: &GalaxyState) {
+        self.systems.clear();
+        self.systems.resize(state.systems.len(), None);
+        for (id, s) in state.settlements.iter() {
+            let listing = self.systems[s.system.index()].get_or_insert(Listing {
                 buyers: GoodMap::splat(None),
                 source: None,
             });
@@ -279,7 +281,10 @@ impl Board {
                 }
             }
         }
-        Self { systems }
+    }
+
+    fn get(&self, system: SystemId) -> Option<&Listing> {
+        self.systems.get(system.index())?.as_ref()
     }
 }
 
@@ -518,11 +523,12 @@ pub(crate) fn fleet_index(state: &GalaxyState, company: CompanyId, fleet: u32) -
 
 /// Trade phase: today's events, in the order they were scheduled, then
 /// settlements' monthly founding of new companies. Prices update at the
-/// end.
+/// end of the day ([`crate::phases::prices`]).
 pub fn trade(state: &mut GalaxyState) {
     let today = state.time;
     let contracts = crate::fiscal::open_contracts(state);
-    let board = Board::build(state);
+    let mut board = std::mem::take(&mut state.board);
+    board.rebuild(state);
     for event in state.calendar.take(today) {
         let Some(n) = fleet_index(state, event.company, event.fleet) else {
             continue;
@@ -534,10 +540,10 @@ pub fn trade(state: &mut GalaxyState) {
         }
     }
     crate::bubble::step(state, &contracts, &board);
+    state.board = board;
     crate::pirates::step(state);
     found_companies(state);
     crate::harvest::found(state);
-    crate::economy::update_all_prices(state);
 }
 
 fn arrive(state: &mut GalaxyState, contracts: &Contracts, board: &Board, key: CompanyId, n: usize) {
@@ -811,7 +817,7 @@ fn choose_route(
     let mut considered = 0;
     for &(system, ly, lanes) in reach(state, origin.system, MAX_TRIP_DAYS * class.jump_laden).iter()
     {
-        let Some(listing) = board.systems.get(&system) else {
+        let Some(listing) = board.get(system) else {
             continue;
         };
         considered += 1;
@@ -1174,39 +1180,22 @@ fn pay_upkeep(state: &mut GalaxyState, key: CompanyId, n: usize) {
 /// system.
 fn found_companies(state: &mut GalaxyState) {
     let today = state.time;
-    let day = today.days() % REVIEW_DAYS;
-    let reviewing: Vec<SettlementId> = state
-        .settlements
-        .iter()
-        .filter(|(id, s)| {
-            s.economy.population > 0.0 && slotmap::Key::data(id).as_ffi() % REVIEW_DAYS == day
-        })
-        .map(|(id, _)| id)
-        .collect();
-    if reviewing.is_empty() {
-        return;
-    }
-    // Systems where ships already sit with nothing to carry.
-    let idle_systems: HashSet<SystemId> = state
-        .companies
-        .values()
-        .flat_map(|c| c.fleets.iter())
-        .filter_map(|f| match f.at {
-            Location::Docked(at) if f.idle || f.slack > 0 => {
-                Some(state.settlements.get(at)?.system)
-            }
-            _ => None,
-        })
-        .collect();
-    for id in reviewing {
+    // Systems where ships already sit with nothing to carry: a scan of
+    // every fleet, so made only once a settlement is otherwise ready to
+    // found, which most days none is.
+    let mut idle_systems: Option<HashSet<SystemId>> = None;
+    for i in crate::settlement::review_slots(today.days(), 0, state.settlements.slot_count()) {
+        let Some(id) = state.settlements.key_at(i) else {
+            continue;
+        };
         let entity = slotmap::Key::data(&id).as_ffi();
-        if idle_systems.contains(&state.settlements[id].system)
+        let economy = &state.settlements[id].economy;
+        if economy.population <= 0.0
             || !Rng::stream(state.seed, "found-company", today.days(), entity)
                 .chance(FOUND_COMPANY_CHANCE)
         {
             continue;
         }
-        let economy = &state.settlements[id].economy;
         let cost = |c: &ShipClass| {
             c.mass_t * crate::economy::HULL_PRICE_PER_T
                 + c.cargo_t * FOUNDING_HOLDS * FOUNDING_CREDITS_PER_T
@@ -1227,6 +1216,22 @@ fn found_companies(state: &mut GalaxyState) {
         else {
             continue;
         };
+        let idle = idle_systems.get_or_insert_with(|| {
+            state
+                .companies
+                .values()
+                .flat_map(|c| c.fleets.iter())
+                .filter_map(|f| match f.at {
+                    Location::Docked(at) if f.idle || f.slack > 0 => {
+                        Some(state.settlements.get(at)?.system)
+                    }
+                    _ => None,
+                })
+                .collect()
+        });
+        if idle.contains(&state.settlements[id].system) {
+            continue;
+        }
         // The crew fetches the hull from the nearest yard that has it;
         // with none in reach, the order goes to the nearest yard (or here),
         // which is what shipyards build to.
