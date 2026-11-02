@@ -1,4 +1,4 @@
-//! Procedural meshes: spheres, rocks, the placeholder ship, stations built
+//! Procedural meshes: spheres, rocks, the starter ship, stations built
 //! from a kit of modules, and gates.
 //!
 //! The look is "orbital hardware": cylinders, spheres, trusses and panels,
@@ -339,102 +339,341 @@ fn boxed(center: Vec3, size: Vec3) -> Mat4 {
     Mat4::from_scale_rotation_translation(size, Quat::IDENTITY, center)
 }
 
-/// The placeholder ship: a stubby utility craft, ~24 m long, nose toward -Z.
-/// Enamelled hull with a red livery, a gold-foil service module.
-pub fn placeholder_ship() -> Mesh {
-    let (cyl, cube, ball) = (cylinder(14), cube(), icosphere(1).flat());
+/// A surface of revolution about the Z axis through `profile` points
+/// `(z, r)`, swept from angle `a0` to `a1` (radians, 0 = +X, TAU/4 = +Y).
+/// Smooth around and along the profile; repeat a point for a hard crease.
+pub fn lathe(profile: &[(f32, f32)], segments: u32, a0: f32, a1: f32) -> Mesh {
+    let n = profile.len();
+    // Normal of each profile segment in the (z, r) plane, as (nz, nr).
+    let seg_normal = |i: usize| -> Option<(f32, f32)> {
+        let (z0, r0) = profile[i];
+        let (z1, r1) = profile[i + 1];
+        let (dz, dr) = (z1 - z0, r1 - r0);
+        let len = (dz * dz + dr * dr).sqrt();
+        (len > 1e-6).then(|| (-dr / len, dz / len))
+    };
+    // Per profile point, the normal on each side of it (they differ at creases).
     let mut m = Mesh::default();
-    // Pressurised hull: a cylinder along Z, with red bands.
+    let ring = |a: f32| (a.cos(), a.sin());
+    for i in 0..n - 1 {
+        let Some(own) = seg_normal(i) else { continue };
+        let blend = |other: Option<(f32, f32)>| {
+            other.map_or(own, |o| {
+                let (z, r) = (own.0 + o.0, own.1 + o.1);
+                let l = (z * z + r * r).sqrt().max(1e-6);
+                (z / l, r / l)
+            })
+        };
+        let n0 = blend(if i > 0 { seg_normal(i - 1) } else { None });
+        let n1 = blend(if i + 2 < n { seg_normal(i + 1) } else { None });
+        for j in 0..segments {
+            let (ca, sa) = ring(a0 + (a1 - a0) * j as f32 / segments as f32);
+            let (cb, sb) = ring(a0 + (a1 - a0) * (j + 1) as f32 / segments as f32);
+            let v = |(z, r): (f32, f32), (c, s): (f32, f32), (nz, nr): (f32, f32)| Vertex {
+                pos: [r * c, r * s, z],
+                normal: [nr * c, nr * s, nz],
+                shade: 1.0,
+                paint: 0.0,
+            };
+            let base = m.vertices.len() as u32;
+            m.vertices.extend([
+                v(profile[i], (ca, sa), n0),
+                v(profile[i], (cb, sb), n0),
+                v(profile[i + 1], (cb, sb), n1),
+                v(profile[i + 1], (ca, sa), n1),
+            ]);
+            m.indices
+                .extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+        }
+    }
+    m
+}
+
+/// A fin with a diamond cross-section, in its own frame: the root lies
+/// along Z at y = 0, the span runs up +Y, thickness is along X. `root` and
+/// `tip` are (leading edge z, trailing edge z); `y` is the span range to
+/// build, as fractions of `span` (so a fin can be painted in bands).
+fn fin(root: (f32, f32), tip: (f32, f32), span: f32, thick: f32, y: (f32, f32)) -> Mesh {
+    let section = |f: f32| -> [Vec3; 4] {
+        let le = root.0 + (tip.0 - root.0) * f;
+        let te = root.1 + (tip.1 - root.1) * f;
+        let t = thick * (1.0 - 0.6 * f);
+        let yy = span * f;
+        [
+            Vec3::new(0.0, yy, le),
+            Vec3::new(t, yy, le + (te - le) * 0.35),
+            Vec3::new(0.0, yy, te),
+            Vec3::new(-t, yy, le + (te - le) * 0.35),
+        ]
+    };
+    let (a, b) = (section(y.0), section(y.1));
+    let mut m = Mesh::default();
+    for k in 0..4 {
+        let l = (k + 1) % 4;
+        quad(&mut m, a[k], a[l], b[l], b[k]);
+    }
+    for s in [a, b] {
+        quad(&mut m, s[0], s[1], s[2], s[3]);
+    }
+    m
+}
+
+/// Where the starter's main engine bell ends (object units, +Z is aft).
+pub const STARTER_NOZZLE_Z: f32 = 12.2;
+
+/// Radius of the starter's fuselage at `z` (nose at -12, toward -Z).
+fn starter_radius(z: f32) -> f32 {
+    if z < -5.0 {
+        // A blunt ogive nose.
+        let t = ((z + 12.0) / 7.0).clamp(0.0, 1.0);
+        0.3 + 1.9 * (1.0 - (1.0 - t).powi(2)).powf(0.75)
+    } else {
+        // A long, very slightly tapering cabin.
+        let t = ((z + 5.0) / 9.0).clamp(0.0, 1.0);
+        2.2 - 0.18 * t * t
+    }
+}
+
+fn starter_profile(z0: f32, z1: f32, steps: u32, inflate: f32) -> Vec<(f32, f32)> {
+    (0..=steps)
+        .map(|i| {
+            let z = z0 + (z1 - z0) * i as f32 / steps as f32;
+            (z, starter_radius(z) + inflate)
+        })
+        .collect()
+}
+
+/// The starter ship: a little long-range cutter, ~25 m long, nose toward
+/// -Z. A cream enamel rocket of the old optimistic school: red nose and
+/// cheatline, a wraparound windscreen, lit portholes, three swept
+/// radiator fins, a gold-foil service collar and a clustered engine.
+pub fn starter_ship() -> Mesh {
+    const SEGS: u32 = 36;
+    let (cyl, ball) = (cylinder(16), icosphere(2));
+    let mut m = Mesh::default();
+    let id = Mat4::IDENTITY;
+
+    // Fuselage: red nose cap, cream body.
+    let mut nose = starter_profile(-12.0, -9.6, 8, 0.0);
+    nose.insert(0, (-12.0, 0.0));
+    m.paint(&lathe(&nose, SEGS, 0.0, TAU), id, 1.0, Paint::Red);
     m.add(
-        &cyl,
-        strut(Vec3::new(0.0, 0.0, 8.0), Vec3::new(0.0, 0.0, -6.0), 2.2),
+        &lathe(&starter_profile(-9.6, 4.0, 40, 0.0), SEGS, 0.0, TAU),
+        id,
         1.0,
     );
-    for (from, to) in [(1.6, 3.0), (-4.6, -4.0)] {
+    // Panel seams: thin dark rings.
+    for z in [-9.6, -5.0, 2.6] {
         m.paint(
-            &cyl,
-            strut(Vec3::new(0.0, 0.0, from), Vec3::new(0.0, 0.0, to), 2.26),
+            &lathe(
+                &starter_profile(z - 0.04, z + 0.04, 1, 0.012),
+                SEGS,
+                0.0,
+                TAU,
+            ),
+            id,
+            1.0,
+            Paint::Metal,
+        );
+    }
+
+    // Wraparound windscreen across the top of the nose: a row of panes
+    // set into a dark frame.
+    let up = TAU / 4.0;
+    m.paint(
+        &lathe(
+            &starter_profile(-8.85, -7.75, 6, 0.015),
+            SEGS,
+            up - 0.98,
+            up + 0.98,
+        ),
+        id,
+        1.0,
+        Paint::Metal,
+    );
+    for k in 0..5 {
+        let a = up + (k as f32 - 2.0) * 0.38;
+        m.paint(
+            &lathe(
+                &starter_profile(-8.75, -7.85, 6, 0.03),
+                4,
+                a - 0.16,
+                a + 0.16,
+            ),
+            id,
+            1.0,
+            Paint::Glass,
+        );
+    }
+
+    // Red cheatline down each flank, with a thin cream pinstripe below.
+    for side in [0.0, TAU / 2.0] {
+        m.paint(
+            &lathe(
+                &starter_profile(-9.6, 3.4, 30, 0.01),
+                3,
+                side - 0.11,
+                side + 0.07,
+            ),
+            id,
+            1.0,
+            Paint::Red,
+        );
+        m.paint(
+            &lathe(
+                &starter_profile(-9.0, 3.4, 30, 0.01),
+                2,
+                side - 0.17,
+                side - 0.14,
+            ),
+            id,
             1.0,
             Paint::Red,
         );
     }
-    // Cockpit ball with a glazed band.
-    m.add(
-        &ball,
-        Mat4::from_scale_rotation_translation(
-            Vec3::splat(2.4),
-            Quat::IDENTITY,
-            Vec3::new(0.0, 0.3, -7.0),
-        ),
-        0.95,
-    );
-    m.paint(
-        &cube,
-        boxed(Vec3::new(0.0, 0.9, -8.6), Vec3::new(2.6, 0.7, 1.2)),
-        1.0,
-        Paint::Glass,
-    );
-    // Service module in thermal blanket, and the engine bell.
-    m.paint(
-        &cube,
-        boxed(Vec3::new(0.0, 0.0, 9.5), Vec3::new(3.6, 3.6, 3.0)),
-        1.0,
-        Paint::Foil,
-    );
+
+    // Round portholes above the cheatline, glowing warm.
+    for side in [-1.0f32, 1.0] {
+        for k in 0..5 {
+            let z = -3.6 + k as f32 * 1.35;
+            let a: f32 = 0.38;
+            let r = starter_radius(z);
+            let n = Vec3::new(side * a.cos(), a.sin(), 0.0);
+            let rot = Quat::from_rotation_arc(Vec3::Y, n);
+            m.paint(
+                &cyl,
+                Mat4::from_translation(Vec3::new(0.0, 0.0, z))
+                    * Mat4::from_scale_rotation_translation(
+                        Vec3::new(0.36, 0.06, 0.36),
+                        rot,
+                        n * (r - 0.02),
+                    ),
+                1.0,
+                Paint::Metal,
+            );
+            m.paint(
+                &cyl,
+                Mat4::from_translation(Vec3::new(0.0, 0.0, z))
+                    * Mat4::from_scale_rotation_translation(
+                        Vec3::new(0.27, 0.09, 0.27),
+                        rot,
+                        n * (r - 0.02),
+                    ),
+                1.0,
+                Paint::Glass,
+            );
+        }
+    }
+
+    // Docking probe on the nose.
     m.paint(
         &cyl,
-        strut(Vec3::new(0.0, 0.0, 11.0), Vec3::new(0.0, 0.0, 13.0), 1.6),
+        strut(Vec3::new(0.0, 0.0, -11.9), Vec3::new(0.0, 0.0, -12.9), 0.12),
         1.0,
         Paint::Metal,
     );
-    // Side pods on struts.
-    for side in [-1.0f32, 1.0] {
+    m.paint(
+        &ball,
+        Mat4::from_scale_rotation_translation(
+            Vec3::splat(0.2),
+            Quat::IDENTITY,
+            Vec3::new(0.0, 0.0, -12.95),
+        ),
+        1.0,
+        Paint::Metal,
+    );
+
+    // Service collar in gold thermal blanket, between two dark rings.
+    let collar = [(3.6, 2.08), (3.8, 2.32), (6.4, 2.32), (6.6, 2.1)];
+    m.paint(&lathe(&collar, SEGS, 0.0, TAU), id, 1.0, Paint::Foil);
+    for z in [3.7f32, 6.5] {
         m.paint(
-            &cyl,
-            strut(
-                Vec3::new(side * 1.5, 0.0, 3.0),
-                Vec3::new(side * 4.8, -0.5, 3.0),
-                0.25,
-            ),
+            &lathe(&[(z - 0.1, 2.36), (z + 0.1, 2.36)], SEGS, 0.0, TAU),
+            id,
             1.0,
             Paint::Metal,
         );
+    }
+    // Thrust structure tapering to the engine, in dark metal.
+    let tail = [
+        (6.6, 2.1),
+        (6.6, 2.1),
+        (7.6, 1.9),
+        (8.8, 1.25),
+        (8.8, 1.25),
+        (8.8, 0.0),
+    ];
+    m.paint(&lathe(&tail, SEGS, 0.0, TAU), id, 0.9, Paint::Metal);
+
+    // Main bell, flaring, with a cream throat ring; four verniers around it.
+    let bell: Vec<(f32, f32)> = (0..=10)
+        .map(|i| {
+            let t = i as f32 / 10.0;
+            (8.6 + (STARTER_NOZZLE_Z - 8.6) * t, 0.6 + 1.0 * t.powf(1.6))
+        })
+        .collect();
+    m.paint(&lathe(&bell, SEGS, 0.0, TAU), id, 1.0, Paint::Metal);
+    m.add(&lathe(&[(8.7, 0.78), (9.2, 0.78)], SEGS, 0.0, TAU), id, 0.9);
+    let vernier: Vec<(f32, f32)> = bell
+        .iter()
+        .map(|&(z, r)| (z * 0.4 + 4.9, r * 0.32))
+        .collect();
+    for k in 0..4 {
+        let a = (k as f32 + 0.5) * TAU / 4.0;
+        let at = Vec3::new(a.cos(), a.sin(), 0.0) * 1.45;
         m.paint(
-            &cyl,
-            strut(
-                Vec3::new(side * 5.0, -0.5, 7.5),
-                Vec3::new(side * 5.0, -0.5, -1.0),
-                0.9,
-            ),
+            &lathe(&vernier, 16, 0.0, TAU),
+            Mat4::from_translation(at),
+            1.0,
+            Paint::Metal,
+        );
+    }
+
+    // Three swept radiator fins: dorsal, and two ventral at ±120°, red-tipped.
+    for k in 0..3 {
+        let a = k as f32 * TAU / 3.0;
+        let rot = Mat4::from_rotation_z(a);
+        let root_z = 0.4;
+        let at = Mat4::from_translation(Vec3::new(0.0, starter_radius(root_z) - 0.25, 0.0));
+        let (root, tip, span, thick) = ((root_z, 7.2), (6.0, 8.8), 3.4, 0.22);
+        m.add(&fin(root, tip, span, thick, (0.0, 0.7)), rot * at, 1.0);
+        m.paint(
+            &fin(root, tip, span, thick, (0.7, 1.0)),
+            rot * at,
             1.0,
             Paint::Red,
         );
-        m.add(
-            &cyl,
-            strut(
-                Vec3::new(side * 5.0, -0.5, -1.0),
-                Vec3::new(side * 5.0, -0.5, -1.6),
-                0.7,
-            ),
-            0.9,
-        );
-        // Radiator fin, with a beacon on top.
-        m.add(
-            &cube,
-            boxed(Vec3::new(side * 5.0, 1.4, 4.0), Vec3::new(0.15, 2.6, 5.0)),
-            1.1,
-        );
+        // A beacon on each tip.
         m.paint(
             &ball,
-            Mat4::from_scale_rotation_translation(
-                Vec3::splat(0.22),
-                Quat::IDENTITY,
-                Vec3::new(side * 5.0, 2.8, 6.4),
-            ),
+            rot * at
+                * Mat4::from_scale_rotation_translation(
+                    Vec3::splat(0.16),
+                    Quat::IDENTITY,
+                    Vec3::new(0.0, span + 0.05, tip.0 + 0.5),
+                ),
             1.0,
             Paint::Beacon,
         );
     }
+
+    // A whip antenna behind the windscreen.
+    m.paint(
+        &cyl,
+        strut(Vec3::new(0.0, 2.1, -5.6), Vec3::new(0.0, 3.4, -4.4), 0.04),
+        1.0,
+        Paint::Metal,
+    );
+    m.paint(
+        &ball,
+        Mat4::from_scale_rotation_translation(
+            Vec3::splat(0.09),
+            Quat::IDENTITY,
+            Vec3::new(0.0, 3.4, -4.4),
+        ),
+        1.0,
+        Paint::Red,
+    );
     m
 }
 

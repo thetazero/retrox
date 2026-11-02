@@ -1,4 +1,4 @@
-//! `retrox-client` — the game. For now: fly a placeholder ship around a
+//! `retrox-client` — the game. For now: fly a ship around a
 //! procedurally generated star system, fast travel between planets, dock,
 //! land, and jump along hyperlanes while the galaxy simulates around you.
 
@@ -41,11 +41,18 @@ fn main() {
         .skip_while(|a| a != "--screenshot")
         .nth(1)
         .map(std::path::PathBuf::from);
+    // `--ship-view <yaw degrees>`: look at your ship from that angle, close
+    // up (0 = from behind, 90 = from the right). For inspecting the model.
+    let ship_view = std::env::args()
+        .skip_while(|a| a != "--ship-view")
+        .nth(1)
+        .and_then(|s| s.parse::<f64>().ok());
     let mut app = App {
         seed,
         undocked,
         station,
         screenshot,
+        ship_view,
         running: None,
     };
     event_loop.run_app(&mut app).expect("run");
@@ -58,6 +65,7 @@ struct App {
     /// Start docked at a station, in the first system that has one.
     station: bool,
     screenshot: Option<std::path::PathBuf>,
+    ship_view: Option<f64>,
     running: Option<Running>,
 }
 
@@ -83,6 +91,7 @@ struct Running {
     last_frame: Instant,
     start: Instant,
     frames: u32,
+    ship_view: Option<f64>,
 }
 
 impl ApplicationHandler for App {
@@ -123,7 +132,7 @@ impl ApplicationHandler for App {
 
         let meshes = Meshes {
             sphere: renderer.add_mesh(&meshes::icosphere(5)),
-            ship: renderer.add_mesh(&meshes::placeholder_ship()),
+            ship: renderer.add_mesh(&meshes::starter_ship()),
             rocks: (0..8)
                 .map(|i| renderer.add_mesh(&meshes::rock(i * 7919 + 13)))
                 .collect(),
@@ -157,6 +166,7 @@ impl ApplicationHandler for App {
             last_frame: Instant::now(),
             start: Instant::now(),
             frames: 0,
+            ship_view: self.ship_view,
         });
     }
 
@@ -325,7 +335,15 @@ impl Running {
             self.renderer.set_sky(&sky(&self.world), core, out);
         }
 
-        let (cam_pos, cam_rot) = self.world.camera();
+        let (mut cam_pos, mut cam_rot) = self.world.camera();
+        if let Some(yaw) = self.ship_view {
+            let rot = self.world.ship.rot;
+            let dir =
+                DQuat::from_rotation_y(yaw.to_radians()) * DVec3::new(0.0, 0.4, 1.0).normalize();
+            let offset = rot * dir * 38.0;
+            cam_pos = self.world.ship_position() + offset;
+            cam_rot = rot * world::look_rotation(-dir);
+        }
         let (w, h) = self.renderer.size();
         let proj = glam::camera::rh::proj::directx::perspective_infinite_reverse(
             70f32.to_radians(),
@@ -515,7 +533,7 @@ fn scene(world: &World, meshes: &Meshes, cam: DVec3) -> Vec<(MeshId, Instance)> 
                 0.0,
                 light(pos),
             )
-            .with_detail(0.5),
+            .with_detail(0.25),
         ));
         // Engine plume, growing with the throttle.
         let thrust = world.ship.throttle.max(0.0) as f32;
@@ -525,9 +543,9 @@ fn scene(world: &World, meshes: &Meshes, cam: DVec3) -> Vec<(MeshId, Instance)> 
                 meshes.sphere,
                 Instance::new(
                     Mat4::from_scale_rotation_translation(
-                        Vec3::new(0.7, 0.7, len),
+                        Vec3::new(1.1, 1.1, len),
                         rot,
-                        rel(pos) + rot * Vec3::new(0.0, 0.0, 13.0 + len * 0.6),
+                        rel(pos) + rot * Vec3::new(0.0, 0.0, meshes::STARTER_NOZZLE_Z + len * 0.7),
                     ),
                     [0.35, 0.7, 1.0],
                     Surface::Star,
