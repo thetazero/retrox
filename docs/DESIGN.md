@@ -943,6 +943,13 @@ Decided while bringing every screen into one style (issue #77):
   teal; radiators and cargo cream).
 - **Key legends** (the corner strip from §8.3, the star chart's legend)
   are cream keycaps with the action in uppercase mono beside them.
+- **One lamp and one keycap** (audit 2, #101): every indicator lamp (HUD,
+  star chart, rewind deck) and every keycap (corner strip, hints, legends)
+  is painted by the same kit function, keycaps in mono 13, so they match
+  from screen to screen.
+- **Counts and estimates read as words:** "1 jump", "this system",
+  "1 settlement"; an estimated trip is "about 39 d". Never "~": in the
+  mono face it reads as a minus sign.
 
 ### 8.5 Sound
 
