@@ -289,6 +289,11 @@ pub(crate) struct TradeLists {
     /// crews fetch hulls, and where orders for them go.
     #[serde(default)]
     yards: [Option<Listed>; LISTED_YARDS],
+    /// The system's own settlements with a shipyard, as of these lists:
+    /// what its neighbours' lists read, rather than every neighbour's
+    /// facilities.
+    #[serde(default)]
+    own_yards: [Option<SettlementId>; LISTED_YARDS],
 }
 
 /// A settlement on a trade list, with how far it is.
@@ -406,21 +411,25 @@ impl Board {
                 insert_ranked(&mut lists.sources, entry);
             }
             // Nearest first already, so yards just fill up in order.
-            if let Some(free) = lists.yards.iter().position(Option::is_none) {
-                let yards = state.settlements_in(near).filter(|(_, s)| {
-                    s.economy
-                        .facilities
-                        .iter()
-                        .any(|f| f.kind == crate::economy::FacilityKind::Shipyard)
+            let theirs = match self.lists.get(near.index()) {
+                Some(Some(l)) if near != system => l.own_yards,
+                _ => own_yards(state, near),
+            };
+            if near == system {
+                lists.own_yards = theirs;
+            }
+            let free = lists.yards.iter().filter(|y| y.is_none()).count();
+            let start = LISTED_YARDS - free;
+            for (slot, at) in lists.yards[start..]
+                .iter_mut()
+                .zip(theirs.into_iter().flatten())
+            {
+                *slot = Some(Listed {
+                    at,
+                    ly,
+                    jumps,
+                    rank: -ly,
                 });
-                for ((at, _), slot) in yards.zip(&mut lists.yards[free..]) {
-                    *slot = Some(Listed {
-                        at,
-                        ly,
-                        jumps,
-                        rank: -ly,
-                    });
-                }
             }
         }
         lists
@@ -434,6 +443,21 @@ impl Board {
             _ => std::borrow::Cow::Owned(self.make_lists(state, system)),
         }
     }
+}
+
+/// The settlements in `system` with a shipyard, as many as a list holds.
+fn own_yards(state: &GalaxyState, system: SystemId) -> [Option<SettlementId>; LISTED_YARDS] {
+    let mut out = [None; LISTED_YARDS];
+    let yards = state.settlements_in(system).filter(|(_, s)| {
+        s.economy
+            .facilities
+            .iter()
+            .any(|f| f.kind == crate::economy::FacilityKind::Shipyard)
+    });
+    for (slot, (id, _)) in out.iter_mut().zip(yards) {
+        *slot = Some(id);
+    }
+    out
 }
 
 /// How far trade lists look: as far as the longest-legged class goes in a
