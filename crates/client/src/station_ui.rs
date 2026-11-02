@@ -154,7 +154,7 @@ fn hub(ctx: &egui::Context, w: &World, here: SettlementId, actions: &mut Vec<Act
 }
 
 /// A big menu entry: a title in display type, a note under it, an arrow.
-fn menu_button(ui: &mut egui::Ui, title: &str, note: &str, enabled: bool) -> bool {
+pub(crate) fn menu_button(ui: &mut egui::Ui, title: &str, note: &str, enabled: bool) -> bool {
     let width = ui.available_width();
     let sense = if enabled {
         Sense::click()
