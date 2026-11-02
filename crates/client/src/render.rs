@@ -18,6 +18,18 @@ use crate::meshes::{Mesh, Vertex};
 pub const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
+/// What a rock's veins are made of, for their colour; must match
+/// `mesh.wgsl`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u32)]
+pub enum VeinKind {
+    None = 0,
+    Ore = 1,
+    Ice = 2,
+    /// Pulses red: it bursts when it breaks.
+    Volatile = 3,
+}
+
 /// Surface shading modes; must match `mesh.wgsl`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u32)]
@@ -45,6 +57,10 @@ pub enum Surface {
     Flash = 23,
     /// A star's corona, on a shell `detail` times the star's radius.
     Corona = 24,
+    /// The dust of an asteroid belt, on a sphere round the camera: sunlit,
+    /// brightest toward the sun, thickest along the belt (`aux`: the
+    /// camera from the field's centre, and its radius).
+    Dust = 25,
 }
 
 #[repr(C)]
@@ -54,6 +70,9 @@ pub struct Instance {
     pub color: [f32; 4],
     pub params: [f32; 4],
     pub light: [f32; 4],
+    /// Surface-specific extras. Rock: up to four vein points, packed
+    /// (`Instance::with_veins`). Dust: the camera's place in the field.
+    pub aux: [f32; 4],
 }
 
 impl Instance {
@@ -72,6 +91,7 @@ impl Instance {
             color: [color[0], color[1], color[2], 0.0],
             params: [surface as u32 as f32, emissive, seed, 0.0],
             light,
+            aux: [0.0; 4],
         }
     }
 
@@ -90,6 +110,30 @@ impl Instance {
     /// otherwise.
     pub fn own_hull(mut self) -> Self {
         self.params[2] = -1.0;
+        self
+    }
+
+    /// Rock: the veins a prospector has read, as points in the mesh's own
+    /// space (within ±[`crate::mining::ROCK_BOUND`]), drawn as ore seams in
+    /// the rock in the colour of `kind`, and how thick the belt's dust is
+    /// (per metre) between the camera and the rock.
+    pub fn with_veins(mut self, points: &[Vec3], kind: VeinKind, dust: f32) -> Self {
+        let bound = crate::mining::ROCK_BOUND as f32;
+        for (slot, p) in self.aux.iter_mut().zip(points) {
+            let q = (*p / bound * 0.5 + Vec3::splat(0.5)).clamp(Vec3::ZERO, Vec3::ONE) * 255.0;
+            let [x, y, z] = [q.x, q.y, q.z].map(|c| c.round() as u32);
+            // Exact in an f32 (under 2^24); 0 means no vein.
+            *slot = (1 + x + y * 256 + z * 65_536) as f32;
+        }
+        self.params[3] = kind as u32 as f32;
+        self.color[3] = dust;
+        self
+    }
+
+    /// Dust: the camera's place relative to the field's centre (metres)
+    /// and the field's radius.
+    pub fn with_aux(mut self, aux: [f32; 4]) -> Self {
+        self.aux = aux;
         self
     }
 
@@ -325,7 +369,7 @@ impl Renderer {
             wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32, 10 => Float32];
         let instance_attrs = wgpu::vertex_attr_array![
             3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4,
-            7 => Float32x4, 8 => Float32x4, 9 => Float32x4
+            7 => Float32x4, 8 => Float32x4, 9 => Float32x4, 11 => Float32x4
         ];
         let mesh_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("mesh"),

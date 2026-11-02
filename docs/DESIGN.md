@@ -1615,6 +1615,33 @@ Decided while making mining in a belt look finished (issue #156):
   nearest, so a miner can find one. Every field has quarries (about one
   rock in ten is over 60 m), but rarely within 1.5 km of where fast
   travel stops, which read as "this belt has none".
+Decided while making a belt look like one (issue #182):
+
+- **Rocks are broken pieces, not eggs.** Twenty shapes, each a lumpy,
+  stretched body with three to six flat fracture faces where pieces came
+  off, craters with rims, and knobs and chips, scaled so it looks as big
+  as its readout says. The shape is one function of direction, so the
+  ship, the laser and loose ore all meet the surface that's drawn.
+- **Detail by distance:** each shape is drawn at three levels (80, 1 280
+  and 20 480 triangles) by how big it looks, so a quarry close up has no
+  straight edges and a speck costs nothing. Its surface relief (lumps,
+  grit and craters from its own size down to the pixel, in metres) and
+  its blotches of lighter and darker stone are worked out per pixel, so
+  nothing stretches or blurs close up.
+- **Veins are seams of ore in the rock**, not lamps on it: a ragged patch
+  as big as the laser's "on a vein" mark, stained with the ore, with
+  stringers running through it along one grain and glowing out of it
+  (amber ore, pale blue ice, pulsing red on a volatile rock).
+- **A belt is dense and deep:** gravel and boulders too small to work
+  (at most 11 m across; the smallest mineable rock is 16 m) lie between the
+  rocks, as thick as the rocks are and thinning toward the field's edge.
+  Far boulders are specks that shrink away before the ship reaches them
+  and gravel shrinks away from round the ship, so nothing that can't be
+  mined looks as if it could be. Sunlit dust fills the field: a faint
+  veil everywhere, a glow round the sun, and far rocks fade into it.
+- **A fracture is a spark and a puff of dust**, never a glaring ball;
+  a quarry calving flashes boulder-sized.
+
 - **Loose ore** is a small diamond: filled while the tractor has it,
   hollow out of its reach, dim cream when the hold is full. The nearest
   piece out of reach says how far it is (*LOOSE ORE · 196 m*), or *HOLD

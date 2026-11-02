@@ -39,6 +39,7 @@ and `--menu pause|quit` opens over a fresh game.
 | `--undocked` | start in space: just out of the station, or launched |
 | `--field` | start in an asteroid field facing a rock, prospected |
 | `--sunward` | start in the field with the biggest sun in its sky, the sun behind the rock |
+| `--quarry [back]` | start in the field a couple of hundred metres off a quarry, the sun behind the ship (or behind the quarry) |
 | `--fire` | hold the mining laser's trigger down |
 | `--traffic` | start in space alongside a trader fleet |
 | `--skim` | start skimming a gas giant |

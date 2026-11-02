@@ -46,6 +46,9 @@ use crate::world::{SECONDS_PER_DAY, rock_offset};
 
 /// How far the rock under the crosshair is read out, metres.
 pub const READOUT_RANGE: f64 = 2000.0;
+/// How thick a belt's dust is, per metre of sight: a rock 14 km off is
+/// half veiled by it (mesh.wgsl's dust).
+pub const BELT_DUST: f64 = 5.0e-5;
 /// How far a prospector ping reaches, metres.
 pub const SCAN_RANGE: f64 = 3000.0;
 const SCAN_COOLDOWN: f64 = 3.0;
@@ -73,8 +76,9 @@ const VEIN_HEAT: f64 = 0.6;
 /// A locked laser comes back once it has cooled to this.
 const UNLOCK_HEAT: f64 = 0.2;
 
-/// The rock meshes, by index; see [`rock_mesh`].
-pub const ROCK_MESHES: usize = 8;
+/// The rock meshes, by index; see [`rock_mesh`]. Each is its own broken
+/// shape, so a field isn't copies of one rock at different sizes.
+pub const ROCK_MESHES: usize = 20;
 
 /// Which of the [`ROCK_MESHES`] a rock with this seed is drawn with.
 pub fn rock_mesh(seed: u64) -> usize {
@@ -86,44 +90,132 @@ pub fn rock_mesh_seed(i: usize) -> u64 {
     i as u64 * 7919 + 13
 }
 
-/// The lumpy shape of a rock mesh, so the laser hits the surface you see
-/// and veins sit on it.
+/// The shape of a rock: how far its surface is from its centre in each
+/// direction, so the laser hits the surface you see and veins sit on it.
+/// An asteroid is a broken thing (DESIGN §8.7): a lumpy body, stretched,
+/// with flat fracture faces where pieces came off, craters and knobs, all
+/// one function of direction so a rock is solid exactly where it's drawn.
 #[derive(Clone, Debug)]
 pub struct RockShape {
-    bumps: Vec<(Vec3, f32)>,
+    /// Broad lumps and hollows: direction, height, sharpness (a power).
+    lumps: Vec<(Vec3, f32, i32)>,
+    /// Fracture faces: the plane's normal and its distance from the centre.
+    cuts: Vec<(Vec3, f32)>,
+    /// Craters: centre direction, angular radius (radians), depth.
+    craters: Vec<(Vec3, f32, f32)>,
+    /// Knobs and chips all over, faces included.
+    chips: Vec<(Vec3, f32, i32)>,
     pub squash: Vec3,
+}
+
+fn unit(rng: &mut Rng) -> Vec3 {
+    Vec3::new(
+        rng.range(-1.0, 1.0) as f32,
+        rng.range(-1.0, 1.0) as f32,
+        rng.range(-1.0, 1.0) as f32,
+    )
+    .normalize_or(Vec3::Y)
 }
 
 impl RockShape {
     pub fn new(seed: u64) -> Self {
         let mut rng = Rng::new(seed);
-        // A few random "dents and bulges" plus overall squash.
-        let bumps = (0..7)
+        let lumps = (0..12)
             .map(|_| {
-                let dir = Vec3::new(
-                    rng.range(-1.0, 1.0) as f32,
-                    rng.range(-1.0, 1.0) as f32,
-                    rng.range(-1.0, 1.0) as f32,
-                )
-                .normalize_or(Vec3::Y);
-                (dir, rng.range(-0.35, 0.3) as f32)
+                let sharp = [1, 2, 3, 5, 8][rng.below(5)];
+                (unit(&mut rng), rng.range(-0.4, 0.38) as f32, sharp)
             })
             .collect();
-        let squash = Vec3::new(
-            rng.range(0.7, 1.2) as f32,
-            rng.range(0.5, 0.9) as f32,
-            rng.range(0.7, 1.3) as f32,
-        );
-        Self { bumps, squash }
+        // Two to five fracture faces: what makes a rock read as a broken
+        // piece rather than a pebble. One is usually big.
+        let n_cuts = 3 + rng.below(4);
+        let cuts = (0..n_cuts)
+            .map(|k| {
+                let depth = if k == 0 {
+                    rng.range(0.5, 0.66)
+                } else {
+                    rng.range(0.64, 0.88)
+                };
+                (unit(&mut rng), depth as f32)
+            })
+            .collect();
+        let craters = (0..2 + rng.below(4))
+            .map(|_| {
+                let size = rng.range(0.18, 0.55) as f32;
+                (unit(&mut rng), size, size * rng.range(0.12, 0.25) as f32)
+            })
+            .collect();
+        let chips = (0..36)
+            .map(|_| {
+                let sharp = 30 + rng.below(150) as i32;
+                (unit(&mut rng), rng.range(-0.06, 0.07) as f32, sharp)
+            })
+            .collect();
+        // Stretched one way or another: some long, some flat, few round.
+        let long = rng.range(1.0, 1.3) as f32;
+        let mid = rng.range(0.7, 1.0) as f32;
+        let short = rng.range(0.5, 0.78) as f32;
+        let squash = match rng.below(3) {
+            0 => Vec3::new(long, short, mid),
+            1 => Vec3::new(mid, short, long),
+            _ => Vec3::new(short, mid, long),
+        };
+        let mut shape = Self {
+            lumps,
+            cuts,
+            craters,
+            chips,
+            squash,
+        };
+        // As big as its size says: a rock whose faces cut deep is scaled
+        // back up, so it reads as big as the readout's "13 M" across. Its
+        // farthest point stays inside [`ROCK_BOUND`].
+        let (mut sum, mut far) = (0.0f32, 0.0f32);
+        let samples = 400;
+        for i in 0..samples {
+            // A Fibonacci sphere: evenly spread directions.
+            let y = 1.0 - 2.0 * (i as f32 + 0.5) / samples as f32;
+            let r = (1.0 - y * y).sqrt();
+            let a = i as f32 * 2.399_963;
+            let d = Vec3::new(r * a.cos(), y, r * a.sin());
+            let len = shape.surface(d).length();
+            sum += len;
+            far = far.max(len);
+        }
+        let scale = (0.88 / (sum / samples as f32)).min(1.68 / far);
+        shape.squash *= scale;
+        shape
     }
 
     /// Bulge along a unit direction, before squashing.
     pub fn bulge(&self, dir: Vec3) -> f32 {
         let mut r = 1.0;
-        for (b, amount) in &self.bumps {
-            r += amount * dir.dot(*b).max(0.0).powi(3);
+        for &(b, amount, sharp) in &self.lumps {
+            r += amount * dir.dot(b).max(0.0).powi(sharp);
         }
-        r
+        // Fracture faces: the surface along `dir` is no further out than
+        // the plane, softened a touch so edges catch the light.
+        for &(n, h) in &self.cuts {
+            let k = dir.dot(n);
+            if k > 1e-3 {
+                r = smooth_min(r, h / k, 0.04);
+            }
+        }
+        let mut dent = 0.0;
+        for &(c, size, depth) in &self.craters {
+            // Angle from the centre, as a fraction of the crater's radius.
+            let a = dir.dot(c).clamp(-1.0, 1.0).acos() / size;
+            if a < 1.6 {
+                dent += if a < 1.0 { -depth * (1.0 - a * a) } else { 0.0 }
+                    + depth * 0.3 * (-((a - 1.0) / 0.22).powi(2)).exp();
+            }
+        }
+        let mut chip = 0.0;
+        for &(b, amount, sharp) in &self.chips {
+            chip += amount * dir.dot(b).max(0.0).powi(sharp);
+        }
+        // Nothing reaches past [`BOUND`] (squash ≤ 1.3).
+        ((r + dent) * (1.0 + chip)).clamp(0.4, 1.32)
     }
 
     /// The surface point along a unit direction, in unit rock space.
@@ -141,8 +233,7 @@ impl RockShape {
     /// Where a ray (unit rock space) first enters the rock, as a distance
     /// along it, if it does.
     fn hit(&self, origin: Vec3, dir: Vec3) -> Option<f32> {
-        // Nothing reaches past this: bulges ≤ 1.3, squash ≤ 1.3.
-        const BOUND: f32 = 1.75;
+        const BOUND: f32 = ROCK_BOUND as f32;
         let b = origin.dot(dir);
         let c = origin.length_squared() - BOUND * BOUND;
         let disc = b * b - c;
@@ -178,6 +269,16 @@ impl RockShape {
         }
         None
     }
+}
+
+/// Nothing of a rock reaches past this many times its radius: bulges are
+/// at most 1.32, squash at most 1.3.
+pub const ROCK_BOUND: f64 = 1.75;
+
+/// A smooth minimum: `min(a, b)`, rounded over a width `k`.
+fn smooth_min(a: f32, b: f32, k: f32) -> f32 {
+    let h = (0.5 + 0.5 * (b - a) / k).clamp(0.0, 1.0);
+    b + (a - b) * h - k * h * (1.0 - h)
 }
 
 static SHAPES: LazyLock<Vec<RockShape>> = LazyLock::new(|| {
@@ -349,15 +450,20 @@ pub struct LiveRock {
 impl LiveRock {
     /// World-space (field-relative) centres of the veins, while they last.
     pub fn vein_points(&self) -> impl Iterator<Item = DVec3> + '_ {
+        self.vein_marks()
+            .map(move |v| self.pos + self.rot * (v.as_dvec3() * self.radius))
+    }
+
+    /// The centres of the veins, while they last, on the rock's mesh (its
+    /// own axes, unit radius): where they're drawn.
+    pub fn vein_marks(&self) -> impl Iterator<Item = Vec3> + '_ {
         let veins = if self.worked_out {
             &[][..]
         } else {
             self.lode.veins()
         };
         let shape = shape(self.seed);
-        veins
-            .iter()
-            .map(move |&v| self.pos + self.rot * (shape.surface(v).as_dvec3() * self.radius))
+        veins.iter().map(move |&v| shape.surface(v))
     }
 
     /// Tonnes of ore its next fracture gives, before any vein bonus.
@@ -390,7 +496,7 @@ impl Solid {
 
     /// Nothing of the rock reaches past this, metres.
     pub fn bound(&self) -> f64 {
-        self.radius * 1.75
+        self.radius * ROCK_BOUND
     }
 
     /// If `p` is within `margin` of the surface or inside, how to move it
@@ -614,7 +720,7 @@ impl Mining {
         for rock in self.live_rocks(id, field, rocks, clock_s) {
             let to = rock.pos - origin;
             let along = to.dot(dir);
-            let bound = rock.radius * 1.75;
+            let bound = rock.radius * ROCK_BOUND;
             if along < -bound
                 || along - bound > range
                 || (to - dir * along).length_squared() > bound * bound
@@ -910,7 +1016,7 @@ impl Mining {
             });
         }
 
-        let size = if quarry { 20.0 } else { rock.radius };
+        let size = if quarry { 14.0 } else { rock.radius };
         self.bursts.push(Burst {
             pos: source,
             radius: size * if lode.volatile { 2.5 } else { 1.2 },

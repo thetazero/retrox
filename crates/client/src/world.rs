@@ -1745,6 +1745,37 @@ impl World {
         true
     }
 
+    /// Park in the first field (as `--field`) a couple of hundred metres
+    /// off the quarry nearest its centre, the sun behind the ship
+    /// (`--quarry`) or behind the quarry (`--quarry back`), for close-ups
+    /// of rock (#182). Returns whether there was one.
+    pub fn start_at_quarry(&mut self, backlit: bool) -> bool {
+        if !self.start_at_field() {
+            return false;
+        }
+        let Some(Place::Field(field)) = self.target else {
+            return false;
+        };
+        let rocks = rocks(&self.galaxy.fields[field]);
+        let Some(rock) = rocks
+            .iter()
+            .filter(|r| r.radius_m > crate::mining::QUARRY_RADIUS)
+            .min_by(|a, b| rock_offset(a).length().total_cmp(&rock_offset(b).length()))
+        else {
+            return false;
+        };
+        let centre = rock_offset(rock);
+        let sun = (-self.position(Place::Field(field))).normalize();
+        let side = if backlit { -sun } else { sun };
+        // A little above and to one side, so the light rakes across it.
+        let back = (side + DVec3::Y * 0.3 + sun.cross(DVec3::Y) * 0.5).normalize();
+        self.ship.rel = centre + back * (rock.radius_m * 1.6 + 200.0);
+        self.ship.rot = look_rotation(centre - self.ship.rel);
+        self.cam_rot = self.ship.rot;
+        self.update_field();
+        true
+    }
+
     /// Start in the field whose sun looks biggest from it, parked with the
     /// sun right behind the rock (`--sunward`, for screenshots of #156).
     pub fn start_sunward(&mut self) -> bool {
