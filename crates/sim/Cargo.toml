@@ -1,0 +1,16 @@
+[package]
+name = "retrox-sim"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+slotmap.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

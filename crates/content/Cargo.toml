@@ -1,0 +1,12 @@
+[package]
+name = "retrox-content"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+retrox-sim.workspace = true
