@@ -108,10 +108,12 @@ fn money_is_conserved() {
     );
 }
 
+/// Fleets are sized to the freight there is (#72): generation starts with
+/// more ships than freight, and the idle ones go for scrap, while
+/// shipyards keep building for new companies where there is freight.
 #[test]
-fn shipyards_grow_the_fleet() {
+fn fleets_follow_freight() {
     let mut state = small();
-    let start = economy::summarize(&state).ships;
     assert!(
         state.settlements.values().any(|s| s
             .economy
@@ -120,11 +122,28 @@ fn shipyards_grow_the_fleet() {
             .any(|f| f.kind == FacilityKind::Shipyard)),
         "no shipyards"
     );
-    for _ in 0..360 * 2 {
+    let start: std::collections::HashSet<_> = state.companies.keys().collect();
+    for _ in 0..360 * 3 {
         tick(&mut state);
     }
-    let end = economy::summarize(&state).ships;
-    assert!(end > start, "fleet didn't grow: {start} -> {end}");
+    let founded = state
+        .companies
+        .keys()
+        .filter(|k| !start.contains(k))
+        .count();
+    assert!(founded > 0, "no new companies in three years");
+    let (mut ships, mut idle) = (0, 0);
+    for fleet in state.companies.values().flat_map(|c| c.fleets.iter()) {
+        ships += fleet.ships;
+        if fleet.idle || fleet.slack >= haul::SLACK_REVIEWS {
+            idle += fleet.ships;
+        }
+    }
+    assert!(ships > 0, "no ships left");
+    assert!(
+        idle * 5 < ships,
+        "{idle} of {ships} ships have nothing to carry"
+    );
 }
 
 #[test]
@@ -204,4 +223,76 @@ fn crowded_settlements_send_colonists() {
         assert!(state.factions.contains_key(s.owner));
         assert!(state.systems[s.system].settlements.contains(&id));
     }
+}
+
+#[test]
+fn stalled_projects_are_cut_short() {
+    use retrox_sim::economy::{GoodMap, Project};
+    let mut state = small();
+    let id = state
+        .settlements
+        .iter()
+        .find(|(_, s)| s.economy.population > 1.0)
+        .map(|(id, _)| id)
+        .expect("a populated settlement");
+    // More material than the galaxy holds: it can never finish.
+    let mut needs = GoodMap::splat(0.0);
+    needs[Good::Metal] = 2e9;
+    needs[Good::Components] = 3e8;
+    let economy = &mut state.settlements[id].economy;
+    economy.project = Some(Project {
+        kind: FacilityKind::Refinery,
+        scale: 1e8,
+        needs,
+        started: state.time,
+    });
+    economy.refresh_demand();
+    for _ in 0..200 {
+        tick(&mut state);
+    }
+    let project = &state.settlements[id].economy.project;
+    assert!(
+        project.as_ref().is_none_or(|p| p.scale < 1e8),
+        "the impossible project is still there"
+    );
+}
+
+#[test]
+fn planned_settlements_build_shipyards_for_orders() {
+    use retrox_sim::EconomyModel;
+    let mut state = small();
+    let id = state
+        .settlements
+        .iter()
+        .max_by(|a, b| a.1.economy.population.total_cmp(&b.1.economy.population))
+        .map(|(id, _)| id)
+        .expect("a settlement");
+    let owner = state.settlements[id].owner;
+    state.factions[owner].economy = EconomyModel::Planned;
+    let economy = &mut state.settlements[id].economy;
+    economy.population = economy.population.max(100.0);
+    economy
+        .facilities
+        .retain(|f| f.kind != FacilityKind::Shipyard);
+    if !economy
+        .facilities
+        .iter()
+        .any(|f| f.kind == FacilityKind::Factory)
+    {
+        economy
+            .facilities
+            .push(economy::Facility::new(FacilityKind::Factory, 1.0));
+    }
+    for f in &mut economy.facilities {
+        f.utilization = 1.0;
+    }
+    economy.refresh_demand();
+    // Plenty of everything; only hull is short.
+    for good in Good::ALL {
+        economy.market.stock[good] = 2.0 * economy.market.target(good);
+    }
+    economy.hull_t = 0.0;
+    economy.hull_wanted = 500.0;
+    let project = retrox_sim::construction::choose(&state, id).expect("a project");
+    assert_eq!(project.kind, FacilityKind::Shipyard);
 }

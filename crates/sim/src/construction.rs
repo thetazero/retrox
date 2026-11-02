@@ -19,6 +19,9 @@ use crate::{EconomyModel, GalaxyState, Resources, SettlementId};
 /// Shortest time a project can take, in days; its materials are wanted
 /// over this long.
 pub const BUILD_DAYS: f64 = 30.0;
+/// A project still short of materials after this many days is cut
+/// short at whatever share of it has been built.
+const PATIENCE_DAYS: u64 = 180;
 /// Materials per unit of scale added.
 const METAL_PER_SCALE: f64 = 20.0;
 const COMPONENTS_PER_SCALE: f64 = 3.0;
@@ -90,8 +93,10 @@ fn buildable(state: &GalaxyState, id: SettlementId) -> Vec<FacilityKind> {
         .filter(|&kind| match kind {
             FacilityKind::Mine => resources.ore > MINEABLE,
             FacilityKind::IceHarvester => resources.ice > MINEABLE,
+            // Only where captains want more hull than there is.
             FacilityKind::Shipyard => {
-                economy.population > SHIPYARD_POPULATION
+                economy.hull_wanted > economy.hull_t
+                    && economy.population > SHIPYARD_POPULATION
                     && economy
                         .facilities
                         .iter()
@@ -144,7 +149,7 @@ fn increment(state: &GalaxyState, id: SettlementId, kind: FacilityKind) -> f64 {
 }
 
 /// What this settlement should build next, if anything.
-fn choose(state: &GalaxyState, id: SettlementId) -> Option<Project> {
+pub fn choose(state: &GalaxyState, id: SettlementId) -> Option<Project> {
     let settlement = &state.settlements[id];
     let market = &settlement.economy.market;
     let kinds = buildable(state, id);
@@ -167,12 +172,16 @@ fn choose(state: &GalaxyState, id: SettlementId) -> Option<Project> {
             .max_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(kind, _)| kind)?,
         EconomyModel::Planned => {
-            // The plan: build for the good we're shortest of.
+            // The plan: build for the good we're shortest of. Hull counts
+            // as a good: how much of what captains want is on hand.
+            let economy = &settlement.economy;
             kinds
                 .into_iter()
                 .filter_map(|kind| {
-                    let good = kind.recipe().outputs.first()?.0;
-                    let fill = market.fill(good);
+                    let fill = match kind.recipe().outputs.first() {
+                        Some(&(good, _)) => market.fill(good),
+                        None => economy.hull_t / economy.hull_wanted.max(1e-9),
+                    };
                     (fill < PLAN_FILL).then_some((kind, fill))
                 })
                 .min_by(|a, b| a.1.total_cmp(&b.1))
@@ -184,6 +193,7 @@ fn choose(state: &GalaxyState, id: SettlementId) -> Option<Project> {
         kind,
         scale,
         needs: materials(scale),
+        started: state.time,
     })
 }
 
@@ -200,6 +210,7 @@ pub fn build(state: &mut GalaxyState) {
         let review = (slotmap::Key::data(&id).as_ffi() % 30) == day % 30;
         if review {
             decay(state, id);
+            state.settlements[id].economy.hull_wanted *= 0.5;
             if state.settlements[id].economy.project.is_none() {
                 let project = choose(state, id);
                 let economy = &mut state.settlements[id].economy;
@@ -232,25 +243,33 @@ fn progress(state: &mut GalaxyState, id: SettlementId) {
         p.needs = needs;
     }
     if planned && used > 0.0 {
+        let wages = used * WAGE_PER_UNIT * crate::fiscal::thrift(state, owner);
         ledger::pay(
             state,
             Account::Faction(owner),
             Account::Settlement(id),
-            used * WAGE_PER_UNIT,
+            wages,
         );
     }
+    let late = state.time.days().saturating_sub(project.started.days()) > PATIENCE_DAYS;
     let economy = &mut state.settlements[id].economy;
-    if done {
+    if done || late {
+        // A project that can't get the rest of its materials is cut short:
+        // the settlement keeps the part it has built, and can plan again.
         let project = economy.project.take().expect("checked above");
-        match economy
-            .facilities
-            .iter_mut()
-            .find(|f| f.kind == project.kind)
-        {
-            Some(f) => f.scale += project.scale,
-            None => economy
+        let share = 1.0
+            - Good::ALL.iter().map(|&g| project.needs[g]).sum::<f64>()
+                / Good::ALL.iter().map(|&g| total[g]).sum::<f64>().max(1e-9);
+        let scale = project.scale * share.clamp(0.0, 1.0);
+        if scale >= MIN_SCALE {
+            match economy
                 .facilities
-                .push(Facility::new(project.kind, project.scale)),
+                .iter_mut()
+                .find(|f| f.kind == project.kind)
+            {
+                Some(f) => f.scale += scale,
+                None => economy.facilities.push(Facility::new(project.kind, scale)),
+            }
         }
         economy.refresh_demand();
     }

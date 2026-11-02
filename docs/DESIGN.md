@@ -300,6 +300,58 @@ Consequences:
 - NPC traders, miners and haulers operate on the same timeline as the
   player, so observed price gaps really do close.
 
+#### 5.4.1 Rules that keep it healthy (#72)
+
+Decisions from the economy audit; `retrox simulate` ends with a health
+report to check them on a long run.
+
+- **People before industry.** Each day a settlement's population takes
+  what it needs first; facilities then share what is left of each input
+  in proportion to what they want of it. Nothing gets first pick because
+  of where it sits in a list. A facility stopped because its output store
+  is full wants nothing that day, so it isn't counted as short.
+- **Ships follow freight.** A company buys a ship only when a fleet came
+  in with its holds ≥ 90 % full and none of its fleets is idle. A
+  settlement founds a company only when it has a full hold's worth of
+  surplus and no ships sit idle in its system; the crew fetches its hull
+  from the nearest yard in trading reach that has it. A fleet that has
+  carried nothing for three monthly reviews running (cargo aboard counts
+  as carrying) sells half its ships, at least one, for scrap: half their
+  mass, as metal, to the port it's in. A company whose last fleet goes
+  winds up.
+- **Shipyards build to orders.** A captain who wants a ship where there
+  isn't enough hull leaves an order (`hull_wanted`, halving monthly) at
+  the nearest yard in reach, or at home if there's none. Yards
+  keep about a month of their own output on hand plus the orders, and
+  otherwise stand idle and decay like any idle facility. A shipyard is
+  built only where orders exceed the hull on hand; planned settlements
+  treat hull like any other good they're short of.
+- **Projects give up.** A construction project still short of materials
+  after 180 days is cut short: the settlement keeps the share it has built
+  (if that's at least a tenth of a unit) and can plan again.
+- **Printing follows need.** A faction with money pays welfare out of it as
+  before. A faction without money prints only for settlements below their
+  reserve, in proportion to how far below they are, and within its debt
+  limit.
+- **Debt reins in spending.** What a faction spends by choice (delivery
+  premiums, construction wages, printed relief) scales with its *thrift*:
+  full with money in hand, falling to nothing as its debt reaches a quarter
+  of its limit. Planned economies run a structural deficit (they pay
+  premiums and wages, and the money drains to market economies through
+  trade), so this brake is what bounds their debt: on a 60-year run it
+  settles just under a quarter of the limit.
+- **Trips cost what flying them costs.** One estimate serves the coarse
+  tier and the bubble: the burn out to a jump point, each lane in whole
+  days, each crossing of a system on the way (jump point to jump point),
+  the burn in, half a day lost at each change of stretch, and a day of
+  handling. In-system distances are typical, not radial, since bodies sit
+  anywhere on their orbits. A hop between two settlements on one world is
+  a climb to orbit and back down (a day), burns fuel, and is never flown
+  in the bubble.
+- **Cargo always gets off.** A fleet with cargo still aboard at its review
+  routes to wherever that cargo sells best; if nobody in reach can buy it,
+  it leaves the cargo at the dock for nothing.
+
 ### 5.5 Factions
 
 - Procedural, can form/split/merge/die. The only factions placed by hand

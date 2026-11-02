@@ -191,8 +191,10 @@ pub const PER_CAPITA_DEMAND: [(Good, f64); 3] = [
 
 /// Tonnes of hull a shipyard builds per run of its recipe.
 pub const HULL_T_PER_RUN: f64 = 1.0;
-/// Shipyards stop once they hold this many days of their own output.
-pub const HULL_STORAGE_DAYS: f64 = 120.0;
+/// Shipyards keep this many days of their own output in stock, plus
+/// whatever hull captains have asked for and couldn't get
+/// ([`LocalEconomy::hull_wanted`]): beyond that, nobody is buying.
+pub const HULL_STORAGE_DAYS: f64 = 30.0;
 /// What a tonne of finished hull sells for, in credits.
 pub const HULL_PRICE_PER_T: f64 = 60.0;
 
@@ -204,6 +206,10 @@ pub struct Project {
     /// Scale added when finished.
     pub scale: f64,
     pub needs: GoodMap<f64>,
+    /// When it was started. A project that can't get its materials is
+    /// eventually cut short; see [`crate::construction`].
+    #[serde(default)]
+    pub started: crate::GalaxyTime,
 }
 
 /// Daily consumption of `good` per unit of population.
@@ -275,6 +281,10 @@ pub struct LocalEconomy {
     pub project: Option<Project>,
     /// Finished ship hull ready for sale, in tonnes. Built by shipyards.
     pub hull_t: f64,
+    /// Hull captains wanted to buy here lately and couldn't, in tonnes:
+    /// the order book shipyards build to. Halves every month.
+    #[serde(default)]
+    pub hull_wanted: f64,
     /// The settlement's money, in credits. Trade only moves money; nothing
     /// creates or destroys it yet.
     pub treasury: f64,
@@ -302,51 +312,81 @@ impl LocalEconomy {
         self.market.demand = demand;
     }
 
-    /// One day of production and consumption.
+    /// One day of production and consumption. People take what they need
+    /// first; facilities then share what's left of each input in proportion
+    /// to what they want of it, so no facility comes first because of where
+    /// it sits in the list.
     fn produce(&mut self) {
         let market = &mut self.market;
         market.shortfall = GoodMap::splat(0.0);
 
+        for (good, per_capita) in PER_CAPITA_DEMAND {
+            let want = per_capita * self.population;
+            let got = want.min(market.stock[good].max(0.0));
+            market.stock[good] -= got;
+            market.shortfall[good] += want - got;
+        }
+
+        // Which facilities can run at all today: full storage, or a yard
+        // with all the hull it can hold, stops them.
+        let (hull_t, hull_wanted) = (self.hull_t, self.hull_wanted);
+        let open =
+            |facility: &Facility, market: &Market| {
+                let full =
+                    facility.kind.recipe().outputs.iter().any(|&(good, _)| {
+                        market.stock[good] >= market.target(good) * STORAGE_MULTIPLE
+                    });
+                let yard_full = facility.kind == FacilityKind::Shipyard
+                    && hull_t >= hull_wanted + facility.scale * HULL_T_PER_RUN * HULL_STORAGE_DAYS;
+                !full && !yard_full
+            };
+        let mut wanted = GoodMap::splat(0.0);
+        for facility in self.facilities.iter().filter(|f| open(f, market)) {
+            for &(good, amount) in facility.kind.recipe().inputs {
+                wanted[good] += amount * facility.scale;
+            }
+        }
+        let share = GoodMap::from_fn(|good| {
+            if wanted[good] > 0.0 {
+                (market.stock[good].max(0.0) / wanted[good]).min(1.0)
+            } else {
+                1.0
+            }
+        });
+
+        let mut made = GoodMap::splat(0.0);
         for facility in &mut self.facilities {
             let recipe = facility.kind.recipe();
-            // Run as much of the recipe as inputs and storage allow.
-            let mut rate: f64 = 1.0;
-            for &(good, amount) in recipe.inputs {
-                let need = amount * facility.scale;
-                if need > 0.0 {
-                    rate = rate.min(market.stock[good] / need);
-                }
-            }
-            for &(good, _) in recipe.outputs {
-                let cap = market.target(good) * STORAGE_MULTIPLE;
-                if market.stock[good] >= cap {
-                    rate = 0.0;
-                }
-            }
-            let shipyard = facility.kind == FacilityKind::Shipyard;
-            if shipyard && self.hull_t >= facility.scale * HULL_T_PER_RUN * HULL_STORAGE_DAYS {
-                rate = 0.0;
-            }
-            let rate = rate.clamp(0.0, 1.0);
+            // A facility stopped because nobody needs its output wants
+            // nothing today: that isn't a shortage of its inputs.
+            let running = open(facility, market);
+            let rate = if running {
+                recipe
+                    .inputs
+                    .iter()
+                    .map(|&(good, _)| share[good])
+                    .fold(1.0, f64::min)
+            } else {
+                0.0
+            };
             facility.utilization += (rate - facility.utilization) / UTILIZATION_DAYS;
             for &(good, amount) in recipe.inputs {
                 let need = amount * facility.scale;
-                market.stock[good] -= need * rate;
-                market.shortfall[good] += need * (1.0 - rate);
+                market.stock[good] = (market.stock[good] - need * rate).max(0.0);
+                if running {
+                    market.shortfall[good] += need * (1.0 - rate);
+                }
             }
             for &(good, amount) in recipe.outputs {
-                market.stock[good] += amount * facility.scale * rate;
+                made[good] += amount * facility.scale * rate;
             }
-            if shipyard {
+            if facility.kind == FacilityKind::Shipyard {
                 self.hull_t += facility.scale * HULL_T_PER_RUN * rate;
             }
         }
-
-        for (good, per_capita) in PER_CAPITA_DEMAND {
-            let want = per_capita * self.population;
-            let got = want.min(market.stock[good]);
-            market.stock[good] -= got;
-            market.shortfall[good] += want - got;
+        // Today's output reaches the market at the end of the day.
+        for good in Good::ALL {
+            market.stock[good] += made[good];
         }
     }
 
@@ -460,4 +500,51 @@ pub fn summarize(state: &GalaxyState) -> EconomySummary {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn economy(facilities: Vec<Facility>) -> LocalEconomy {
+        let mut e = LocalEconomy {
+            population: 10.0,
+            facilities,
+            ..LocalEconomy::default()
+        };
+        e.market.stock[Good::Metal] = 10.0;
+        e.market.stock[Good::Fuel] = 10.0;
+        e.market.stock[Good::Components] = 100.0;
+        e.refresh_demand();
+        e
+    }
+
+    #[test]
+    fn facility_order_doesnt_decide_who_gets_inputs() {
+        let yard = Facility::new(FacilityKind::Shipyard, 10.0);
+        let factory = Facility::new(FacilityKind::Factory, 10.0);
+        let mut a = economy(vec![yard, factory]);
+        let mut b = economy(vec![factory, yard]);
+        a.produce();
+        b.produce();
+        assert_eq!(a.market.stock, b.market.stock);
+        assert_eq!(a.hull_t, b.hull_t);
+        // Both wanted 10 metal of the 10 there: each got half.
+        assert!((a.hull_t - 5.0).abs() < 1e-9, "hull {}", a.hull_t);
+        let made = a.market.stock[Good::Components] - (100.0 - 0.5 - 1.5);
+        assert!((made - 5.0).abs() < 1e-9, "components made {made}");
+    }
+
+    #[test]
+    fn people_eat_before_industry() {
+        let mut e = economy(vec![Facility::new(FacilityKind::Factory, 20.0)]);
+        e.market.stock[Good::Fuel] = 3.0;
+        // Room in its store, so the factory wants to run.
+        e.market.stock[Good::Components] = 10.0;
+        e.produce();
+        // The 3 fuel there is what 10 people need: the factory gets none.
+        let short = e.market.shortfall[Good::Fuel];
+        assert!((short - 10.0).abs() < 1e-9, "fuel short {short}");
+        assert_eq!(e.market.stock[Good::Metal], 10.0);
+    }
 }

@@ -194,6 +194,93 @@ pub fn cruise_days(au: f64, accel: f64) -> f64 {
     flight::trip_seconds(au * METRES_PER_AU, accel) / SECONDS_PER_DAY
 }
 
+/// Days to climb from a world's surface to orbit and come down again
+/// somewhere else on it: what a trip between two settlements on one world
+/// takes. Such hops are never flown in the bubble.
+pub const SURFACE_HOP_DAYS: f64 = 1.0;
+/// A typical crossing between a system's two jump points on the way
+/// through it, in AU: lanes on a shortest path mostly carry on in roughly
+/// the same direction, so the two points sit far apart.
+const CROSSING_AU: f64 = JUMP_POINT_AU * 1.6;
+/// A ship arrives part-way through a day and sets out on its next stretch
+/// the day after: about this much is lost at each change of stretch.
+pub(crate) const STAGE_ROUNDING_DAYS: f64 = 0.5;
+
+/// Whether two settlements share a world: both on the surface of the same
+/// body.
+pub fn same_world(state: &GalaxyState, a: SettlementId, b: SettlementId) -> bool {
+    let body = |id: SettlementId| match state.settlements[id].site {
+        Site::Region(r) => Some(state.regions[r].body),
+        Site::Surface(b) => Some(b),
+        Site::Space(_) => None,
+    };
+    body(a).is_some() && body(a) == body(b)
+}
+
+/// The planet a settlement belongs to (the body orbiting the star that it
+/// sits on, or whose moon or orbit it's in), and its distance from that
+/// planet's centre in AU. `None` for a station orbiting the star.
+fn local(state: &GalaxyState, id: SettlementId) -> Option<(crate::BodyId, f64)> {
+    let on_body = |b: crate::BodyId| match state.bodies[b].orbit.parent {
+        crate::Orbiting::Star => (b, 0.0),
+        crate::Orbiting::Body(p) => (p, state.bodies[b].orbit.semi_major_au),
+    };
+    match state.settlements[id].site {
+        Site::Region(r) => Some(on_body(state.regions[r].body)),
+        Site::Surface(b) => Some(on_body(b)),
+        Site::Space(orbit) => match orbit.parent {
+            crate::Orbiting::Star => None,
+            crate::Orbiting::Body(b) => {
+                let (host, d) = on_body(b);
+                Some((host, d + orbit.semi_major_au))
+            }
+        },
+    }
+}
+
+/// A typical distance between points circling at `ra` and `rb` from the
+/// same centre, at unrelated angles: as if a quarter-turn apart.
+fn spread(ra: f64, rb: f64) -> f64 {
+    (ra * ra + rb * rb).sqrt()
+}
+
+/// Typical days from one settlement to another in the same system, rest to
+/// rest, without handling.
+pub(crate) fn local_days(
+    state: &GalaxyState,
+    class: &ShipClass,
+    from: SettlementId,
+    to: SettlementId,
+) -> f64 {
+    if same_world(state, from, to) {
+        return SURFACE_HOP_DAYS;
+    }
+    let au = match (local(state, from), local(state, to)) {
+        (Some((a, da)), Some((b, db))) if a == b => spread(da, db),
+        _ => spread(haul::radius_au(state, from), haul::radius_au(state, to)),
+    };
+    cruise_days(au.max(haul::STATION_ORBIT_AU), class.accel_laden)
+}
+
+/// Typical days between a settlement and one of its system's jump points.
+pub(crate) fn jump_point_days(state: &GalaxyState, class: &ShipClass, id: SettlementId) -> f64 {
+    cruise_days(
+        spread(haul::radius_au(state, id), JUMP_POINT_AU),
+        class.accel_laden,
+    )
+}
+
+/// Typical days across a system on the way through it, jump point to jump
+/// point.
+pub(crate) fn crossing_days(class: &ShipClass) -> f64 {
+    cruise_days(CROSSING_AU, class.accel_laden)
+}
+
+/// Days through one lane of `ly`, as flown: whole days, at least one.
+fn lane_days(ly: f64, class: &ShipClass) -> f64 {
+    (ly / class.jump_laden).ceil().max(1.0)
+}
+
 /// Whether `system` is in the bubble.
 pub fn contains(state: &GalaxyState, system: SystemId) -> bool {
     state.bubble.systems.contains(&system)
@@ -371,18 +458,27 @@ fn lane_ly(state: &GalaxyState, a: SystemId, b: SystemId) -> f64 {
 }
 
 /// A trip broken into the stretches a coarse trip-time estimate is made
-/// of: the burn out, each lane, the burn in, and handling.
+/// of: the burn out, each lane and each crossing between lanes, the burn
+/// in, and handling.
 struct Plan {
     /// Every system on the way, origin first.
     systems: Vec<SystemId>,
     out_days: f64,
     lane_days: Vec<f64>,
+    /// Crossing each system between two lanes: one fewer than the lanes.
+    cross_days: Vec<f64>,
     in_days: f64,
 }
 
 impl Plan {
     fn total(&self) -> f64 {
-        self.out_days + self.lane_days.iter().sum::<f64>() + self.in_days + haul::HANDLING_DAYS
+        let stages = 1 + self.lane_days.len() + self.cross_days.len();
+        self.out_days
+            + self.lane_days.iter().sum::<f64>()
+            + self.cross_days.iter().sum::<f64>()
+            + self.in_days
+            + STAGE_ROUNDING_DAYS * (stages - 1) as f64
+            + haul::HANDLING_DAYS
     }
 }
 
@@ -394,13 +490,12 @@ fn plan(
     max_days: f64,
 ) -> Option<Plan> {
     let (a, b) = (state.settlements.get(from)?, state.settlements.get(to)?);
-    let cruise = |au: f64| cruise_days(au, class.accel_laden);
-    let (ra, rb) = (haul::radius_au(state, from), haul::radius_au(state, to));
     if a.system == b.system {
         return Some(Plan {
             systems: vec![a.system],
-            out_days: cruise((ra - rb).abs().max(1e-3)),
+            out_days: local_days(state, class, from, to),
             lane_days: Vec::new(),
+            cross_days: Vec::new(),
             in_days: 0.0,
         });
     }
@@ -409,11 +504,13 @@ fn plan(
         .windows(2)
         .map(|w| lane_ly(state, w[0], w[1]) / class.jump_laden)
         .collect();
+    let cross_days = vec![crossing_days(class); systems.len() - 2];
     Some(Plan {
         systems,
-        out_days: cruise((ra - JUMP_POINT_AU).abs()),
+        out_days: jump_point_days(state, class, from),
         lane_days,
-        in_days: cruise((rb - JUMP_POINT_AU).abs()),
+        cross_days,
+        in_days: jump_point_days(state, class, to),
     })
 }
 
@@ -456,7 +553,7 @@ fn place(
             false,
         );
     }
-    let mut t = plan.out_days;
+    let mut t = plan.out_days + STAGE_ROUNDING_DAYS;
     for (i, &days) in plan.lane_days.iter().enumerate() {
         if elapsed < t + days {
             let left = (t + days - elapsed).ceil().max(1.0) as u64;
@@ -470,7 +567,24 @@ fn place(
                 false,
             );
         }
-        t += days;
+        t += days + STAGE_ROUNDING_DAYS;
+        // Crossing the system between this lane and the next.
+        if let Some(&cross) = plan.cross_days.get(i) {
+            if elapsed < t + cross {
+                let a = jump_point(state, sys[i + 1], sys[i]);
+                let b = jump_point(state, sys[i + 1], sys[i + 2]);
+                let ship = burn(a, b, cross, elapsed - t);
+                return (
+                    Stage::Flying {
+                        system: sys[i + 1],
+                        ship,
+                    },
+                    sys[i + 2..].to_vec(),
+                    false,
+                );
+            }
+            t += cross + STAGE_ROUNDING_DAYS;
+        }
     }
     let dest = sys[sys.len() - 1];
     let a = jump_point(state, dest, sys[sys.len() - 2]);
@@ -556,13 +670,17 @@ pub(crate) fn watch(state: &mut GalaxyState, key: FleetKey) {
     if contains(state, sa) {
         enter = Some(0.0);
     } else {
-        t += plan.out_days;
+        t += plan.out_days + STAGE_ROUNDING_DAYS;
         for (i, &days) in plan.lane_days.iter().enumerate() {
             if contains(state, plan.systems[i + 1]) {
                 enter = Some(t);
                 break;
             }
-            t += days;
+            t += days + STAGE_ROUNDING_DAYS;
+            t += plan
+                .cross_days
+                .get(i)
+                .map_or(0.0, |c| c + STAGE_ROUNDING_DAYS);
         }
     }
     let Some(enter) = enter else {
@@ -653,6 +771,11 @@ pub(crate) fn launch(
     let Some(n) = haul::fleet_index(state, key.0, key.1) else {
         return false;
     };
+    // Hops between settlements on one world go up and down again, not
+    // across space: they stay coarse.
+    if same_world(state, here, to) {
+        return false;
+    }
     let class = &state.ship_classes[state.companies[key.0].fleets[n].class];
     let (a, b) = (state.settlements[here].system, state.settlements[to].system);
     let path = if a == b {
@@ -689,28 +812,34 @@ pub(crate) fn launch(
 fn days_left(state: &GalaxyState, flight: &Flight, class: &ShipClass) -> f64 {
     let cruise = |m: f64| flight::trip_seconds(m, class.accel_laden) / SECONDS_PER_DAY;
     let today = state.time.days();
-    let (here, mut days) = match flight.stage {
+    let port = settlement_goal(state, flight.to, today as f64).pos;
+    // In `system`, having come out of the lane from `prev`: across to the
+    // next jump point, or in to port.
+    let onward = |system: SystemId, prev: SystemId, next: Option<SystemId>| {
+        let from = jump_point(state, system, prev);
+        let target = next.map_or(port, |n| jump_point(state, system, n));
+        cruise(flight::length(flight::sub(target, from))) + STAGE_ROUNDING_DAYS
+    };
+    let (mut prev, mut days) = match flight.stage {
         Stage::Flying { system, ship } => {
             let target = match flight.path.first() {
                 Some(&next) => jump_point(state, system, next),
-                None => settlement_goal(state, flight.to, today as f64).pos,
+                None => port,
             };
             (
                 system,
                 cruise(flight::length(flight::sub(target, ship.pos))),
             )
         }
-        Stage::Jumping { to, arrive, .. } => (to, arrive.days().saturating_sub(today) as f64),
+        Stage::Jumping { from, to, arrive } => {
+            let lane = arrive.days().saturating_sub(today) as f64;
+            (to, lane + onward(to, from, flight.path.first().copied()))
+        }
     };
-    let mut prev = here;
-    for &next in &flight.path {
-        days += lane_ly(state, prev, next) / class.jump_laden;
+    for (k, &next) in flight.path.iter().enumerate() {
+        days += lane_days(lane_ly(state, prev, next), class) + STAGE_ROUNDING_DAYS;
+        days += onward(next, prev, flight.path.get(k + 1).copied());
         prev = next;
-    }
-    let entered_dest = matches!(flight.stage, Stage::Flying { .. }) && flight.path.is_empty();
-    if !entered_dest {
-        let rb = haul::radius_au(state, flight.to);
-        days += cruise_days((rb - JUMP_POINT_AU).abs(), class.accel_laden);
     }
     days + haul::HANDLING_DAYS
 }
@@ -786,7 +915,6 @@ pub(crate) fn step(state: &mut GalaxyState, contracts: &haul::Contracts, board: 
         }
         let class = &state.ship_classes[state.companies[key.0].fleets[n].class];
         let accel = class.accel_laden;
-        let jump_laden = class.jump_laden;
         match flight.stage {
             Stage::Jumping { arrive, .. } if arrive > today => {}
             // Out of the lane at rest, facing where it came from; the
@@ -835,7 +963,7 @@ pub(crate) fn step(state: &mut GalaxyState, contracts: &haul::Contracts, board: 
                         }
                     }
                     (Some(_), Some(next)) => {
-                        let days = (lane_ly(state, system, next) / jump_laden).ceil().max(1.0);
+                        let days = lane_days(lane_ly(state, system, next), class);
                         let flight = state.bubble.flights.get_mut(&key).expect("flight");
                         flight.path.remove(0);
                         flight.stage = Stage::Jumping {
