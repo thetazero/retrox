@@ -112,7 +112,8 @@ pub const TRAVEL_KEYS: &[KeyRow] = &[
 
 pub const WORK_KEYS: &[KeyRow] = &[
     (&["G"], "prospect: read the rocks"),
-    (&["LMB", "R"], "fire guns · mining laser · gas scoop"),
+    (&["LMB", "R"], "mining laser · gas scoop · guns when hot"),
+    (&["B"], "arm the guns / back on safe"),
     (&["Y"], "next hostile target"),
     (&["I"], "intercept the trader in your sights"),
     (&["V"], "cockpit / chase camera"),
@@ -313,7 +314,8 @@ pub fn hint(w: &World) -> Option<String> {
                                       its edge, where you can jump or fast travel on."
                     .into(),
                 Leg::Intercept(_) => "Intercepting: the autopilot brings you alongside the \
-                                      convoy. Shooting it makes its faction hostile."
+                                      convoy. [B] arms the guns; shooting it makes its \
+                                      faction hostile."
                     .into(),
             });
         }

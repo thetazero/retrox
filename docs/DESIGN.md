@@ -808,9 +808,19 @@ to was always directly behind you.
 
 #### 7.2.1 Basic combat as built (#70)
 
-- **Guns.** One trigger (LMB or R) fires every gun in a weapon slot,
-  and the mining laser too except while hostiles are near (then the
-  trigger is the guns' alone; the laser keeps its own gauge, §7.3).
+- **Guns.** One trigger (LMB or R), and the guns are either **safe** or
+  **hot** (#189). On safe, the trigger is the mining laser's (or the gas
+  scoop's, §7.3.1) and no gun fires, so mining never hits the harvester
+  crews and traders around a field or costs standing. The guns are hot,
+  and the trigger is theirs alone, while a hostile ship is within 20 km
+  (a running one too, though it no longer holds you from fast travel), or
+  when the pilot arms them by hand with [B] to open fire on a ship that
+  isn't hostile (the Pirate path, §7.2.2); [B] again, or docking or
+  landing, puts them back on safe. The flight panel shows GUNS SAFE or a
+  lit GUNS HOT lamp, and the boresight is drawn only while they're hot.
+  (Until #189 the trigger fired every gun all the time, the laser too
+  away from hostiles: each rock a new miner cut fired the autocannon.)
+  The laser keeps its own gauge (§7.3).
   Autocannons throw shells at 1.6 km/s on top of the ship's velocity;
   lasers hit along their line at once. Fixed guns swing up to 4° to
   meet the target's lead, so putting the boresight on the HUD's **lead

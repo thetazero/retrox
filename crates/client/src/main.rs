@@ -690,7 +690,7 @@ impl ApplicationHandler for App {
                 button: MouseButton::Left,
                 ..
             } => match state {
-                // Flying with the mouse, it's the mining laser's trigger.
+                // Flying with the mouse, it's the trigger.
                 ElementState::Pressed if r.captured => r.trigger = true,
                 ElementState::Pressed if !consumed && r.flying() => r.set_captured(true),
                 ElementState::Released => r.trigger = false,
@@ -1056,6 +1056,7 @@ impl Running {
                 KeyCode::KeyM => Some(Action::ToggleMap),
                 KeyCode::KeyG => Some(Action::Scan),
                 KeyCode::KeyY => Some(Action::CycleHostile),
+                KeyCode::KeyB => Some(Action::ToggleGuns),
                 KeyCode::KeyI => Some(Action::Intercept),
                 KeyCode::KeyX => {
                     world.ship.throttle = 0.0;

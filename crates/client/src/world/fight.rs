@@ -40,6 +40,19 @@ impl World {
             .hostiles_within(self.combat_position(), HOSTILE_RANGE)
     }
 
+    /// Whether any hostile ship is within [`HOSTILE_RANGE`], running ones
+    /// too: they don't hold the ship from fast travel, but they're still
+    /// fair game for the guns (see [`World::guns_hot`]).
+    pub fn foes_near(&self) -> bool {
+        let me = self.combat_position();
+        self.mode == Mode::Normal
+            && self
+                .combat
+                .raiders
+                .iter()
+                .any(|r| r.hostile && (r.craft.pos - me).length() < HOSTILE_RANGE)
+    }
+
     /// Whether a pirate gang is known to lair at `field`.
     pub fn gang_reported(&self, field: retrox_sim::FieldId) -> bool {
         pirates::gang_at(&self.galaxy, field).is_some()
