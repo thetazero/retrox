@@ -442,7 +442,7 @@ pub fn laser_cooling(stats: &ShipStats) -> f64 {
 /// The player's mining gear and everything it has done. What it has done
 /// to each field, and the haul, are saved with the game; what's only of
 /// the moment (aim, flashes, the trigger) isn't.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Mining {
     #[serde(with = "crate::save::pairs")]
     fields: HashMap<FieldId, FieldState>,
@@ -462,6 +462,24 @@ pub struct Mining {
     /// Tonnes mined since last docking.
     pub haul: GoodMap<f64>,
     hold_full_warned: bool,
+}
+
+impl Default for Mining {
+    fn default() -> Self {
+        Self {
+            fields: HashMap::new(),
+            heat: 0.0,
+            locked: false,
+            firing: false,
+            aim: None,
+            scan_cooldown: 0.0,
+            // Never pinged: no ripple on the HUD until the first ping.
+            since_scan: 1e9,
+            bursts: Vec::new(),
+            haul: GoodMap::default(),
+            hold_full_warned: false,
+        }
+    }
 }
 
 impl Mining {
