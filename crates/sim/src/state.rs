@@ -1,7 +1,9 @@
 //! The complete simulation state. A save is (mostly) this struct, serialized.
 
 use serde::{Deserialize, Serialize};
-use slotmap::{SlotMap, new_key_type};
+use slotmap::new_key_type;
+
+use crate::pool::Pool;
 
 use crate::bodies::{Body, BodyId, EARTH_MASSES_PER_SUN, Orbit, Orbiting, Region, RegionId};
 use crate::haul::{Company, CompanyId, ShipClass};
@@ -27,11 +29,11 @@ pub struct GalaxyState {
     /// Asteroid fields inside belts.
     #[serde(default)]
     pub fields: Arena<crate::AsteroidField>,
-    pub settlements: SlotMap<SettlementId, Settlement>,
-    pub factions: SlotMap<FactionId, Faction>,
+    pub settlements: Pool<SettlementId, Settlement>,
+    pub factions: Pool<FactionId, Faction>,
     /// The kinds of trade ship in service.
     pub ship_classes: Arena<ShipClass>,
-    pub companies: SlotMap<CompanyId, Company>,
+    pub companies: Pool<CompanyId, Company>,
     /// Traders' upcoming events; see [`crate::haul`].
     pub calendar: crate::haul::Calendar,
     /// Cargo on its way to each market.
@@ -39,7 +41,7 @@ pub struct GalaxyState {
     /// Remembered lane distances; see [`crate::haul::ReachCache`].
     #[serde(skip)]
     pub reach_cache: crate::haul::ReachCache,
-    pub colony_ships: SlotMap<crate::colonize::ColonyShipId, crate::colonize::ColonyShip>,
+    pub colony_ships: Pool<crate::colonize::ColonyShipId, crate::colonize::ColonyShip>,
     pub history: History,
 }
 

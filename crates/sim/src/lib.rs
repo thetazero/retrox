@@ -18,6 +18,7 @@ pub mod haul;
 pub mod history;
 pub mod ledger;
 pub mod phases;
+pub mod pool;
 pub mod rng;
 pub mod settlement;
 pub mod ship;
