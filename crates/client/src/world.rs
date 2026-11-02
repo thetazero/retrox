@@ -29,10 +29,12 @@ use std::sync::LazyLock;
 use glam::{DQuat, DVec3};
 use retrox_sim::ship::ShipStats;
 
+use crate::contracts;
 use crate::hangar::{self, Job, Player};
 use retrox_gen::{GalaxyConfig, Rock, generate, rocks};
 use retrox_sim::economy::Good;
 use retrox_sim::flight::{self, Goal, Kinematics};
+use retrox_sim::freight::{self, Offer};
 use retrox_sim::{
     BodyId, BodyKind, FieldId, GalaxyState, GalaxyTime, SettlementId, Site, StarClass, SystemId,
     tick,
@@ -57,6 +59,8 @@ pub const WELL_RADII: f64 = 4.0;
 const DRIVE_ACCEL: f64 = ACCEL;
 const JUMP_DURATION: f32 = 4.0;
 const LANDING_DURATION: f32 = 3.0;
+/// Days the galaxy runs before the player starts (see [`World::new`]).
+const WARM_UP_DAYS: f64 = 30.0;
 /// The ship the flight model is tuned for: the starting ship, stock.
 static REFERENCE: LazyLock<ShipStats> = LazyLock::new(|| {
     retrox_content::ships::stock(hangar::STARTING_HULL)
@@ -212,6 +216,11 @@ pub enum Action {
     Inspect(&'static retrox_sim::ship::Hull),
     /// Buy (positive) or sell (negative) tonnes of a good.
     Trade(Good, f64),
+    /// Take a contract off the dispatch board (by index into
+    /// [`World::board`]).
+    AcceptContract(usize),
+    /// Give up one of the player's contracts (by index).
+    AbandonContract(usize),
 }
 
 /// The screens of a station or city, while docked or landed.
@@ -225,6 +234,8 @@ pub enum Screen {
     Hangar,
     /// Ships for sale, on the bay floor.
     Shipyard,
+    /// The dispatch board: freight contracts.
+    Contracts,
 }
 
 /// What the player could do right now (shown as prompts).
@@ -273,6 +284,11 @@ pub struct World {
     pub map_open: bool,
     /// The system the plotted course leads to, if any.
     pub course: Option<SystemId>,
+    /// The dispatch board where we're docked or landed.
+    pub board: Vec<Offer>,
+    /// What the board was drawn up for: settlement, day, and the player's
+    /// hold and contracts then.
+    board_key: Option<(SettlementId, u64, u64, usize)>,
 }
 
 impl World {
@@ -297,7 +313,7 @@ impl World {
         let system = galaxy.settlements[city].system;
         let view = SystemView::new(&galaxy, system);
         let clock_s = galaxy.time.days() as f64 * SECONDS_PER_DAY;
-        Self {
+        let mut world = Self {
             galaxy,
             system,
             view,
@@ -327,7 +343,15 @@ impl World {
             system_generation: 0,
             map_open: false,
             course: None,
-        }
+            board: Vec::new(),
+            board_key: None,
+        };
+        // Generation leaves every market exactly on target. Let the galaxy
+        // run for a while first, so the player arrives in a going concern:
+        // traders under way, some markets short, others with goods to spare.
+        world.advance_clock(WARM_UP_DAYS * SECONDS_PER_DAY);
+        world.refresh_board();
+        world
     }
 
     fn t_days(&self) -> f64 {
@@ -703,11 +727,31 @@ impl World {
             }
             Action::Wait(days) => {
                 if matches!(self.mode, Mode::Docked(_) | Mode::Landed { .. }) {
-                    self.advance_clock(days as f64 * SECONDS_PER_DAY);
-                    self.say(format!(
-                        "Waited {days} day{}",
-                        if days == 1 { "" } else { "s" }
-                    ));
+                    // Waiting stops when a contract falls due (DESIGN §3).
+                    let mut waited = 0;
+                    let mut due = None;
+                    while waited < days {
+                        self.advance_clock(SECONDS_PER_DAY);
+                        waited += 1;
+                        let today = self.galaxy.time;
+                        due = self
+                            .player
+                            .contracts
+                            .iter()
+                            .find(|c| c.offer.deadline == today || c.fails_on() == today)
+                            .map(|c| self.galaxy.settlements[c.offer.to].name.clone());
+                        if due.is_some() {
+                            break;
+                        }
+                    }
+                    let plural = if waited == 1 { "" } else { "s" };
+                    match due {
+                        Some(to) if waited < days => self.say(format!(
+                            "Stopped waiting after {waited} day{plural}: a contract to {to} is due"
+                        )),
+                        _ => self.say(format!("Waited {waited} day{plural}")),
+                    }
+                    self.settle_contracts();
                 }
             }
             Action::Open(screen) => {
@@ -735,6 +779,27 @@ impl World {
                     Ok(text) | Err(text) => self.say(text),
                 }
             }
+            Action::AcceptContract(i) => {
+                let Some(offer) = self.board.get(i).cloned() else {
+                    return;
+                };
+                if self.docked_at() != Some(offer.from) {
+                    return;
+                }
+                let capacity = self.stats().cargo_t;
+                match contracts::accept(&mut self.player, capacity, &mut self.galaxy, &offer) {
+                    Ok(text) => {
+                        self.board.remove(i);
+                        self.say(text);
+                    }
+                    Err(text) => self.say(text),
+                }
+            }
+            Action::AbandonContract(i) => {
+                if let Some(text) = contracts::abandon(&mut self.player, &mut self.galaxy, i) {
+                    self.say(text);
+                }
+            }
             Action::Hangar(job) => {
                 let Some(here) = self.docked_at() else {
                     return;
@@ -749,6 +814,44 @@ impl World {
                 }
             }
         }
+    }
+
+    /// Deliver contracts bound for where we're docked or landed, and fail
+    /// the ones past their grace period.
+    fn settle_contracts(&mut self) {
+        if self.player.contracts.is_empty() {
+            return;
+        }
+        let mut said = contracts::expire(&mut self.player, &mut self.galaxy);
+        if let Some(here) = self.docked_at() {
+            said.extend(contracts::deliver(&mut self.player, &mut self.galaxy, here));
+        }
+        if !said.is_empty() {
+            self.say(said.join(" · "));
+        }
+    }
+
+    /// Draw up the dispatch board again if anything it depends on changed:
+    /// where we are, the day, the hold, or the player's contracts.
+    fn refresh_board(&mut self) {
+        let Some(here) = self.docked_at() else {
+            self.board_key = None;
+            self.board.clear();
+            return;
+        };
+        let lot = self.stats().cargo_t;
+        let key = (
+            here,
+            self.galaxy.time.days(),
+            lot.to_bits(),
+            self.player.contracts.len(),
+        );
+        if self.board_key == Some(key) {
+            return;
+        }
+        self.board_key = Some(key);
+        let pending = contracts::pending(&self.player);
+        self.board = freight::board(&self.galaxy, here, lot, |ly| self.jump_days(ly), &pending);
     }
 
     /// The settlement we're docked at, or landed at (once down).
@@ -894,6 +997,8 @@ impl World {
             }
         }
 
+        self.settle_contracts();
+        self.refresh_board();
         self.update_field();
         self.update_camera(dt);
     }
@@ -1444,5 +1549,84 @@ mod tests {
         assert_eq!(world.course, None, "arriving clears the course");
         world.act(Action::PlotCourse(Some(world.system)));
         assert_eq!(world.course, None, "no course to where you are");
+    }
+
+    #[test]
+    fn the_starting_board_carries_real_shortages() {
+        for seed in 1..=3 {
+            let world = World::new(seed);
+            let here = world.docked_at().unwrap();
+            assert!(!world.board.is_empty(), "seed {seed}: empty board");
+            let origin = &world.galaxy.settlements[here].economy.market;
+            for o in &world.board {
+                let dest = &world.galaxy.settlements[o.to].economy.market;
+                let coming = world.galaxy.traffic.inbound(o.to, o.good);
+                // The consignee is short even counting what's on the way,
+                // and this market can spare the goods without going short.
+                assert!(dest.stock[o.good] + coming + o.amount <= dest.target(o.good));
+                assert!(origin.stock[o.good] - o.amount >= 0.75 * origin.target(o.good) - 1e-6);
+                assert!(o.fee > 0.0 && o.deadline > world.date());
+            }
+        }
+    }
+
+    #[test]
+    fn take_a_contract_and_deliver_it_in_another_system() {
+        let mut world = World::new(1);
+        let i = world
+            .board
+            .iter()
+            .position(|o| o.jumps > 0)
+            .expect("a contract to another system");
+        let offer = world.board[i].clone();
+        let credits = world.player.credits;
+        let before = world.galaxy.settlements[offer.to].economy.market.stock[offer.good];
+        world.act(Action::Open(Screen::Contracts));
+        world.act(Action::AcceptContract(i));
+        assert_eq!(world.player.contracts.len(), 1);
+        assert_eq!(world.player.credits, credits - offer.value);
+        assert_eq!(world.player.contract_t(), offer.amount);
+
+        // Fly it there, hop by hop.
+        let dest = world.galaxy.settlements[offer.to].system;
+        world.act(Action::Launch);
+        world.act(Action::PlotCourse(Some(dest)));
+        while let Some(hop) = world.next_hop() {
+            world.arrive_jump(hop);
+        }
+        assert_eq!(world.system, dest);
+        assert!(world.date() <= offer.deadline, "should arrive on time");
+        let flow = world.galaxy.settlements[offer.to].economy.market.stock[offer.good];
+        world.mode = match world.galaxy.settlements[offer.to].site {
+            Site::Region(r) => Mode::Landed {
+                city: offer.to,
+                body: world.galaxy.regions[r].body,
+                timer: 0.0,
+            },
+            _ => Mode::Docked(offer.to),
+        };
+        world.update(1.0 / 60.0, Controls::default());
+        assert!(world.player.contracts.is_empty());
+        assert_eq!(world.player.contract_t(), 0.0);
+        assert!((world.player.credits - (credits + offer.fee)).abs() < 1e-6);
+        let after = world.galaxy.settlements[offer.to].economy.market.stock[offer.good];
+        assert!(
+            (after - flow - offer.amount).abs() < 1e-6,
+            "{before} {flow} {after}"
+        );
+    }
+
+    #[test]
+    fn waiting_stops_when_a_contract_falls_due() {
+        let mut world = World::new(1);
+        let offer = world.board[0].clone();
+        world.act(Action::AcceptContract(0));
+        world.act(Action::Wait(1000));
+        assert_eq!(world.date(), offer.deadline);
+        assert_eq!(world.player.contracts.len(), 1);
+        // Waiting on past the grace period fails it: the goods are ours.
+        world.act(Action::Wait(1000));
+        assert!(world.player.contracts.is_empty());
+        assert_eq!(world.player.cargo[offer.good], offer.amount);
     }
 }

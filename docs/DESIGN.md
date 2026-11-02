@@ -420,6 +420,39 @@ rather than space bugs.
 - Own multiple ships, hire faceless NPC captains, assign automated trade
   routes. Stations later.
 
+### 7.5.1 Freight contracts
+
+Hour-to-hour work for the Trader path (§2), drawn from the economy, never
+from a random generator (pillar 5).
+
+- **Where they come from.** A settlement's dispatch board pairs a good it
+  can spare with a settlement within 5 jumps that is short of it,
+  counting what traders already have on the way. A consignee posts
+  once it holds less than 75% of its target, and the origin releases
+  stock only down to 75% of its own target, so goods always flow from
+  fuller markets to emptier ones. Lots are sized to the player's hold.
+  A board holds 8 contracts at most, 2 per destination, best pay per day
+  first. Boards change daily as markets do; some days a port has nothing.
+- **Who pays, and what.** The consignee buys the goods at the origin's
+  price and pays the fee from its own treasury: the price gap between
+  the two markets, its faction's delivery premium if planned (the same
+  premium NPC haulers earn), and freight for the expected trip (a rate
+  per tonne-day plus the crew's wage), scaled up by how short it is. It
+  only commits what it can afford.
+- **Deposit.** Taking a contract costs a deposit of the cargo's value,
+  returned on delivery. Contract cargo rides in the hold but can't be
+  sold.
+- **Deadlines** allow 1.5× the expected trip (jumps plus ~3 days per
+  system). Each day late takes 10% off the fee. Ten days late, or
+  abandoned, the contract fails: the consignee keeps the deposit and its
+  fee, and the goods are the player's to sell. No reputation cost yet;
+  that comes with faction reputation (milestone 5).
+- **Delivery** happens on docking or landing at the consignee. Waiting
+  while docked stops on the day a contract falls due (§3).
+- **The client starts 30 days after generation**, so markets have
+  drifted off their generated targets and the first board has work on
+  it. Prehistory (§4.2) will replace this warm-up.
+
 ### 7.6 Planets
 
 - No seamless landing. Planets have **predefined landing points**; landing
