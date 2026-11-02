@@ -6,7 +6,6 @@ struct Globals {
     star_color: vec4<f32>,
     // x: time (s), y: exposure
     misc: vec4<f32>,
-    sky: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> g: Globals;
 

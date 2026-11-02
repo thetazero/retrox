@@ -7,8 +7,6 @@ struct Globals {
     star_color: vec4<f32>,
     // x: time, y: exposure, z: width, w: height
     misc: vec4<f32>,
-    // xyz: direction to the galactic core, w: how far out we are (0..1)
-    sky: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> g: Globals;
 
