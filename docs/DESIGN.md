@@ -690,6 +690,19 @@ to was always directly behind you.
   churning fireball with secondaries, a white core flash, a shockwave
   ring, flung hull plates and embers, and leave a burnt-out wreck with
   embers in its cracks, tumbling, for three minutes.
+- **The target is never hidden by your own ship** (#123). The chase
+  camera sits above and behind, so a raider a few degrees low, where it
+  usually is as it passes under you, is behind your hull. Where the hull
+  covers the target it is **cut away** round it, like a cutaway on a
+  technical drawing: a clean round hole a little wider than the target
+  (never smaller than its bracket), its edge inked in thin amber, the
+  target's colour. Only the hull in front of the target is cut, so most
+  of the time nothing changes. Chosen over moving the camera (the view
+  would shift just as a fight starts, and a target can pass under any
+  framing) and over fading the whole hull (the ship would vanish, and a
+  dither picks up the film's colour fringing). The target's labels carry
+  the §8.4 drop shadow and its bars a dark edge, since they often land
+  on the hull.
 - **Sounds (§8).** Synthesized like the rest: a thump and crack per
   autocannon round (raiders' quieter and lower), a falling zap for
   lasers, an electric fizz on the shield, a metal clang and hull creak
