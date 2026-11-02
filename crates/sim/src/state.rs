@@ -32,6 +32,9 @@ pub struct GalaxyState {
     /// The kinds of trade ship in service.
     pub ship_classes: Arena<ShipClass>,
     pub companies: SlotMap<CompanyId, Company>,
+    /// Remembered lane distances; see [`crate::haul::ReachCache`].
+    #[serde(skip)]
+    pub reach_cache: crate::haul::ReachCache,
     pub colony_ships: SlotMap<crate::colonize::ColonyShipId, crate::colonize::ColonyShip>,
     pub history: History,
 }
@@ -135,6 +138,28 @@ impl GalaxyState {
     }
 
     /// Where something on `orbit` is at time `t_days`, in AU from the star.
+    /// Position (AU from the star) and velocity (AU per day) of something
+    /// on `orbit` at time `t_days`, including its parents' motion.
+    pub fn orbit_state(
+        &self,
+        system: SystemId,
+        orbit: &Orbit,
+        t_days: f64,
+    ) -> ([f64; 3], [f64; 3]) {
+        let (p, v) = orbit.state_at(t_days, self.parent_mass_suns(system, orbit));
+        match orbit.parent {
+            Orbiting::Star => (p, v),
+            Orbiting::Body(parent) => {
+                let b = &self.bodies[parent];
+                let (pp, pv) = self.orbit_state(b.system, &b.orbit, t_days);
+                (
+                    [pp[0] + p[0], pp[1] + p[1], pp[2] + p[2]],
+                    [pv[0] + v[0], pv[1] + v[1], pv[2] + v[2]],
+                )
+            }
+        }
+    }
+
     pub fn orbit_position(&self, system: SystemId, orbit: &Orbit, t_days: f64) -> [f64; 3] {
         let local = orbit.position_at(t_days, self.parent_mass_suns(system, orbit));
         match orbit.parent {

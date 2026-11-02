@@ -16,6 +16,7 @@
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::sync::{Arc, RwLock};
 
 use rayon::prelude::*;
 
@@ -161,12 +162,17 @@ pub fn settlement_goal(state: &GalaxyState, id: SettlementId, t_days: f64) -> Go
 
 /// A site's position and velocity at `t_days`, in metres from its star.
 pub fn site_goal(state: &GalaxyState, system: SystemId, site: Site, t_days: f64) -> Goal {
-    const H_DAYS: f64 = 1e-3;
-    let at = |t| flight::scale(site_position(state, system, site, t), METRES_PER_AU);
-    let (a, b) = (at(t_days - H_DAYS), at(t_days + H_DAYS));
+    let (pos, vel) = match site {
+        Site::Region(r) => {
+            let b = &state.bodies[state.regions[r].body];
+            state.orbit_state(system, &b.orbit, t_days)
+        }
+        Site::Surface(b) => state.orbit_state(system, &state.bodies[b].orbit, t_days),
+        Site::Space(orbit) => state.orbit_state(system, &orbit, t_days),
+    };
     Goal {
-        pos: at(t_days),
-        vel: flight::scale(flight::sub(b, a), 1.0 / (2.0 * H_DAYS * SECONDS_PER_DAY)),
+        pos: flight::scale(pos, METRES_PER_AU),
+        vel: flight::scale(vel, METRES_PER_AU / SECONDS_PER_DAY),
     }
 }
 
@@ -193,8 +199,58 @@ pub fn cruise_days(au: f64, accel: f64) -> f64 {
     flight::trip_seconds(au * METRES_PER_AU, accel) / SECONDS_PER_DAY
 }
 
-/// Shortest lane distance from `origin` to every system within `max_ly`.
-pub fn reach(state: &GalaxyState, origin: SystemId, max_ly: f64) -> Vec<(SystemId, f64)> {
+/// Lane distances already worked out, by origin and range. The lane
+/// network doesn't change, and many fleets plan from the same port with
+/// the same range, so [`reach`] remembers its answers. Not saved; a
+/// loaded game starts with an empty cache. Clear it if lanes ever change.
+#[derive(Default)]
+pub struct ReachCache(RwLock<HashMap<(SystemId, u64), Reached>>);
+
+/// Systems within range, with their lane distance, nearest first.
+pub type Reached = Arc<[(SystemId, f64)]>;
+
+impl ReachCache {
+    pub fn clear(&self) {
+        self.0.write().expect("reach cache poisoned").clear();
+    }
+}
+
+impl Clone for ReachCache {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl std::fmt::Debug for ReachCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ReachCache")
+    }
+}
+
+/// Shortest lane distance from `origin` to every system within `max_ly`,
+/// nearest first.
+pub fn reach(state: &GalaxyState, origin: SystemId, max_ly: f64) -> Reached {
+    let key = (origin, max_ly.to_bits());
+    if let Some(hit) = state
+        .reach_cache
+        .0
+        .read()
+        .expect("reach cache poisoned")
+        .get(&key)
+    {
+        return hit.clone();
+    }
+    let found: Reached = search(state, origin, max_ly).into();
+    state
+        .reach_cache
+        .0
+        .write()
+        .expect("reach cache poisoned")
+        .insert(key, found.clone());
+    found
+}
+
+fn search(state: &GalaxyState, origin: SystemId, max_ly: f64) -> Vec<(SystemId, f64)> {
     let mut best: HashMap<SystemId, f64> = HashMap::from([(origin, 0.0)]);
     let mut heap = BinaryHeap::from([Reverse((0.0f64.to_bits(), origin))]);
     let mut out = Vec::new();
@@ -234,10 +290,15 @@ struct Ctx {
 impl Ctx {
     fn new(state: &GalaxyState) -> Self {
         let t = state.time.days() as f64;
-        let mut positions = slotmap::SecondaryMap::with_capacity(state.settlements.len());
+        let ids: Vec<SettlementId> = state.settlements.keys().collect();
+        let computed: Vec<[f64; 3]> = ids
+            .par_iter()
+            .map(|&id| settlement_position(state, id, t))
+            .collect();
+        let mut positions = slotmap::SecondaryMap::with_capacity(ids.len());
         let mut mean_price = GoodMap::splat(0.0);
-        for id in state.settlements.keys() {
-            positions.insert(id, settlement_position(state, id, t));
+        for (&id, position) in ids.iter().zip(computed) {
+            positions.insert(id, position);
             for good in Good::ALL {
                 mean_price[good] += state.settlements[id].economy.market.price[good];
             }
@@ -339,17 +400,52 @@ fn best_trip(
     };
     let mut best: Option<(f64, Plan)> = None;
     let mut reposition: Option<(f64, Plan)> = None;
-    for (system, ly) in reach(state, origin.system, MAX_TRIP_DAYS * class.jump_laden) {
+    for &(system, ly) in reach(state, origin.system, MAX_TRIP_DAYS * class.jump_laden).iter() {
+        let jump_days = if system == origin.system {
+            0.0
+        } else {
+            ly / class.jump_laden
+        };
+        // No trip to this system can be shorter than its jump.
+        let min_days = jump_days + HANDLING_DAYS;
         for &to in &state.systems[system].settlements {
             if to == here {
                 continue;
             }
-            let days = ctx.trip_days(state, class, here, to, ly);
-            let jump_days = if system == origin.system {
-                0.0
+            // Cheap upper bounds first: today's price is at least what it
+            // will be once more cargo arrives, and the premium is at most
+            // its cap. Skip places that can't beat what we have.
+            let dest = &state.settlements[to].economy;
+            let loaded_bound = offers
+                .iter()
+                .map(|&(good, amount, buy)| {
+                    let top = dest.market.price[good] + crate::fiscal::max_premium(good);
+                    amount * (top - buy)
+                })
+                .fold(0.0, f64::max)
+                / min_days;
+            let empty_bound = if fleet.cargo.is_none() {
+                let there = &dest.market;
+                Good::ALL
+                    .into_iter()
+                    .map(|g| {
+                        capacity.min(there.surplus(g))
+                            * (ctx.mean_price[g] - there.price[g]).max(0.0)
+                    })
+                    .fold(0.0, f64::max)
+                    / (2.0 * jump_days + HANDLING_DAYS)
             } else {
-                ly / class.jump_laden
+                0.0
             };
+            let beats_loaded = loaded_bound > MIN_PROFIT_PER_DAY
+                && best.as_ref().is_none_or(|(b, _)| loaded_bound > *b);
+            let beats_empty = best.is_none()
+                && empty_bound > MIN_PROFIT_PER_DAY
+                && reposition.as_ref().is_none_or(|(b, _)| empty_bound > *b);
+            if !beats_loaded && !beats_empty {
+                continue;
+            }
+            let days = ctx.trip_days(state, class, here, to, ly);
             if days > MAX_TRIP_DAYS {
                 continue;
             }
@@ -384,7 +480,9 @@ fn best_trip(
                     ));
                 }
             }
-            let dest = &state.settlements[to].economy;
+            if !beats_loaded {
+                continue;
+            }
             let dest_model = model(state, to);
             for &(good, amount, buy) in &offers {
                 let coming = ctx.inbound.get(&(to, good)).copied().unwrap_or(0.0);
@@ -620,61 +718,66 @@ pub fn trade(state: &mut GalaxyState) {
         }
     }
 
-    // Plan every trip in parallel from the same snapshot...
-    let plans: Vec<Option<Plan>> = {
-        let state = &*state;
-        let ctx = &ctx;
-        deciding
-            .par_iter()
-            .map(|&(key, n, here)| {
-                let company = &state.companies[key];
-                best_trip(state, ctx, company, &company.fleets[n], here)
-            })
-            .collect()
-    };
-
-    // ...then carry them out in order. A plan that an earlier departure
-    // this tick could have changed (same port, same destination and good,
-    // or same company's money) is made again from the current state.
-    let mut ports: HashSet<SettlementId> = HashSet::new();
-    let mut deliveries: HashSet<(SettlementId, Good)> = HashSet::new();
-    let mut claims: HashSet<SettlementId> = HashSet::new();
-    let mut spenders: HashSet<CompanyId> = HashSet::new();
-    for (&(key, n, here), plan) in deciding.iter().zip(plans) {
-        let loaded = state.companies[key].fleets[n].cargo.is_some();
-        let stale = spenders.contains(&key)
-            || (!loaded && ports.contains(&here))
-            || plan.as_ref().is_some_and(|p| {
-                if p.amount > 0.0 || loaded {
-                    deliveries.contains(&(p.to, p.good))
-                } else {
-                    claims.contains(&p.to)
-                }
-            });
-        let plan = if stale {
-            let company = &state.companies[key];
-            best_trip(state, &ctx, company, &company.fleets[n], here)
-        } else {
-            plan
+    // Plan in rounds. Each round plans every pending fleet in parallel
+    // from the same snapshot, then carries the plans out in order. A plan
+    // that an earlier departure this round could have changed (same port,
+    // same destination and good, same reposition target, or same company's
+    // money) waits for the next round, which plans it again from the state
+    // as it is then. The first plan of a round always goes ahead, so this
+    // ends; the order is fixed, so it's deterministic.
+    let mut pending = deciding;
+    while !pending.is_empty() {
+        let plans: Vec<Option<Plan>> = {
+            let state = &*state;
+            let ctx = &ctx;
+            pending
+                .par_iter()
+                .map(|&(key, n, here)| {
+                    let company = &state.companies[key];
+                    best_trip(state, ctx, company, &company.fleets[n], here)
+                })
+                .collect()
         };
-        match plan {
-            Some(plan) => {
-                if plan.amount > 0.0 || loaded {
-                    deliveries.insert((plan.to, plan.good));
-                } else {
-                    claims.insert(plan.to);
-                }
-                if !loaded && plan.amount > 0.0 {
-                    ports.insert(here);
-                }
-                spenders.insert(key);
-                depart(state, &mut ctx, key, n, here, plan);
+        let mut ports: HashSet<SettlementId> = HashSet::new();
+        let mut deliveries: HashSet<(SettlementId, Good)> = HashSet::new();
+        let mut claims: HashSet<SettlementId> = HashSet::new();
+        let mut spenders: HashSet<CompanyId> = HashSet::new();
+        let mut next = Vec::new();
+        for (&(key, n, here), plan) in pending.iter().zip(plans) {
+            let loaded = state.companies[key].fleets[n].cargo.is_some();
+            let stale = spenders.contains(&key)
+                || (!loaded && ports.contains(&here))
+                || plan.as_ref().is_some_and(|p| {
+                    if p.amount > 0.0 || loaded {
+                        deliveries.contains(&(p.to, p.good))
+                    } else {
+                        claims.contains(&p.to)
+                    }
+                });
+            if stale {
+                next.push((key, n, here));
+                continue;
             }
-            None => {
-                state.companies[key].fleets[n].idle_until =
-                    GalaxyTime::from_days(now.days() + IDLE_DAYS);
+            match plan {
+                Some(plan) => {
+                    if plan.amount > 0.0 || loaded {
+                        deliveries.insert((plan.to, plan.good));
+                    } else {
+                        claims.insert(plan.to);
+                    }
+                    if !loaded && plan.amount > 0.0 {
+                        ports.insert(here);
+                    }
+                    spenders.insert(key);
+                    depart(state, &mut ctx, key, n, here, plan);
+                }
+                None => {
+                    state.companies[key].fleets[n].idle_until =
+                        GalaxyTime::from_days(now.days() + IDLE_DAYS);
+                }
             }
         }
+        pending = next;
     }
 
     for key in keys {

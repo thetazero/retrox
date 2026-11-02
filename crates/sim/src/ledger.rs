@@ -178,8 +178,8 @@ pub fn total_money(state: &GalaxyState) -> f64 {
     settlements + companies + factions + colonies
 }
 
-/// Panic if money wasn't conserved since `before` or any account or stock
-/// is below its floor. Called by the tick in debug builds.
+/// Panic if money wasn't conserved since `before`, or any settlement,
+/// company, colony ship or stock is below zero. Called by the tick in debug builds.
 pub fn check(state: &GalaxyState, before: f64) {
     const EPS: f64 = 1e-6;
     let after = total_money(state);
@@ -215,12 +215,8 @@ pub fn check(state: &GalaxyState, before: f64) {
             c.credits
         );
     }
-    for (id, f) in &state.factions {
-        assert!(
-            f.treasury >= floor(state, Account::Faction(id)) - EPS,
-            "{} balance {} below its debt limit",
-            f.name,
-            f.treasury
-        );
-    }
+    // Faction floors aren't re-checked here: a faction's debt limit shrinks
+    // when its population does, so a balance that was within the limit
+    // when it was spent can sit below it later. `pay` enforces the limit
+    // whenever money moves.
 }
