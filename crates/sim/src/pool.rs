@@ -144,6 +144,18 @@ impl<K: Key, V> Pool<K, V> {
         self.slots.iter().filter_map(|s| s.value.as_ref())
     }
 
+    /// One past the highest slot index ever used: keys' indices run below it.
+    pub fn slot_count(&self) -> usize {
+        self.slots.len()
+    }
+
+    /// The live key at slot `index`, if any. With [`Self::slot_count`] this
+    /// walks a pool without collecting its keys.
+    pub fn key_at(&self, index: usize) -> Option<K> {
+        let slot = self.slots.get(index)?;
+        slot.value.as_ref().map(|_| key(index as u32, slot.version))
+    }
+
     pub fn values_mut(&mut self) -> impl Iterator<Item = &mut V> + '_ {
         self.slots.iter_mut().filter_map(|s| s.value.as_mut())
     }

@@ -14,6 +14,7 @@ fn small_galaxy() -> GalaxyState {
         founded: GalaxyTime::ZERO,
         treasury: 0.0,
         population: 0.0,
+        welfare: Default::default(),
     });
     state
         .history

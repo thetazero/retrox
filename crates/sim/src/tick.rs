@@ -44,6 +44,10 @@ pub const PIPELINE: &[Phase] = &[
         name: "news",
         run: phases::news,
     },
+    Phase {
+        name: "prices",
+        run: phases::prices,
+    },
 ];
 
 /// Advance the galaxy by one day.
