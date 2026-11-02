@@ -325,9 +325,19 @@ pub fn work_goal(state: &GalaxyState, source: Source, slot: f64, t_days: f64) ->
     let (c, s) = (turn.cos(), turn.sin());
     let dir = [sx * c - sy * s, sx * s + sy * c, 0.15 * angle.sin()];
     let dl = flight::length(dir).max(1e-9);
+    let offset = flight::scale(dir, offset_m / dl);
+    let vel = flight::scale(vel, METRES_PER_AU / SECONDS_PER_DAY);
+    // The offset faces the star, so it turns as the source goes round it,
+    // at the source's angular rate about the pole. Left out, a gas giant's
+    // ~70,000 km offset moves ~13 m/s faster than the goal says: more than
+    // the autopilot's arrival tolerance, so ships closing on it never
+    // arrive and crawl at its smallest step all day (issue #115).
+    let r2 = (centre[0] * centre[0] + centre[1] * centre[1]).max(1.0);
+    let omega = (centre[0] * vel[1] - centre[1] * vel[0]) / r2;
+    let turning = [-omega * offset[1], omega * offset[0], 0.0];
     Goal {
-        pos: flight::add(centre, flight::scale(dir, offset_m / dl)),
-        vel: flight::scale(vel, METRES_PER_AU / SECONDS_PER_DAY),
+        pos: flight::add(centre, offset),
+        vel: flight::add(vel, turning),
     }
 }
 
