@@ -479,6 +479,69 @@ facilities on the ground. Decided while building it:
 - Player can join a faction and hold **military rank**.
 - **Reputation** per faction; **bounties** issued by faction law.
 
+#### 5.5.1 Stability and secession as built (#18)
+
+All in `sim::politics`; it runs in planning, in play as in prehistory.
+
+- **Stability** is per settlement, 0 to 1. At its monthly review a
+  settlement moves 1/24 of the way to its target, so loyalty shifts over
+  about two years. The target is
+  `1 − 0.5·(lane ly from capital ÷ 60) − 0.2·ln(faction people ÷ 2000) −
+  0.4·hunger − 0.3 in famine`, clamped to 0..1, with the log term only
+  past 2000 people. Unreachable from the capital counts as 0. The
+  capital is always 1. Distance is lane distance, not jumps: a long
+  bridge strains loyalty more than a short hop. The log term is
+  overextension: a big realm's middle provinces get restless too, so
+  great powers split in large pieces, not only at the fringe.
+- **Shocks** go through the same target. Famine is the only one so far;
+  plagues and other outside shocks (§5.7) add their own terms.
+- **Regions.** Once a year (day 180), a faction's systems whose
+  stability (population-weighted over its settlements there) is under
+  0.35 are grouped: unstable systems within 60 ly of lanes of each other
+  are one region. The capital's system never takes part, and a system
+  goes whole: a city and its highport don't split.
+- **Breaking away.** A region with at least max(20 people, 2% of its
+  parent's) has a 20% chance a year to secede. Its most populous
+  settlement becomes the capital, and only the systems nearer that new
+  capital than the old one go with it; the rest stay and may try again.
+  If that leaves too few people, nothing happens. The share floor keeps
+  a great power from being nibbled to dust by its outposts. Settlements
+  of a new faction start at 0.8 stability: the first years of freedom
+  are hopeful.
+- **What a breakaway inherits:** its parent's economic model, flipped
+  between planned and market 30% of the time, and a colour within ±40
+  per channel of its parent's, so families read as families on the map.
+  Tech, ideology and language don't exist yet; when they do, they are
+  inherited here too.
+- **Names follow the lineage.** Every faction keeps the stem its name is
+  built on (`Faction::stem`: Kessa in Union of Kessa). Half the time a
+  breakaway builds on its parent's stem, if fewer than 3 factions carry
+  it already; otherwise on its new capital's name. The template follows
+  its economy, as for founding nations, and names are unique for all
+  time, gone factions included.
+- **History** records `FactionFounded` and `Secession { parent, child,
+  settlements, leader }`. The leader is a named historical figure (names
+  only for now).
+- **Nothing merges or dies yet.** The faction count only grows. Conquest
+  and war (§5.7) are the counterweight; until they land, a much longer
+  `history_years` will over-fragment.
+- **Measuring it.** `retrox prehistory` prints, every 10 years, living
+  factions, *powers* (factions with at least 5% of all people), the
+  largest faction's share, and the *effective number* of factions (one
+  over the sum of squared population shares: four equal powers score 4,
+  one empire with crumbs scores near 1), then the family tree of every
+  founding nation that has breakaways or is a power. `retrox
+  simulate` prints the same at its end. The full legends tool is #14.
+  Targets for 400 years: effective number 3–10, largest share under
+  half, no more than about 60 factions standing. As tuned, seeds 1–3
+  end with 30–41 factions, 4–6 powers, the largest at 24–28% and an
+  effective number of about 7. The first secessions come around year
+  230, once colonies have spread past ~100 ly. A compact seed (4) never
+  spreads far enough and keeps its four founding nations. In the placed
+  galaxy played today, stability starts at 1, so nothing breaks away in
+  the first years. Seed 1 sees 3 secessions in 20 years of play: news
+  for the player, not a collapse.
+
 ### 5.6 News & propaganda
 
 - The sim knows what actually happened. **The player never sees it

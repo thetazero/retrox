@@ -56,4 +56,12 @@ pub enum HistoryKind {
         faction: FactionId,
         system: SystemId,
     },
+    /// `settlements` of `parent` broke away and founded `child`, led by a
+    /// figure remembered by name (DESIGN §5.5).
+    Secession {
+        parent: FactionId,
+        child: FactionId,
+        settlements: Vec<SettlementId>,
+        leader: String,
+    },
 }

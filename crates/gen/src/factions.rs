@@ -89,9 +89,9 @@ pub fn found(rng: &mut Rng, state: &mut GalaxyState, territory: &Territory, popu
             EconomyModel::Market
         };
         let capital_name = state.systems[capital].name.clone();
-        let mut name = faction_name(rng, &capital_name, economy, false);
+        let (mut name, mut stem) = faction_name(rng, &capital_name, economy, false);
         while taken.contains(&name) {
-            name = faction_name(rng, &capital_name, economy, true);
+            (name, stem) = faction_name(rng, &capital_name, economy, true);
         }
         taken.insert(name.clone());
         let id = state.factions.insert(Faction {
@@ -105,6 +105,8 @@ pub fn found(rng: &mut Rng, state: &mut GalaxyState, territory: &Territory, popu
             treasury: 0.0,
             population: 0.0,
             welfare: Default::default(),
+            parent: None,
+            stem,
         });
         state.history.record(
             GalaxyTime::ZERO,
@@ -134,6 +136,7 @@ pub fn found(rng: &mut Rng, state: &mut GalaxyState, territory: &Territory, popu
                 population,
                 ..LocalEconomy::default()
             },
+            stability: 1.0,
         });
         let faction = &mut state.factions[owner];
         // An independent's only settlement is its capital.
@@ -238,10 +241,11 @@ fn independent(
         "Autonomous {}",
         "{} Commune",
     ];
-    let base = settlement_name.split(' ').next().unwrap_or(settlement_name);
-    let mut name = r.pick(TEMPLATES).replace("{}", base);
+    let mut stem = names::stem(settlement_name).to_owned();
+    let mut name = r.pick(TEMPLATES).replace("{}", &stem);
     while taken.contains(&name) {
-        name = r.pick(TEMPLATES).replace("{}", &names::word(r));
+        stem = names::word(r);
+        name = r.pick(TEMPLATES).replace("{}", &stem);
     }
     taken.insert(name.clone());
     let economy = if r.chance(0.7) {
@@ -259,6 +263,8 @@ fn independent(
         treasury: 0.0,
         population: 0.0,
         welfare: Default::default(),
+        parent: None,
+        stem,
     });
     state.history.record(
         GalaxyTime::ZERO,
@@ -319,39 +325,21 @@ fn nearest_capital(state: &GalaxyState, capitals: &[SystemId], system: SystemId)
         .fold(f64::INFINITY, f64::min)
 }
 
-/// Faction names from the capital's name and the faction's character.
+/// A faction name from the capital's name and the faction's character,
+/// with the stem it is built on. `fresh` (or a one-in-four chance) makes up
+/// a new stem instead of the capital's.
 pub(crate) fn faction_name(
     rng: &mut Rng,
     capital: &str,
     economy: EconomyModel,
     fresh: bool,
-) -> String {
-    // The capital's base name, without suffixes like " Prime".
-    let base = capital.split(' ').next().unwrap_or(capital);
-    let base = if fresh || rng.chance(0.25) {
+) -> (String, String) {
+    let stem = if fresh || rng.chance(0.25) {
         names::word(rng)
     } else {
-        base.to_owned()
+        names::stem(capital).to_owned()
     };
-    let templates: &[&str] = match economy {
-        EconomyModel::Planned => &[
-            "{} Commonwealth",
-            "Union of {}",
-            "{} Cooperative",
-            "{} Directorate",
-            "Collective of {}",
-            "{} Concord",
-        ],
-        EconomyModel::Market => &[
-            "{} Mercantile League",
-            "{} Compact",
-            "Free Ports of {}",
-            "{} Trade Federation",
-            "{} Consortium",
-            "{} Exchange",
-        ],
-    };
-    rng.pick(templates).replace("{}", &base)
+    (names::faction_name(rng, &stem, economy), stem)
 }
 
 pub(crate) fn hsl(h: f64, s: f64, l: f64) -> [u8; 3] {

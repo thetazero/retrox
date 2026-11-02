@@ -72,9 +72,9 @@ pub fn found(rng: &mut Rng, state: &mut GalaxyState, config: &GalaxyConfig) -> V
             EconomyModel::Market
         };
         let region_name = state.regions[region].name.clone();
-        let mut name = faction_name(rng, &region_name, economy, false);
+        let (mut name, mut stem) = faction_name(rng, &region_name, economy, false);
         while names.contains(&name) {
-            name = faction_name(rng, &region_name, economy, true);
+            (name, stem) = faction_name(rng, &region_name, economy, true);
         }
         names.push(name.clone());
         let faction = state.factions.insert(Faction {
@@ -90,6 +90,8 @@ pub fn found(rng: &mut Rng, state: &mut GalaxyState, config: &GalaxyConfig) -> V
             treasury: 0.0,
             population: 0.0,
             welfare: Default::default(),
+            parent: None,
+            stem,
         });
         state
             .history
@@ -104,6 +106,7 @@ pub fn found(rng: &mut Rng, state: &mut GalaxyState, config: &GalaxyConfig) -> V
                 population: rng.range(NATION_POPULATION.0, NATION_POPULATION.1),
                 ..LocalEconomy::default()
             },
+            stability: 1.0,
         });
         state.factions[faction].capital = capital;
         state.history.record(
