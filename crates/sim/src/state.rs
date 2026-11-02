@@ -41,6 +41,9 @@ pub struct GalaxyState {
     /// Remembered lane distances; see [`crate::haul::ReachCache`].
     #[serde(skip)]
     pub reach_cache: crate::haul::ReachCache,
+    /// The agent tier around the player; see [`crate::bubble`].
+    #[serde(default)]
+    pub bubble: crate::bubble::Bubble,
     pub colony_ships: Pool<crate::colonize::ColonyShipId, crate::colonize::ColonyShip>,
     pub history: History,
 }
