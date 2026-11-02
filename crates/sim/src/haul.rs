@@ -216,45 +216,51 @@ type Contracts = SecondaryMap<FactionId, bool>;
 /// Each system's best buyer of every good, and its most valuable surplus:
 /// what route choice reads instead of scanning every market. Rebuilt at the
 /// start of every trade phase in one pass over settlements.
+/// Only settled systems have an entry.
 #[derive(Clone, Debug, Default)]
 struct Board {
-    /// Per system index: the settlement paying the most for each good.
-    buyers: Vec<GoodMap<Option<(SettlementId, f64)>>>,
-    /// Per system index: the settlement whose surplus would fetch the most
-    /// at base prices, with that surplus and its margin per unit.
-    sources: Vec<Option<(SettlementId, f64, f64)>>,
+    systems: HashMap<SystemId, Listing>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Listing {
+    /// The settlement paying the most for each good.
+    buyers: GoodMap<Option<(SettlementId, f64)>>,
+    /// The settlement whose surplus would fetch the most at base prices,
+    /// with that surplus and its margin per unit.
+    source: Option<(SettlementId, f64, f64)>,
 }
 
 impl Board {
     fn build(state: &GalaxyState) -> Self {
-        let n = state.systems.len();
-        let mut board = Self {
-            buyers: vec![GoodMap::splat(None); n],
-            sources: vec![None; n],
-        };
+        let mut systems: HashMap<SystemId, Listing> =
+            HashMap::with_capacity(state.settlements.len());
         for (id, s) in &state.settlements {
-            let i = s.system.index();
+            let listing = systems.entry(s.system).or_insert(Listing {
+                buyers: GoodMap::splat(None),
+                source: None,
+            });
             let market = &s.economy.market;
             for good in Good::ALL {
                 let price = market.price[good];
-                if board.buyers[i][good].is_none_or(|(_, best)| price > best) {
-                    board.buyers[i][good] = Some((id, price));
+                if listing.buyers[good].is_none_or(|(_, best)| price > best) {
+                    listing.buyers[good] = Some((id, price));
                 }
                 let surplus = market.surplus(good);
                 let margin = (good.base_price() - price).max(0.0);
                 let value = surplus * margin;
-                if value > 0.0 && board.sources[i].is_none_or(|(_, s, m)| value > s * m) {
-                    board.sources[i] = Some((id, surplus, margin));
+                if value > 0.0 && listing.source.is_none_or(|(_, s, m)| value > s * m) {
+                    listing.source = Some((id, surplus, margin));
                 }
             }
         }
-        board
+        Self { systems }
     }
 }
 
 /// Route choice looks at no more than this many settled systems, nearest
 /// first.
-const ROUTE_SYSTEMS: usize = 40;
+const ROUTE_SYSTEMS: usize = 20;
 
 /// Days between monthly reviews.
 const REVIEW_DAYS: u64 = 30;
@@ -621,20 +627,33 @@ fn choose_route(
     let mut fallback: Option<(f64, SettlementId, u32, bool)> = None;
     let mut considered = 0;
     for &(system, ly) in reach(state, origin.system, MAX_TRIP_DAYS * class.jump_laden).iter() {
-        let i = system.index();
-        if state.systems[system].settlements.is_empty() {
+        let Some(listing) = board.systems.get(&system) else {
             continue;
-        }
+        };
         considered += 1;
         if considered > ROUTE_SYSTEMS {
             break;
         }
         let jumps = system != origin.system;
+        // No leg to this system is shorter than its jump plus handling.
+        let shortest = ly / class.jump_laden + HANDLING_DAYS;
         for &(good, amount, buy) in &offers {
-            let Some((to, _)) = board.buyers[i][good] else {
+            let Some((to, price)) = listing.buyers[good] else {
                 continue;
             };
             if to == here {
+                continue;
+            }
+            // Cheap bound first: today's price is at least what it will be
+            // once more cargo arrives, and the premium is at most its cap.
+            let owner = state.settlements[to].owner;
+            let premium_cap = if contracts.get(owner).copied().unwrap_or(false) {
+                crate::fiscal::max_premium(good)
+            } else {
+                0.0
+            };
+            let bound = amount * (price + premium_cap - buy) / (2.0 * shortest);
+            if bound <= MIN_PROFIT_PER_DAY || best.as_ref().is_some_and(|(b, _)| bound <= *b) {
                 continue;
             }
             let leg = leg_days(state, class, here, to, ly);
@@ -661,8 +680,12 @@ fn choose_route(
         }
         // Somewhere better to load? Rough guide: what the system's best
         // surplus would fetch at base prices.
-        if let Some((to, surplus, margin)) = board.sources[i]
+        if let Some((to, surplus, margin)) = listing.source
             && to != here
+            && best.is_none()
+            && fallback
+                .as_ref()
+                .is_none_or(|(b, ..)| capacity.min(surplus) * margin / (2.0 * shortest) > *b)
         {
             let leg = leg_days(state, class, here, to, ly);
             let per_day = (capacity.min(surplus) * margin - leg * fuel) / (2.0 * leg);
