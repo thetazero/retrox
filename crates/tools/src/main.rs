@@ -278,6 +278,11 @@ fn print_economy(state: &retrox_sim::GalaxyState) {
         e.companies, e.ships, e.ships_travelling
     );
     println!(
+        "  {} settlements, {} colony ships under way",
+        state.settlements.len(),
+        state.colony_ships.len()
+    );
+    println!(
         "  {:<11} {:>12} {:>10} {:>10} {:>9} {:>8}",
         "good", "stock", "demand/d", "short/d", "price", "#short"
     );

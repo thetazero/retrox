@@ -1,8 +1,8 @@
 //! Every movement of money and market goods goes through here.
 //!
 //! An [`Account`] is anything that holds credits: a settlement's treasury,
-//! a company, a faction. Each kind has a floor it can't go below:
-//! settlements and companies can't go into debt; a faction can, down to a
+//! a company, a faction, a colony ship's purse. Each kind has a floor it can't go below:
+//! settlements, companies and colony ships can't go into debt; a faction can, down to a
 //! debt limit set by its population, since a faction's negative balance is
 //! money it has issued (see [`crate::fiscal`]).
 //!
@@ -15,6 +15,7 @@
 //! In debug builds, [`check`] verifies after every tick that money is
 //! conserved and nothing is below its floor.
 
+use crate::colonize::ColonyShipId;
 use crate::economy::Good;
 use crate::haul::CompanyId;
 use crate::{FactionId, GalaxyState, SettlementId};
@@ -28,6 +29,8 @@ pub enum Account {
     Settlement(SettlementId),
     Company(CompanyId),
     Faction(FactionId),
+    /// A colony ship's purse, carried to its new settlement.
+    Colony(ColonyShipId),
 }
 
 /// What a market is willing to sell of a good.
@@ -45,6 +48,7 @@ pub fn balance(state: &GalaxyState, account: Account) -> Option<f64> {
         Account::Settlement(id) => state.settlements.get(id).map(|s| s.economy.treasury),
         Account::Company(id) => state.companies.get(id).map(|c| c.credits),
         Account::Faction(id) => state.factions.get(id).map(|f| f.treasury),
+        Account::Colony(id) => state.colony_ships.get(id).map(|c| c.credits),
     }
 }
 
@@ -56,13 +60,14 @@ fn balance_mut(state: &mut GalaxyState, account: Account) -> Option<&mut f64> {
             .map(|s| &mut s.economy.treasury),
         Account::Company(id) => state.companies.get_mut(id).map(|c| &mut c.credits),
         Account::Faction(id) => state.factions.get_mut(id).map(|f| &mut f.treasury),
+        Account::Colony(id) => state.colony_ships.get_mut(id).map(|c| &mut c.credits),
     }
 }
 
 /// The lowest balance an account may reach.
 pub fn floor(state: &GalaxyState, account: Account) -> f64 {
     match account {
-        Account::Settlement(_) | Account::Company(_) => 0.0,
+        Account::Settlement(_) | Account::Company(_) | Account::Colony(_) => 0.0,
         Account::Faction(id) => {
             -state.factions.get(id).map_or(0.0, |f| f.population) * DEBT_PER_POPULATION
         }
@@ -164,12 +169,13 @@ pub fn consume(state: &mut GalaxyState, market: SettlementId, good: Good, wanted
     amount
 }
 
-/// All money anywhere: settlements, companies and factions.
+/// All money anywhere: settlements, companies, factions and colony ships.
 pub fn total_money(state: &GalaxyState) -> f64 {
     let settlements: f64 = state.settlements.values().map(|s| s.economy.treasury).sum();
     let companies: f64 = state.companies.values().map(|c| c.credits).sum();
     let factions: f64 = state.factions.values().map(|f| f.treasury).sum();
-    settlements + companies + factions
+    let colonies: f64 = state.colony_ships.values().map(|c| c.credits).sum();
+    settlements + companies + factions + colonies
 }
 
 /// Panic if money wasn't conserved since `before` or any account or stock
@@ -200,6 +206,14 @@ pub fn check(state: &GalaxyState, before: f64) {
     }
     for c in state.companies.values() {
         assert!(c.credits >= -EPS, "{} credits {}", c.name, c.credits);
+    }
+    for c in state.colony_ships.values() {
+        assert!(
+            c.credits >= -EPS,
+            "colony ship to {} credits {}",
+            c.name,
+            c.credits
+        );
     }
     for (id, f) in &state.factions {
         assert!(

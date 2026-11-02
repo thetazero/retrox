@@ -15,6 +15,7 @@ pub fn production(state: &mut GalaxyState) {
 pub fn planning(state: &mut GalaxyState) {
     crate::fiscal::taxes_and_welfare(state);
     crate::construction::build(state);
+    crate::colonize::launch(state);
 }
 
 /// Docked fleets sell their cargo and pick their next trip.
@@ -25,6 +26,7 @@ pub fn trade(state: &mut GalaxyState) {
 /// Fleets arrive where they were going.
 pub fn movement(state: &mut GalaxyState) {
     crate::haul::movement(state);
+    crate::colonize::arrive(state);
 }
 
 /// Battles are resolved abstractly.

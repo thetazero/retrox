@@ -387,7 +387,7 @@ pub fn update_all_prices(state: &mut GalaxyState) {
 #[derive(Clone, Debug, Default)]
 pub struct EconomySummary {
     pub population: f64,
-    /// Credits held by all settlements and companies.
+    /// Credits held by all settlements, companies and colony ships.
     pub money: f64,
     /// Sum of faction balances; negative means money factions have issued.
     pub faction_balance: f64,
@@ -432,6 +432,7 @@ pub fn summarize(state: &GalaxyState) -> EconomySummary {
         }
     }
     out.faction_balance = state.factions.values().map(|f| f.treasury).sum();
+    out.money += state.colony_ships.values().map(|c| c.credits).sum::<f64>();
     out.companies = state.companies.len();
     for company in state.companies.values() {
         out.money += company.credits;

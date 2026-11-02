@@ -140,18 +140,29 @@ const SECONDS_PER_DAY: f64 = 86_400.0;
 /// Where a settlement is at time `t_days`, in AU from its star.
 pub fn settlement_position(state: &GalaxyState, id: SettlementId, t_days: f64) -> [f64; 3] {
     let s = &state.settlements[id];
-    match s.site {
+    site_position(state, s.system, s.site, t_days)
+}
+
+/// Where a site in `system` is at time `t_days`, in AU from its star.
+pub fn site_position(state: &GalaxyState, system: SystemId, site: Site, t_days: f64) -> [f64; 3] {
+    match site {
         Site::Region(r) => state.body_position(state.regions[r].body, t_days),
         Site::Surface(b) => state.body_position(b, t_days),
-        Site::Space(orbit) => state.orbit_position(s.system, &orbit, t_days),
+        Site::Space(orbit) => state.orbit_position(system, &orbit, t_days),
     }
 }
 
 /// A settlement's position and velocity at `t_days`, in metres from its
 /// star: where a ship docking there has to be, and how fast.
 pub fn settlement_goal(state: &GalaxyState, id: SettlementId, t_days: f64) -> Goal {
+    let s = &state.settlements[id];
+    site_goal(state, s.system, s.site, t_days)
+}
+
+/// A site's position and velocity at `t_days`, in metres from its star.
+pub fn site_goal(state: &GalaxyState, system: SystemId, site: Site, t_days: f64) -> Goal {
     const H_DAYS: f64 = 1e-3;
-    let at = |t| flight::scale(settlement_position(state, id, t), METRES_PER_AU);
+    let at = |t| flight::scale(site_position(state, system, site, t), METRES_PER_AU);
     let (a, b) = (at(t_days - H_DAYS), at(t_days + H_DAYS));
     Goal {
         pos: at(t_days),
@@ -183,7 +194,7 @@ pub fn cruise_days(au: f64, accel: f64) -> f64 {
 }
 
 /// Shortest lane distance from `origin` to every system within `max_ly`.
-fn reach(state: &GalaxyState, origin: SystemId, max_ly: f64) -> Vec<(SystemId, f64)> {
+pub fn reach(state: &GalaxyState, origin: SystemId, max_ly: f64) -> Vec<(SystemId, f64)> {
     let mut best: HashMap<SystemId, f64> = HashMap::from([(origin, 0.0)]);
     let mut heap = BinaryHeap::from([Reverse((0.0f64.to_bits(), origin))]);
     let mut out = Vec::new();
@@ -486,7 +497,61 @@ pub fn movement(state: &mut GalaxyState) {
     }
 }
 
-/// One day of a trip: fly, jump, or come out of the lanes.
+/// Where a trip stands after a day of it.
+pub enum Leg {
+    Underway(Stage),
+    Arrived,
+}
+
+/// One day of a trip toward `goal` (a function of time in days) in
+/// `dest_system`: fly under autopilot, wait out the jump, or come out of
+/// the lanes. Shared by every kind of ship.
+pub fn step_trip(
+    state: &GalaxyState,
+    stage: Stage,
+    dest_system: SystemId,
+    jump_days: f64,
+    accel: f64,
+    goal: impl Fn(f64) -> Goal,
+) -> Leg {
+    let now = state.time;
+    match stage {
+        Stage::Jumping { arrive, .. } if arrive > now => Leg::Underway(stage),
+        // Out of the lanes at rest, on the side facing where we came from;
+        // the autopilot takes it from here tomorrow.
+        Stage::Jumping { from, .. } => Leg::Underway(Stage::Flying {
+            system: dest_system,
+            ship: Kinematics {
+                pos: jump_point(state, dest_system, from),
+                vel: [0.0; 3],
+            },
+        }),
+        Stage::Flying { system, mut ship } => {
+            let t0 = now.days() as f64;
+            let arrived = if system == dest_system {
+                flight::fly(&mut ship, accel, SECONDS_PER_DAY, |t, _| {
+                    goal(t0 + t / SECONDS_PER_DAY)
+                })
+            } else {
+                let point = Goal {
+                    pos: jump_point(state, system, dest_system),
+                    vel: [0.0; 3],
+                };
+                flight::fly(&mut ship, accel, SECONDS_PER_DAY, |_, _| point)
+            };
+            match arrived {
+                None => Leg::Underway(Stage::Flying { system, ship }),
+                Some(_) if system == dest_system => Leg::Arrived,
+                Some(_) => Leg::Underway(Stage::Jumping {
+                    from: system,
+                    arrive: GalaxyTime::from_days(now.days() + jump_days.ceil().max(1.0) as u64),
+                }),
+            }
+        }
+    }
+}
+
+/// One day of a fleet's trip.
 fn advance(state: &GalaxyState, at: Location, accel: f64) -> Location {
     let Location::Travelling {
         to,
@@ -496,62 +561,20 @@ fn advance(state: &GalaxyState, at: Location, accel: f64) -> Location {
     else {
         return at;
     };
-    let now = state.time;
     let Some(dest) = state.settlements.get(to) else {
         // Nowhere left to go: the trip just ends.
         return Location::Docked(to);
     };
-    let dest_system = dest.system;
-    match stage {
-        Stage::Jumping { arrive, .. } if arrive > now => at,
-        Stage::Jumping { from, .. } => {
-            // Out of the lanes at rest, on the side facing where we came
-            // from; the autopilot takes it from here tomorrow.
-            let entry = jump_point(state, dest_system, from);
-            Location::Travelling {
-                to,
-                jump_days,
-                stage: Stage::Flying {
-                    system: dest_system,
-                    ship: Kinematics {
-                        pos: entry,
-                        vel: [0.0; 3],
-                    },
-                },
-            }
-        }
-        Stage::Flying { system, mut ship } => {
-            let t0 = now.days() as f64;
-            let arrived = if system == dest_system {
-                flight::fly(&mut ship, accel, SECONDS_PER_DAY, |t, _| {
-                    settlement_goal(state, to, t0 + t / SECONDS_PER_DAY)
-                })
-            } else {
-                let goal = Goal {
-                    pos: jump_point(state, system, dest_system),
-                    vel: [0.0; 3],
-                };
-                flight::fly(&mut ship, accel, SECONDS_PER_DAY, |_, _| goal)
-            };
-            match arrived {
-                None => Location::Travelling {
-                    to,
-                    jump_days,
-                    stage: Stage::Flying { system, ship },
-                },
-                Some(_) if system == dest_system => Location::Docked(to),
-                Some(_) => Location::Travelling {
-                    to,
-                    jump_days,
-                    stage: Stage::Jumping {
-                        from: system,
-                        arrive: GalaxyTime::from_days(
-                            now.days() + jump_days.ceil().max(1.0) as u64,
-                        ),
-                    },
-                },
-            }
-        }
+    let leg = step_trip(state, stage, dest.system, jump_days, accel, |t| {
+        settlement_goal(state, to, t)
+    });
+    match leg {
+        Leg::Underway(stage) => Location::Travelling {
+            to,
+            jump_days,
+            stage,
+        },
+        Leg::Arrived => Location::Docked(to),
     }
 }
 
