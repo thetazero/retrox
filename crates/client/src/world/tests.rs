@@ -686,6 +686,7 @@ fn climbing_out_is_a_real_flight_toward_the_next_target() {
     let planet = Place::Body(body);
     world.act(Action::Launch);
     world.target = Some(Place::Star);
+    let before = world.clock_s;
     world.act(Action::FastTravel);
     let dt = 1.0 / 60.0;
     while matches!(world.mode, Mode::FastTravel(_)) {
@@ -702,6 +703,16 @@ fn climbing_out_is_a_real_flight_toward_the_next_target() {
     let sunward = (-world.position(planet)).normalize();
     assert!(out.dot(sunward) > 0.95, "came out facing the star");
     assert_eq!(world.prompts().fast_travel, Some(Place::Star));
+    // The climb takes about as long as its distance says: the goal on the
+    // well's edge swings round with the planet's orbit, and the autopilot
+    // must match that, not chase it for days (issue #109).
+    let climb = world.distance_to(planet);
+    let planned = retrox_sim::flight::trip_seconds(climb, world.drive_accel());
+    let took = world.clock_s - before;
+    assert!(
+        took < planned * 3.0,
+        "climbed {climb:.3e} m in {took:.0} s of galaxy time, planned {planned:.0} s"
+    );
 }
 
 /// A gang in a system of its own, at home, with the player arriving there
