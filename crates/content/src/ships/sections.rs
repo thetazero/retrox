@@ -9,7 +9,7 @@ use retrox_sim::ship::{Position, Section, Size, Slot, SlotKind};
 
 use Position::{Bow, Mid, Stern, Whole};
 use Size::{Large as L, Medium as M, Small as S};
-use SlotKind::{Cargo, Engine, Power, Radar, Radiator, Rcs, Shield, Weapon};
+use SlotKind::{Cargo, Engine, JumpDrive, Power, Radar, Radiator, Rcs, Shield, Weapon};
 
 /// Every swappable section (the ones that go in open mounts).
 pub static SECTIONS: &[Section] = &[
@@ -62,6 +62,7 @@ pub const INTERCEPTOR_BODY: Section = Section {
         slot(Radar, S, [0.0, 0.6, 2.5]),
         slot(Radiator, S, [-1.2, 0.0, -2.5]),
         slot(Radiator, S, [1.2, 0.0, -2.5]),
+        slot(JumpDrive, S, [0.0, 0.0, 0.0]),
     ],
 };
 
@@ -89,6 +90,7 @@ pub const HEAVY_FIGHTER_BODY: Section = Section {
         slot(Radiator, S, [-1.6, 0.0, -3.5]),
         slot(Radiator, S, [1.6, 0.0, -3.5]),
         slot(Radiator, S, [0.0, 1.2, -3.5]),
+        slot(JumpDrive, S, [0.0, 0.0, 0.0]),
     ],
 };
 
@@ -110,6 +112,7 @@ pub const RACER_BODY: Section = Section {
         slot(Radar, S, [0.0, 0.4, 3.0]),
         slot(Radiator, S, [-1.0, 0.0, -2.5]),
         slot(Radiator, S, [1.0, 0.0, -2.5]),
+        slot(JumpDrive, S, [0.0, 0.0, 0.0]),
     ],
 };
 
@@ -134,6 +137,7 @@ pub const COURIER_BODY: Section = Section {
         slot(Radiator, S, [1.0, 0.0, -3.5]),
         slot(Cargo, S, [-0.9, -0.4, 1.0]),
         slot(Cargo, S, [0.9, -0.4, 1.0]),
+        slot(JumpDrive, S, [0.0, 0.0, 0.0]),
     ],
 };
 
@@ -162,6 +166,7 @@ pub const LIGHT_TRADER_BODY: Section = Section {
         slot(Cargo, S, [1.0, -0.6, 3.0]),
         slot(Cargo, S, [-1.0, -0.6, -1.0]),
         slot(Cargo, S, [1.0, -0.6, -1.0]),
+        slot(JumpDrive, S, [0.0, 0.0, 0.0]),
     ],
 };
 
@@ -295,6 +300,7 @@ pub const SPRINT_STERN_M: Section = Section {
         slot(Power, M, [0.0, 0.0, 1.0]),
         slot(Radiator, M, [0.0, 3.5, -2.0]),
         slot(Radiator, M, [0.0, -3.5, -2.0]),
+        slot(JumpDrive, M, [0.0, 0.0, 0.0]),
     ],
 };
 
@@ -314,6 +320,7 @@ pub const CRUISE_STERN_M: Section = Section {
         slot(Power, M, [0.0, 0.0, 1.0]),
         slot(Radiator, M, [-3.5, 0.0, -2.0]),
         slot(Radiator, M, [3.5, 0.0, -2.0]),
+        slot(JumpDrive, M, [0.0, 0.0, 0.0]),
     ],
 };
 
@@ -444,6 +451,7 @@ pub const SPRINT_STERN_L: Section = Section {
         slot(Power, L, [0.0, 0.0, 2.0]),
         slot(Radiator, L, [0.0, 7.0, -4.0]),
         slot(Radiator, L, [0.0, -7.0, -4.0]),
+        slot(JumpDrive, L, [0.0, 0.0, 0.0]),
     ],
 };
 
@@ -462,5 +470,6 @@ pub const CRUISE_STERN_L: Section = Section {
         slot(Power, L, [0.0, 0.0, 2.0]),
         slot(Radiator, L, [-7.0, 0.0, -4.0]),
         slot(Radiator, L, [7.0, 0.0, -4.0]),
+        slot(JumpDrive, L, [0.0, 0.0, 0.0]),
     ],
 };

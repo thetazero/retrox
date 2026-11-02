@@ -71,6 +71,8 @@ pub enum SlotKind {
     Radar,
     Radiator,
     Cargo,
+    /// The hyperdrive, for jumping along hyperlanes.
+    JumpDrive,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -174,6 +176,16 @@ pub enum Function {
     Cargo {
         capacity_t: f64,
     },
+    /// A hyperdrive. Its power and heat are drawn only while jumping, so
+    /// they don't count toward the combat or cruise loads.
+    JumpDrive {
+        /// Light-years per day along a hyperlane, at or below rated mass.
+        speed_ly_per_day: f64,
+        /// Ships heavier than this jump proportionally slower.
+        rated_mass_t: f64,
+        /// Which hyperlane tiers the drive can use (DESIGN §4.1).
+        tier: u8,
+    },
 }
 
 impl Function {
@@ -187,6 +199,7 @@ impl Function {
             Self::Radar { .. } => SlotKind::Radar,
             Self::Radiator { .. } => SlotKind::Radiator,
             Self::Cargo { .. } => SlotKind::Cargo,
+            Self::JumpDrive { .. } => SlotKind::JumpDrive,
         }
     }
 }
@@ -427,11 +440,30 @@ pub struct ShipStats {
     pub shield_regen_per_s: f64,
     pub radar_range_km: f64,
     pub cargo_t: f64,
+    /// The jump drive's rated speed, light-years per day; 0 without one.
+    pub jump_speed_ly_per_day: f64,
+    pub jump_rated_mass_t: f64,
+    /// Highest hyperlane tier the ship can use; 0 without a drive.
+    pub drive_tier: u8,
 }
 
 impl ShipStats {
     fn add(&mut self, module: &Module) {
         self.mass_t += module.mass_t;
+        if let Function::JumpDrive {
+            speed_ly_per_day,
+            rated_mass_t,
+            tier,
+        } = module.function
+        {
+            // Drawn only while jumping; see `Function::JumpDrive`.
+            if speed_ly_per_day > self.jump_speed_ly_per_day {
+                self.jump_speed_ly_per_day = speed_ly_per_day;
+                self.jump_rated_mass_t = rated_mass_t;
+            }
+            self.drive_tier = self.drive_tier.max(tier);
+            return;
+        }
         self.combat.power_mw += module.power_mw;
         self.combat.heat_mw += module.heat_mw;
         if module.kind() != SlotKind::Weapon {
@@ -462,7 +494,19 @@ impl ShipStats {
             }
             Function::Radiator { dissipation_mw } => self.heat_dissipation_mw += dissipation_mw,
             Function::Cargo { capacity_t } => self.cargo_t += capacity_t,
+            Function::JumpDrive { .. } => unreachable!("handled above"),
         }
+    }
+
+    /// Jump speed along a hyperlane at this mass, light-years per day:
+    /// the drive's rated speed, slowed in proportion when the ship is
+    /// heavier than the drive is rated for. Use [`ShipStats::laden`] for a
+    /// full hold.
+    pub fn jump_speed(&self) -> f64 {
+        if self.mass_t <= 0.0 {
+            return 0.0;
+        }
+        self.jump_speed_ly_per_day * (self.jump_rated_mass_t / self.mass_t).min(1.0)
     }
 
     /// The same ship with a full hold.
