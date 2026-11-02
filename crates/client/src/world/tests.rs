@@ -8,14 +8,6 @@ fn run(world: &mut World, seconds: f64) {
     }
 }
 
-/// Wait docked or landed, running frames until the wait is over.
-fn wait(world: &mut World, days: u64) {
-    world.act(Action::Wait(days));
-    while world.waiting.is_some() {
-        world.update(0.0, Controls::default());
-    }
-}
-
 /// Somewhere outside every gravity well.
 fn open_space(world: &mut World) {
     world.ship.frame = Place::Star;
@@ -99,7 +91,7 @@ fn buy_and_refit_a_ship_at_the_starting_yard() {
         if hangar::can_build(&world.galaxy.settlements[here].economy, &cheapest) {
             break;
         }
-        wait(&mut world, 1);
+        world.wait_days(1);
     }
     let credits = world.player.credits;
     world.act(Action::Hangar(Job::BuyShip(cheapest.hull)));
@@ -429,11 +421,11 @@ fn waiting_stops_when_a_contract_falls_due() {
     let mut world = World::new(1);
     let offer = world.board[0].clone();
     world.act(Action::AcceptContract(0));
-    wait(&mut world, 1000);
+    world.wait_days(1000);
     assert_eq!(world.date(), offer.deadline);
     assert_eq!(world.player.contracts.len(), 1);
     // Waiting on past the grace period fails it: the goods are ours.
-    wait(&mut world, 1000);
+    world.wait_days(1000);
     assert!(world.player.contracts.is_empty());
     assert_eq!(world.player.cargo[offer.good], offer.amount);
 }

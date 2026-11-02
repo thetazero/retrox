@@ -759,6 +759,15 @@ impl World {
         }
     }
 
+    /// Wait `days` and run the wait to its end at once (for tests).
+    #[cfg(test)]
+    pub fn wait_days(&mut self, days: u64) {
+        self.act(Action::Wait(days));
+        while self.waiting.is_some() {
+            self.wait_some();
+        }
+    }
+
     /// Say how a wait ended, and settle contracts it made due.
     fn end_wait(&mut self, w: Waiting, due: Option<String>) {
         let waited = w.waited;

@@ -26,6 +26,9 @@ cargo run --release -p retrox-tools -- simulate  # headless (see below)
 
 ### Game flags (for development)
 
+The game opens on its title screen. Starting flags (`--seed`, `--station`,
+`--undocked`, …) skip it and drop straight into a fresh game.
+
 | flag | does |
 |---|---|
 | `--seed N` | generate galaxy `N` (default 1) |
@@ -34,11 +37,15 @@ cargo run --release -p retrox-tools -- simulate  # headless (see below)
 | `--field` | start in an asteroid field facing a rock, prospected |
 | `--fire` | hold the mining laser's trigger down |
 | `--map` | start with the galaxy map open |
+| `--course JUMPS` | plot a course to the nearest system at least that many jumps away |
 | `--ship HULL` | start in that stock ship (`retrox ship` lists them) |
+| `--sections A,B,…` | with `--ship`: put these sections in its mounts, in order, fully fitted |
 | `--contracts` | start on the dispatch board |
 | `--contract` | also take the first contract on it |
 | `--ship-view DEG` | look at your ship from that angle, close up (0 = from behind) |
 | `--screenshot PATH.ppm` | save the 90th frame and quit |
+| `--menu PAGE` | open a menu page: `title`, `new`, `load`, `settings`, or `pause` / `quit` over a fresh game |
+| `--keys K1,K2,…` | press these keys, one a frame (`waitN` waits N frames), then quit |
 
 ### Tools
 

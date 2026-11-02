@@ -563,7 +563,7 @@ mod tests {
         world.act(Action::AcceptContract(0));
         assert_eq!(world.player.contracts.len(), 1, "took a contract");
         world.start_at_station();
-        world.act(Action::Wait(5));
+        world.wait_days(5);
         let here = world.docked_at().expect("docked");
         world.galaxy.settlements[here].economy.market.stock[Good::Ore] += 50.0;
         world.act(Action::Trade(Good::Ore, 4.0));
@@ -626,9 +626,9 @@ mod tests {
         let snap = snapshot(&world, &GameId::new(3), Kind::Checkpoint, 0.0).unwrap();
         let mut replay = decode(&snap.encode()).unwrap().world;
         for w in [&mut world, &mut replay] {
-            w.act(Action::Wait(45));
+            w.wait_days(45);
             w.act(Action::Trade(Good::Ore, -2.0));
-            w.act(Action::Wait(30));
+            w.wait_days(30);
         }
         assert_same(&world, &replay);
     }
