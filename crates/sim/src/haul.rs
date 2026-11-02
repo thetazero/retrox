@@ -75,6 +75,13 @@ pub struct Fleet {
     /// Its last review found no route worth running. Idle fleets mean
     /// there are already more ships than freight.
     pub idle: bool,
+    /// Whether it has taken on cargo since its last review.
+    #[serde(default)]
+    pub loaded: bool,
+    /// Reviews in a row it has carried nothing: ships with no freight to
+    /// carry are sold for scrap (see [`SLACK_REVIEWS`]).
+    #[serde(default)]
+    pub slack: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -225,7 +232,7 @@ impl<'de> Deserialize<'de> for Traffic {
     }
 }
 
-pub(crate) type Contracts = SecondaryMap<FactionId, bool>;
+pub(crate) type Contracts = SecondaryMap<FactionId, f64>;
 
 /// Each system's best buyer of every good, and its most valuable surplus:
 /// what route choice reads instead of scanning every market. Rebuilt at the
@@ -294,8 +301,15 @@ const UPKEEP_PER_CARGO_T_DAY: f64 = 0.02;
 const MAX_SPEND_SHARE: f64 = 0.5;
 /// A company spends at most this share of its credits on one cargo.
 const MAX_STAKE_SHARE: f64 = 0.9;
-/// A company buys another ship when it holds this many times its price.
+/// A company buys another ship when it holds this many times its price,
+/// and the fleet came in with its holds at least this full.
 const BUY_SHIP_AT_PRICES: f64 = 4.0;
+const FULL_HOLDS: f64 = 0.9;
+/// A fleet that has carried nothing for this many reviews in a row sells
+/// half its ships for scrap at the next port: a share of their mass, as
+/// metal.
+pub const SLACK_REVIEWS: u32 = 3;
+const SCRAP_METAL_SHARE: f64 = 0.5;
 /// Chance a settlement with hull and money founds a company at its
 /// monthly review, if no idle fleets sit in its port.
 const FOUND_COMPANY_CHANCE: f64 = 0.25;
@@ -558,9 +572,17 @@ pub(crate) fn dock(
         return;
     }
     state.companies[key].fleets[n].at = Location::Docked(to);
+    let fleet = &state.companies[key].fleets[n];
+    let full = fleet
+        .cargo
+        .is_some_and(|c| c.amount >= FULL_HOLDS * capacity(state, fleet));
     sell(state, contracts, key, n, to);
-    buy_ship(state, key, n, to);
-    if replan || state.companies[key].fleets[n].review_due {
+    buy_ship(state, key, n, to, full);
+    let review_due = state.companies[key].fleets[n].review_due;
+    if review_due && retire(state, key, n, to) {
+        return;
+    }
+    if replan || review_due {
         state.companies[key].fleets[n].review_due = false;
         choose_route(state, contracts, board, key, n, to);
     }
@@ -661,11 +683,19 @@ fn review(state: &mut GalaxyState, contracts: &Contracts, board: &Board, key: Co
         event,
     );
     pay_upkeep(state, key, n);
+    let fleet = &mut state.companies[key].fleets[n];
+    // Carrying something now, or loaded since last time, is work.
+    let working = fleet.loaded || fleet.cargo.is_some();
+    fleet.slack = if working { 0 } else { fleet.slack + 1 };
+    fleet.loaded = false;
     match state.companies[key].fleets[n].at {
         Location::Travelling { .. } | Location::Flying { .. } => {
             state.companies[key].fleets[n].review_due = true;
         }
         Location::Docked(here) => {
+            if retire(state, key, n, here) {
+                return;
+            }
             choose_route(state, contracts, board, key, n, here);
             run_route(state, contracts, key, n, here);
         }
@@ -706,16 +736,22 @@ fn choose_route(
     let origin = &state.settlements[here];
     let market = &origin.economy.market;
     let fuel = fuel_per_day(state, fleet) * market.price[Good::Fuel];
-    let offers: Vec<(Good, f64, f64)> = Good::ALL
-        .into_iter()
-        .filter_map(|good| {
-            let price = market.price[good];
-            let amount = capacity
-                .min(market.surplus(good))
-                .min(company.credits.max(0.0) * MAX_STAKE_SHARE / price);
-            (amount >= 1.0).then_some((good, amount, price))
-        })
-        .collect();
+    // Cargo still aboard comes first: the route is wherever it sells
+    // best, and what it cost is already spent.
+    let aboard = fleet.cargo;
+    let offers: Vec<(Good, f64, f64)> = match aboard {
+        Some(cargo) => vec![(cargo.good, cargo.amount, 0.0)],
+        None => Good::ALL
+            .into_iter()
+            .filter_map(|good| {
+                let price = market.price[good];
+                let amount = capacity
+                    .min(market.surplus(good))
+                    .min(company.credits.max(0.0) * MAX_STAKE_SHARE / price);
+                (amount >= 1.0).then_some((good, amount, price))
+            })
+            .collect(),
+    };
 
     let mut best: Option<(f64, Route)> = None;
     let mut fallback: Option<(f64, SettlementId, u32, bool)> = None;
@@ -742,11 +778,8 @@ fn choose_route(
             // Cheap bound first: today's price is at least what it will be
             // once more cargo arrives, and the premium is at most its cap.
             let owner = state.settlements[to].owner;
-            let premium_cap = if contracts.get(owner).copied().unwrap_or(false) {
-                crate::fiscal::max_premium(good)
-            } else {
-                0.0
-            };
+            let premium_cap =
+                crate::fiscal::max_premium(good) * contracts.get(owner).copied().unwrap_or(0.0);
             let bound = amount * (price + premium_cap - buy) / (2.0 * shortest);
             if bound <= MIN_PROFIT_PER_DAY || best.as_ref().is_some_and(|(b, _)| bound <= *b) {
                 continue;
@@ -777,6 +810,7 @@ fn choose_route(
         // surplus would fetch at base prices.
         if let Some((to, surplus, margin)) = listing.source
             && to != here
+            && aboard.is_none()
             && best.is_none()
             && fallback
                 .as_ref()
@@ -808,6 +842,21 @@ fn choose_route(
         (None, None) => {
             fleet.route = None;
             fleet.idle = true;
+            // Nobody in reach can buy what's aboard: leave it at the dock
+            // for nothing rather than carry it about for ever.
+            if let Some(cargo) = aboard {
+                let left = ledger::sell(
+                    state,
+                    Account::Company(key),
+                    here,
+                    cargo.good,
+                    cargo.amount,
+                    0.0,
+                    1.0,
+                );
+                debug_assert!((left - cargo.amount).abs() < 1e-9);
+                state.companies[key].fleets[n].cargo = None;
+            }
         }
     }
 }
@@ -868,10 +917,12 @@ fn run_route(
         Supply::Surplus,
         1.0,
     );
-    state.companies[key].fleets[n].cargo = Some(Cargo {
+    let fleet = &mut state.companies[key].fleets[n];
+    fleet.cargo = Some(Cargo {
         good: route.good,
         amount: bought,
     });
+    fleet.loaded = true;
     depart(state, key, n, here, route.to, route.leg_days, route.jumps);
 }
 
@@ -972,17 +1023,23 @@ fn sell(
     });
 }
 
-/// A prosperous company with no idle fleets, docked at a shipyard, adds a
-/// ship to the fleet.
-fn buy_ship(state: &mut GalaxyState, key: CompanyId, n: usize, here: SettlementId) {
+/// A prosperous company with no idle fleets, whose fleet came in full, adds
+/// a ship to it if the port has the hull; if not, the port hears that hull
+/// is wanted, which is what shipyards build to.
+fn buy_ship(state: &mut GalaxyState, key: CompanyId, n: usize, here: SettlementId, full: bool) {
     let company = &state.companies[key];
-    if company.fleets.iter().any(|f| f.idle) {
+    if !full || company.fleets.iter().any(|f| f.idle || f.slack > 0) {
         return;
     }
     let mass = state.ship_classes[company.fleets[n].class].mass_t;
     let price = mass * crate::economy::HULL_PRICE_PER_T;
-    if company.credits < price * BUY_SHIP_AT_PRICES || state.settlements[here].economy.hull_t < mass
-    {
+    if company.credits < price * BUY_SHIP_AT_PRICES {
+        return;
+    }
+    if state.settlements[here].economy.hull_t < mass {
+        let class = company.fleets[n].class;
+        let order = hull_source(state, here, class).unwrap_or_else(|o| o);
+        state.settlements[order].economy.hull_wanted += mass;
         return;
     }
     let paid = ledger::pay(
@@ -992,8 +1049,48 @@ fn buy_ship(state: &mut GalaxyState, key: CompanyId, n: usize, here: SettlementI
         price,
     );
     debug_assert_eq!(paid, price);
-    state.settlements[here].economy.hull_t -= mass;
+    let economy = &mut state.settlements[here].economy;
+    economy.hull_t -= mass;
+    economy.hull_wanted = (economy.hull_wanted - mass).max(0.0);
     state.companies[key].fleets[n].ships += 1;
+}
+
+/// A fleet that has carried nothing for [`SLACK_REVIEWS`] reviews sells half
+/// its ships (at least one) here for scrap: the port buys the metal as far
+/// as it can pay, and takes the rest for nothing. Returns whether the
+/// whole fleet is gone.
+fn retire(state: &mut GalaxyState, key: CompanyId, n: usize, here: SettlementId) -> bool {
+    let fleet = &state.companies[key].fleets[n];
+    if fleet.slack < SLACK_REVIEWS {
+        return false;
+    }
+    let sold = fleet.ships.div_ceil(2);
+    let metal = state.ship_classes[fleet.class].mass_t * f64::from(sold) * SCRAP_METAL_SHARE;
+    let gone = sold >= fleet.ships;
+    let price = state.settlements[here].economy.market.price[Good::Metal];
+    let company = Account::Company(key);
+    let bought = ledger::sell(
+        state,
+        company,
+        here,
+        Good::Metal,
+        metal,
+        price,
+        MAX_SPEND_SHARE,
+    );
+    ledger::sell(state, company, here, Good::Metal, metal - bought, 0.0, 1.0);
+    let fleet = &mut state.companies[key].fleets[n];
+    fleet.slack = 0;
+    if !gone {
+        fleet.ships -= sold;
+        return false;
+    }
+    // Whatever was aboard stays at the port.
+    if let Some(cargo) = fleet.cargo.take() {
+        ledger::sell(state, company, here, cargo.good, cargo.amount, 0.0, 1.0);
+    }
+    remove_fleet(state, key, n);
+    true
 }
 
 /// A month of crew upkeep for one fleet, paid at home.
@@ -1012,9 +1109,10 @@ fn pay_upkeep(state: &mut GalaxyState, key: CompanyId, n: usize) {
     );
 }
 
-/// At their monthly review, settlements with hull to sell and money to
-/// spare may found a company with one ship of the biggest class they can
-/// build, unless idle fleets already sit in their port.
+/// At their monthly review, settlements with hull to sell, money to spare
+/// and a hold's worth of freight may found a company with one ship of the
+/// biggest class they can build, unless ships already sit idle in their
+/// system.
 fn found_companies(state: &mut GalaxyState) {
     let today = state.time;
     let day = today.days() % REVIEW_DAYS;
@@ -1022,25 +1120,28 @@ fn found_companies(state: &mut GalaxyState) {
         .settlements
         .iter()
         .filter(|(id, s)| {
-            s.economy.hull_t > 0.0 && slotmap::Key::data(id).as_ffi() % REVIEW_DAYS == day
+            s.economy.population > 0.0 && slotmap::Key::data(id).as_ffi() % REVIEW_DAYS == day
         })
         .map(|(id, _)| id)
         .collect();
     if reviewing.is_empty() {
         return;
     }
-    let idle_ports: HashSet<SettlementId> = state
+    // Systems where ships already sit with nothing to carry.
+    let idle_systems: HashSet<SystemId> = state
         .companies
         .values()
         .flat_map(|c| c.fleets.iter())
         .filter_map(|f| match f.at {
-            Location::Docked(at) if f.idle => Some(at),
+            Location::Docked(at) if f.idle || f.slack > 0 => {
+                Some(state.settlements.get(at)?.system)
+            }
             _ => None,
         })
         .collect();
     for id in reviewing {
         let entity = slotmap::Key::data(&id).as_ffi();
-        if idle_ports.contains(&id)
+        if idle_systems.contains(&state.settlements[id].system)
             || !Rng::stream(state.seed, "found-company", today.days(), entity)
                 .chance(FOUND_COMPANY_CHANCE)
         {
@@ -1051,25 +1152,40 @@ fn found_companies(state: &mut GalaxyState) {
             c.mass_t * crate::economy::HULL_PRICE_PER_T
                 + c.cargo_t * FOUNDING_HOLDS * FOUNDING_CREDITS_PER_T
         };
+        // The biggest class it can afford that there's a hold's worth of
+        // freight for.
+        let market = &economy.market;
+        let freight = Good::ALL
+            .iter()
+            .map(|&g| market.surplus(g))
+            .fold(0.0, f64::max);
         let Some((class, founding)) = state
             .ship_classes
             .iter()
-            .filter(|(_, c)| {
-                c.mass_t <= economy.hull_t && cost(c) * FOUNDING_WEALTH <= economy.treasury
-            })
+            .filter(|(_, c)| c.cargo_t <= freight && cost(c) * FOUNDING_WEALTH <= economy.treasury)
             .max_by(|a, b| a.1.cargo_t.total_cmp(&b.1.cargo_t))
             .map(|(cid, c)| (cid, cost(c)))
         else {
             continue;
         };
+        // The crew fetches the hull from the nearest yard that has it;
+        // with none in reach, the order goes to the nearest yard (or here),
+        // which is what shipyards build to.
         let mass = state.ship_classes[class].mass_t;
+        let yard = match hull_source(state, id, class) {
+            Ok(yard) => yard,
+            Err(order) => {
+                state.settlements[order].economy.hull_wanted += mass;
+                continue;
+            }
+        };
         let base = state.settlements[id]
             .name
             .split(' ')
             .next()
             .unwrap_or("Free")
             .to_owned();
-        state.settlements[id].economy.hull_t -= mass;
+        state.settlements[yard].economy.hull_t -= mass;
         let company = add_company(
             state,
             Company {
@@ -1080,26 +1196,70 @@ fn found_companies(state: &mut GalaxyState) {
                     id: 0,
                     class,
                     ships: 1,
-                    at: Location::Docked(id),
+                    at: Location::Docked(yard),
                     cargo: None,
                     route: None,
                     review_due: false,
                     idle: false,
+                    loaded: false,
+                    slack: 0,
                 }],
                 next_fleet: 0,
             },
         );
         // The settlement stakes the company, which buys its hull from the
-        // same yard.
+        // yard.
         let (home, company) = (Account::Settlement(id), Account::Company(company));
         ledger::pay(state, home, company, founding);
         ledger::pay(
             state,
             company,
-            home,
+            Account::Settlement(yard),
             mass * crate::economy::HULL_PRICE_PER_T,
         );
     }
+}
+
+/// Where a ship of `class` for a company founded at `id` comes from: the
+/// nearest settlement in trading reach with the hull for it (`Ok`), or, if
+/// none has, where to order it (`Err`): the nearest shipyard in reach, or
+/// `id` itself.
+fn hull_source(
+    state: &GalaxyState,
+    id: SettlementId,
+    class: ShipClassId,
+) -> Result<SettlementId, SettlementId> {
+    let c = &state.ship_classes[class];
+    let mut order = None;
+    let origin = state.settlements[id].system;
+    let mut settled = 0;
+    for &(system, _, _) in reach(state, origin, MAX_TRIP_DAYS * c.jump_laden).iter() {
+        let here = &state.systems[system].settlements;
+        if here.is_empty() {
+            continue;
+        }
+        settled += 1;
+        if settled > ROUTE_SYSTEMS {
+            break;
+        }
+        for &s in here {
+            let Some(settlement) = state.settlements.get(s) else {
+                continue;
+            };
+            let e = &settlement.economy;
+            if e.hull_t >= c.mass_t {
+                return Ok(s);
+            }
+            let yard = e
+                .facilities
+                .iter()
+                .any(|f| f.kind == crate::economy::FacilityKind::Shipyard);
+            if yard && order.is_none() {
+                order = Some(s);
+            }
+        }
+    }
+    Err(order.unwrap_or(id))
 }
 
 /// Goods held anywhere: in markets and aboard ships.
