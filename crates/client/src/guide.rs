@@ -177,12 +177,28 @@ fn nearest_job(w: &World) -> Option<&retrox_sim::freight::Offer> {
 /// What to do next, from where things stand: one or two sentences, keys
 /// in brackets. `None` while there's nothing to say (a jump under way).
 pub fn hint(w: &World) -> Option<String> {
-    let first = w.player.contracts.first().map(|c| {
-        let s = &w.galaxy.settlements[c.offer.to];
-        (c.offer.to, s.name.clone(), s.system)
-    });
+    // Where the hold is going: a contract's consignee, or else where the
+    // player set out to sell their own goods (issue #160).
+    let trading = w.player.contracts.is_empty() && w.player.sell_at.is_some();
+    let first = w
+        .player
+        .contracts
+        .first()
+        .map(|c| c.offer.to)
+        .or(w.player.sell_at)
+        .and_then(|to| {
+            let s = w.galaxy.settlements.get(to)?;
+            Some((to, s.name.clone(), s.system))
+        });
+    let bound_for = if trading {
+        "Your cargo sells best at"
+    } else {
+        "Your cargo is for"
+    };
     let carrying = w.player.cargo_t() > 0.0;
-    if w.docked_at().is_some() {
+    let own_cargo = w.player.cargo.0.iter().any(|&t| t >= 1.0);
+    if let Some(here) = w.docked_at() {
+        let selling_here = trading && w.player.sell_at == Some(here);
         return Some(match w.screen {
             Screen::Contracts if first.is_none() => {
                 let pick = "Pick a job and press ACCEPT: the goods load into your hold, and \
@@ -197,8 +213,25 @@ pub fn hint(w: &World) -> Option<String> {
                 }
             }
             Screen::Contracts => "Cargo aboard. [ESC] back to the menu, then LAUNCH.".into(),
-            Screen::Trade => "Buy what's in SURPLUS here and sell it where it's short. Ore \
-                 from mining sells here too."
+            Screen::Trade if selling_here => "Your cargo sells best here: press ALL in the \
+                 teal SELL bank on its row."
+                .into(),
+            Screen::Trade if trading && own_cargo => {
+                "Cargo aboard and course set. [ESC] back to the menu, then LAUNCH.".into()
+            }
+            Screen::Trade if own_cargo => "YOUR CARGO SELLS AT shows where each good fetches \
+                 most within one jump: GO sets the course, or sell here in the teal bank."
+                .into(),
+            Screen::Trade if w.trade_runs(1).is_empty() && w.nearest_market_space().is_some() => {
+                "Nothing here sells for more within one jump. TRADE RUNS names the nearest \
+                 market space: PLOT COURSE and go look."
+                    .into()
+            }
+            Screen::Trade if w.trade_runs(1).is_empty() => "Nothing here sells for more within \
+                 one jump today. Markets move daily: wait, or take a contract or go mining."
+                .into(),
+            Screen::Trade => "TRADE RUNS lists what sells for more within one jump. BUY & GO \
+                 buys the lot and sets your course; sell it there."
                 .into(),
             Screen::Bounties => "Warrants pay the moment a pirate ship goes down. PLOT \
                  COURSE to a lair, fly to its field, and bring a gun that can win."
@@ -208,13 +241,18 @@ pub fn hint(w: &World) -> Option<String> {
             }
             Screen::Hub => match &first {
                 None if !carrying => "Open CONTRACTS and take a hauling job: the surest first \
-                     money. Or LAUNCH and go mining."
+                     money. Or open TRADE to buy low and sell high, or LAUNCH and go mining."
                     .into(),
-                None => "LAUNCH, and sell your cargo where it's short.".into(),
+                _ if selling_here => "Your cargo sells best here: open TRADE and sell it.".into(),
+                None => "Open TRADE to see where your cargo sells best, then LAUNCH.".into(),
                 Some((_, name, system)) if *system != w.system && w.course != Some(*system) => {
+                    let how = if trading {
+                        "Open TRADE and press GO"
+                    } else {
+                        "Open CONTRACTS and PLOT COURSE"
+                    };
                     format!(
-                        "Your cargo is for {name}, in {}. Open CONTRACTS and PLOT COURSE, then \
-                         LAUNCH.",
+                        "{bound_for} {name}, in {}. {how}, then LAUNCH.",
                         w.galaxy.systems[*system].name
                     )
                 }
@@ -272,7 +310,7 @@ pub fn hint(w: &World) -> Option<String> {
             let there = &w.galaxy.systems[*system].name;
             return Some(match (w.course == Some(*system), &well) {
                 (false, _) => format!(
-                    "Your cargo is for {name}, in {there}. Open the galaxy map [M] and click \
+                    "{bound_for} {name}, in {there}. Open the galaxy map [M] and click \
                      {there} to plot a course."
                 ),
                 (true, Some(well)) => format!(
@@ -292,7 +330,7 @@ pub fn hint(w: &World) -> Option<String> {
         {
             let name = where_name(w, *to);
             return Some(format!(
-                "Your cargo is for {name}: click it in NAVIGATION, or [T] through targets."
+                "{bound_for} {name}: click it in NAVIGATION, or [T] through targets."
             ));
         }
     }
