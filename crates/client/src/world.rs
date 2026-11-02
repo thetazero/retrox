@@ -807,8 +807,16 @@ impl World {
             vel: (self.ship.vel + self.velocity_at(self.ship.frame, t)).to_array(),
         };
         // Pick how fast time runs so the flight plays out in a few seconds.
+        // Time it by flying it once ahead: a ship already moving fast (say,
+        // just dropped out of another trip) must brake and come back, which
+        // can take far longer than the distance alone suggests.
         let distance = (self.position(target) - pos).length();
-        let estimate = flight::trip_seconds(distance, self.drive_accel());
+        let accel = self.drive_accel();
+        let mut rehearsal = ship;
+        let estimate = flight::fly(&mut rehearsal, accel, 1e10, |s, k| {
+            self.fast_travel_goal(target, DVec3::from_array(k.pos), t + s / SECONDS_PER_DAY)
+        })
+        .unwrap_or_else(|| flight::trip_seconds(distance, accel));
         let real = (2.0 + (distance / 1e7).max(1.0).log10() * 1.2).min(7.0);
         self.ship.spin = DVec3::ZERO;
         self.ship.throttle = 0.0;
@@ -1358,6 +1366,30 @@ mod tests {
         world.act(Action::FastTravel);
         assert_eq!(world.mode, Mode::Normal);
         assert_eq!((world.ship_position(), world.ship.vel), (pos, vel));
+    }
+
+    #[test]
+    fn fast_travel_from_a_fast_drop_out_still_takes_seconds() {
+        // Dropping out of a trip leaves the ship near its target at
+        // thousands of km/s. Going again must still play out in seconds,
+        // braking included, not crawl at the warp a short hop would get.
+        let mut world = World::new(1);
+        world.act(Action::Launch);
+        let field = world
+            .nav_places()
+            .into_iter()
+            .find(|p| matches!(p, Place::Field(_)))
+            .expect("a field");
+        world.ship.frame = field;
+        world.ship.rel = DVec3::X * 1e6;
+        world.ship.vel = DVec3::new(0.7, 0.7, 0.0) * 1e6;
+        world.mode = Mode::Normal;
+        world.target = Some(field);
+        world.act(Action::FastTravel);
+        assert!(matches!(world.mode, Mode::FastTravel(_)));
+        run(&mut world, 10.0);
+        assert_eq!(world.mode, Mode::Normal, "still flying after 10 s");
+        assert_eq!(world.ship.frame, field);
     }
 
     #[test]

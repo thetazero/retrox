@@ -6,6 +6,7 @@
 mod hangar;
 mod hangar_ui;
 mod hud;
+mod hulls;
 mod meshes;
 mod render;
 mod station_ui;
