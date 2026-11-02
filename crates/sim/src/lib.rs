@@ -11,6 +11,7 @@ pub mod demography;
 pub mod economy;
 pub mod fields;
 pub mod fiscal;
+pub mod flight;
 pub mod haul;
 pub mod history;
 pub mod ledger;
