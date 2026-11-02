@@ -6,6 +6,7 @@
 
 pub mod arena;
 pub mod bodies;
+pub mod construction;
 pub mod demography;
 pub mod economy;
 pub mod fields;

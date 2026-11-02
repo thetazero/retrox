@@ -779,6 +779,20 @@ impl World {
         }
     }
 
+    /// Move to the first system with a station and dock there (for
+    /// testing). Does nothing if there are no stations anywhere.
+    pub fn start_at_station(&mut self) {
+        let found = self.galaxy.systems.iter().find_map(|(id, _)| {
+            let view = SystemView::new(&self.galaxy, id);
+            view.stations.first().map(|&s| (id, s))
+        });
+        if let Some((system, station)) = found {
+            self.arrive_jump(system);
+            self.message = None;
+            self.mode = Mode::Docked(station);
+        }
+    }
+
     fn arrive_jump(&mut self, to: SystemId) {
         let from = self.system;
         let days = self

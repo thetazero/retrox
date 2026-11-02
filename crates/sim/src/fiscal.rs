@@ -4,8 +4,8 @@
 //! One credit circulates. Trade only moves it; factions are where it is
 //! created and removed. A faction taxes its settlements' treasuries above
 //! a reserve and its companies' credits above their working capital, pays
-//! welfare to its settlements that have fallen below it,
-//! and — if its economy is planned — pays captains a premium for goods
+//! welfare to its settlements by population (more to those below their
+//! reserve), and — if its economy is planned — pays captains a premium for goods
 //! delivered to its short settlements, since its fixed official prices
 //! give them no other reason to. A faction's balance can go negative: it
 //! has then issued that much money, up to a debt limit.
@@ -129,13 +129,21 @@ pub fn taxes_and_welfare(state: &mut GalaxyState) {
         state.factions[owner].treasury += tax;
     }
 
-    // Welfare goes to settlements below their reserve, by population.
-    let mut need: SecondaryMap<FactionId, f64> = SecondaryMap::new();
-    for (&id, &reserve) in ids.iter().zip(&reserves) {
+    // Welfare goes to every settlement by population, twice as much per
+    // head to those below their reserve.
+    let weight = |state: &GalaxyState, id: SettlementId, reserve: f64| {
         let s = &state.settlements[id];
-        if s.economy.treasury < reserve {
-            *need.entry(s.owner).unwrap().or_default() += s.economy.population;
-        }
+        s.economy.population
+            * if s.economy.treasury < reserve {
+                2.0
+            } else {
+                1.0
+            }
+    };
+    let mut totals: SecondaryMap<FactionId, f64> = SecondaryMap::new();
+    for (&id, &reserve) in ids.iter().zip(&reserves) {
+        let owner = state.settlements[id].owner;
+        *totals.entry(owner).unwrap().or_default() += weight(state, id, reserve);
     }
     let budgets: SecondaryMap<FactionId, f64> = state
         .factions
@@ -144,15 +152,14 @@ pub fn taxes_and_welfare(state: &mut GalaxyState) {
         .map(|(id, f)| (id, f.treasury * WELFARE_SHARE))
         .collect();
     for (&id, &reserve) in ids.iter().zip(&reserves) {
-        let s = &state.settlements[id];
-        let owner = s.owner;
-        let (Some(&budget), Some(&total)) = (budgets.get(owner), need.get(owner)) else {
+        let owner = state.settlements[id].owner;
+        let (Some(&budget), Some(&total)) = (budgets.get(owner), totals.get(owner)) else {
             continue;
         };
-        if s.economy.treasury >= reserve || total <= 0.0 {
+        if total <= 0.0 {
             continue;
         }
-        let pay = budget * s.economy.population / total;
+        let pay = budget * weight(state, id, reserve) / total;
         state.settlements[id].economy.treasury += pay;
         state.factions[owner].treasury -= pay;
     }

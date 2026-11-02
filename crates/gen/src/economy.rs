@@ -110,10 +110,13 @@ pub fn seed(rng: &mut Rng, state: &mut GalaxyState) {
     for &(i, kind, _) in &placed {
         let pop = state.settlements[ids[i]].economy.population;
         if kind == FacilityKind::Factory && pop > SHIPYARD_MIN_POPULATION {
-            state.settlements[ids[i]].economy.facilities.push(Facility {
-                kind: FacilityKind::Shipyard,
-                scale: pop * SHIPYARD_SCALE_PER_POPULATION,
-            });
+            state.settlements[ids[i]]
+                .economy
+                .facilities
+                .push(Facility::new(
+                    FacilityKind::Shipyard,
+                    pop * SHIPYARD_SCALE_PER_POPULATION,
+                ));
         }
     }
 
@@ -126,10 +129,10 @@ pub fn seed(rng: &mut Rng, state: &mut GalaxyState) {
         let (good, per_scale) = kind.recipe().outputs[0];
         let scale_per_weight = required[good] / per_scale / total;
         for &(i, k, weight) in placed.iter().filter(|p| p.1 == kind) {
-            state.settlements[ids[i]].economy.facilities.push(Facility {
-                kind: k,
-                scale: weight * scale_per_weight,
-            });
+            state.settlements[ids[i]]
+                .economy
+                .facilities
+                .push(Facility::new(k, weight * scale_per_weight));
         }
     }
 

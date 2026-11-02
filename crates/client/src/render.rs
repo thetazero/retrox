@@ -24,7 +24,6 @@ pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 pub enum Surface {
     Plain = 0,
     Star = 1,
-    Rocky = 2,
     Gas = 3,
     Ocean = 4,
     Ice = 5,
@@ -57,14 +56,24 @@ impl Instance {
             light,
         }
     }
+
+    /// Built things: panel cells per object unit (0 for none). Ocean
+    /// worlds: sea level.
+    pub fn with_detail(mut self, detail: f32) -> Self {
+        self.params[3] = detail;
+        self
+    }
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 struct Globals {
     view_proj: [[f32; 4]; 4],
+    inv_view_proj: [[f32; 4]; 4],
     star_color: [f32; 4],
     misc: [f32; 4],
+    /// xyz: direction to the galactic core; w: how far out we are (0..1).
+    sky: [f32; 4],
 }
 
 #[repr(C)]
@@ -104,14 +113,17 @@ pub struct Renderer {
     globals: wgpu::Buffer,
     globals_bind: wgpu::BindGroup,
     mesh_pipeline: wgpu::RenderPipeline,
+    backdrop_pipeline: wgpu::RenderPipeline,
     sky_pipeline: wgpu::RenderPipeline,
     post_pipeline: wgpu::RenderPipeline,
+    /// Bright-pass downsample, then blurs: horizontal and vertical, narrow
+    /// then wide.
+    bloom_pipelines: [wgpu::RenderPipeline; 5],
     post_layout: wgpu::BindGroupLayout,
+    bloom_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
-
-    hdr_view: wgpu::TextureView,
-    depth_view: wgpu::TextureView,
-    post_bind: wgpu::BindGroup,
+    targets: Targets,
+    sky_params: [f32; 4],
 
     meshes: Vec<MeshRange>,
     vertices: Vec<Vertex>,
@@ -124,6 +136,8 @@ pub struct Renderer {
     sky_buffer: Option<(wgpu::Buffer, u32)>,
 
     pub egui: egui_wgpu::Renderer,
+    /// Save the next frame here (as a binary PPM), then clear.
+    pub capture: Option<std::path::PathBuf>,
 }
 
 impl Renderer {
@@ -156,7 +170,9 @@ impl Renderer {
             .find(|f| f.is_srgb())
             .unwrap_or(caps.formats[0]);
         let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            // COPY_SRC (where supported) lets screenshots read the frame back.
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | (caps.usages & wgpu::TextureUsages::COPY_SRC),
             format,
             width: size.width.max(1),
             height: size.height.max(1),
@@ -215,12 +231,28 @@ impl Renderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                texture_entry(2),
+            ],
+        });
+        let bloom_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("bloom"),
+            entries: &[
+                texture_entry(0),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
 
         let mesh_shader = device.create_shader_module(wgpu::include_wgsl!("shaders/mesh.wgsl"));
         let sky_shader = device.create_shader_module(wgpu::include_wgsl!("shaders/sky.wgsl"));
         let post_shader = device.create_shader_module(wgpu::include_wgsl!("shaders/post.wgsl"));
+        let backdrop_shader =
+            device.create_shader_module(wgpu::include_wgsl!("shaders/backdrop.wgsl"));
+        let bloom_shader = device.create_shader_module(wgpu::include_wgsl!("shaders/bloom.wgsl"));
 
         let scene_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("scene"),
@@ -232,6 +264,12 @@ impl Renderer {
             bind_group_layouts: &[Some(&globals_layout), Some(&post_layout)],
             immediate_size: 0,
         });
+        let bloom_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("bloom"),
+                bind_group_layouts: &[Some(&globals_layout), Some(&bloom_layout)],
+                immediate_size: 0,
+            });
 
         let depth = |write: bool| {
             Some(wgpu::DepthStencilState {
@@ -244,7 +282,8 @@ impl Renderer {
             })
         };
 
-        let vertex_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32];
+        let vertex_attrs =
+            wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32, 10 => Float32];
         let instance_attrs = wgpu::vertex_attr_array![
             3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4,
             7 => Float32x4, 8 => Float32x4, 9 => Float32x4
@@ -313,6 +352,67 @@ impl Renderer {
             cache: None,
         });
 
+        // Fullscreen passes: a triangle from the vertex index, no buffers.
+        let fullscreen = |label: &str,
+                          layout: &wgpu::PipelineLayout,
+                          module: &wgpu::ShaderModule,
+                          fs: &str,
+                          format: wgpu::TextureFormat,
+                          depth_stencil: Option<wgpu::DepthStencilState>| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(layout),
+                vertex: wgpu::VertexState {
+                    module,
+                    entry_point: Some("vs"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: Default::default(),
+                depth_stencil,
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module,
+                    entry_point: Some(fs),
+                    compilation_options: Default::default(),
+                    targets: &[Some(format.into())],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let backdrop_pipeline = fullscreen(
+            "backdrop",
+            &scene_layout,
+            &backdrop_shader,
+            "fs",
+            HDR_FORMAT,
+            Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+        );
+        let bloom_pipelines = [
+            "fs_down",
+            "fs_blur_h1",
+            "fs_blur_v1",
+            "fs_blur_h2",
+            "fs_blur_v2",
+        ]
+        .map(|fs| {
+            fullscreen(
+                fs,
+                &bloom_pipeline_layout,
+                &bloom_shader,
+                fs,
+                HDR_FORMAT,
+                None,
+            )
+        });
+
         let post_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("post"),
             layout: Some(&post_pipeline_layout),
@@ -341,8 +441,14 @@ impl Renderer {
             ..Default::default()
         });
 
-        let (hdr_view, depth_view) = targets(&device, config.width, config.height);
-        let post_bind = post_bind_group(&device, &post_layout, &hdr_view, &sampler);
+        let targets = Targets::new(
+            &device,
+            &post_layout,
+            &bloom_layout,
+            &sampler,
+            config.width,
+            config.height,
+        );
 
         let instance_capacity = 1024;
         let instance_buffer = instance_buffer(&device, instance_capacity);
@@ -358,13 +464,15 @@ impl Renderer {
             globals,
             globals_bind,
             mesh_pipeline,
+            backdrop_pipeline,
             sky_pipeline,
             post_pipeline,
+            bloom_pipelines,
             post_layout,
+            bloom_layout,
             sampler,
-            hdr_view,
-            depth_view,
-            post_bind,
+            targets,
+            sky_params: [1.0, 0.0, 0.0, 0.5],
             meshes: Vec::new(),
             vertices: Vec::new(),
             indices: Vec::new(),
@@ -375,6 +483,7 @@ impl Renderer {
             instance_capacity,
             sky_buffer: None,
             egui,
+            capture: None,
         }
     }
 
@@ -389,10 +498,14 @@ impl Renderer {
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&self.device, &self.config);
-        let (hdr, depth) = targets(&self.device, width, height);
-        self.post_bind = post_bind_group(&self.device, &self.post_layout, &hdr, &self.sampler);
-        self.hdr_view = hdr;
-        self.depth_view = depth;
+        self.targets = Targets::new(
+            &self.device,
+            &self.post_layout,
+            &self.bloom_layout,
+            &self.sampler,
+            width,
+            height,
+        );
     }
 
     /// Register a mesh; it's uploaded before the next frame.
@@ -409,7 +522,10 @@ impl Renderer {
         id
     }
 
-    pub fn set_sky(&mut self, stars: &[SkyVertex]) {
+    /// The sky: background stars, the direction to the galactic core and
+    /// how far out from it we are (0 at the core, 1 at the rim).
+    pub fn set_sky(&mut self, stars: &[SkyVertex], core: glam::Vec3, out: f32) {
+        self.sky_params = [core.x, core.y, core.z, out];
         let buffer = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -420,7 +536,16 @@ impl Renderer {
         self.sky_buffer = Some((buffer, stars.len() as u32));
     }
 
-    pub fn render(&mut self, frame: Frame) {
+    pub fn render(&mut self, mut frame: Frame) {
+        // Upload UI textures first, so a skipped frame doesn't lose them.
+        if let Some((_, output)) = &mut frame.ui {
+            for (id, deltas) in std::mem::take(&mut output.textures_delta.set) {
+                for delta in &deltas {
+                    self.egui
+                        .update_texture(&self.device, &self.queue, id, delta);
+                }
+            }
+        }
         if self.dirty_meshes {
             self.vertex_buffer = Some(self.device.create_buffer_init(
                 &wgpu::util::BufferInitDescriptor {
@@ -452,6 +577,7 @@ impl Renderer {
         let (w, h) = self.size();
         let globals = Globals {
             view_proj: frame.view_proj.to_cols_array_2d(),
+            inv_view_proj: frame.view_proj.inverse().to_cols_array_2d(),
             star_color: [
                 frame.star_color[0],
                 frame.star_color[1],
@@ -459,6 +585,7 @@ impl Renderer {
                 1.0,
             ],
             misc: [frame.time, frame.exposure, w as f32, h as f32],
+            sky: self.sky_params,
         };
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
@@ -479,7 +606,7 @@ impl Renderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("scene"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.hdr_view,
+                    view: &self.targets.hdr,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -493,7 +620,7 @@ impl Renderer {
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_view,
+                    view: &self.targets.depth,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(0.0),
                         store: wgpu::StoreOp::Store,
@@ -505,6 +632,9 @@ impl Renderer {
                 multiview_mask: None,
             });
             pass.set_bind_group(0, &self.globals_bind, &[]);
+
+            pass.set_pipeline(&self.backdrop_pipeline);
+            pass.draw(0..3, 0..1);
 
             if let Some((buffer, count)) = &self.sky_buffer {
                 pass.set_pipeline(&self.sky_pipeline);
@@ -535,6 +665,37 @@ impl Renderer {
                 }
             }
         }
+        // Bloom: HDR -> A (bright pass), then ping-pong A <-> B.
+        let t = &self.targets;
+        let steps = [
+            (&t.from_hdr, &t.bloom_a),
+            (&t.from_a, &t.bloom_b),
+            (&t.from_b, &t.bloom_a),
+            (&t.from_a, &t.bloom_b),
+            (&t.from_b, &t.bloom_a),
+        ];
+        for (pipeline, (src, dst)) in self.bloom_pipelines.iter().zip(steps) {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("bloom"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: dst,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &self.globals_bind, &[]);
+            pass.set_bind_group(1, src, &[]);
+            pass.draw(0..3, 0..1);
+        }
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("post"),
@@ -554,7 +715,7 @@ impl Renderer {
             });
             pass.set_pipeline(&self.post_pipeline);
             pass.set_bind_group(0, &self.globals_bind, &[]);
-            pass.set_bind_group(1, &self.post_bind, &[]);
+            pass.set_bind_group(1, &self.targets.post_bind, &[]);
             pass.draw(0..3, 0..1);
         }
 
@@ -564,12 +725,6 @@ impl Renderer {
                 size_in_pixels: [w, h],
                 pixels_per_point: output.pixels_per_point,
             };
-            for (id, deltas) in &output.textures_delta.set {
-                for delta in deltas {
-                    self.egui
-                        .update_texture(&self.device, &self.queue, *id, delta);
-                }
-            }
             let jobs = ctx.tessellate(output.shapes, output.pixels_per_point);
             extra =
                 self.egui
@@ -599,60 +754,182 @@ impl Renderer {
             }
         }
 
+        let readback = self.capture.take().and_then(|path| {
+            if !self.config.usage.contains(wgpu::TextureUsages::COPY_SRC) {
+                eprintln!("screenshot: surface can't be read back");
+                return None;
+            }
+            let row = (w * 4).div_ceil(256) * 256;
+            let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("screenshot"),
+                size: u64::from(row * h),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            encoder.copy_texture_to_buffer(
+                surface_texture.texture.as_image_copy(),
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &buffer,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(row),
+                        rows_per_image: None,
+                    },
+                },
+                surface_texture.texture.size(),
+            );
+            Some((path, buffer, row))
+        });
+
         self.queue
             .submit(extra.into_iter().chain([encoder.finish()]));
+        if let Some((path, buffer, row)) = readback {
+            self.save_screenshot(&path, &buffer, row, w, h);
+        }
         self.window.pre_present_notify();
         self.queue.present(surface_texture);
     }
 }
 
-fn targets(
-    device: &wgpu::Device,
-    width: u32,
-    height: u32,
-) -> (wgpu::TextureView, wgpu::TextureView) {
-    let make = |format, label| {
-        device
-            .create_texture(&wgpu::TextureDescriptor {
-                label: Some(label),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            })
-            .create_view(&Default::default())
-    };
-    (make(HDR_FORMAT, "hdr"), make(DEPTH_FORMAT, "depth"))
+impl Renderer {
+    fn save_screenshot(
+        &self,
+        path: &std::path::Path,
+        buffer: &wgpu::Buffer,
+        row: u32,
+        w: u32,
+        h: u32,
+    ) {
+        let slice = buffer.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+        let data = slice.get_mapped_range().expect("map screenshot");
+        let bgra = matches!(
+            self.config.format,
+            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+        );
+        let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();
+        for y in 0..h {
+            let line = &data[(y * row) as usize..(y * row + w * 4) as usize];
+            for px in line.as_chunks::<4>().0 {
+                if bgra {
+                    out.extend([px[2], px[1], px[0]]);
+                } else {
+                    out.extend(&px[..3]);
+                }
+            }
+        }
+        match std::fs::write(path, out) {
+            Ok(()) => eprintln!("screenshot: saved {}", path.display()),
+            Err(e) => eprintln!("screenshot: {e}"),
+        }
+    }
 }
 
-fn post_bind_group(
-    device: &wgpu::Device,
-    layout: &wgpu::BindGroupLayout,
-    hdr: &wgpu::TextureView,
-    sampler: &wgpu::Sampler,
-) -> wgpu::BindGroup {
-    device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("post"),
-        layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(hdr),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::Sampler(sampler),
-            },
-        ],
-    })
+fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    }
+}
+
+/// The offscreen render targets, sized to the window, and the bind groups
+/// that read them.
+struct Targets {
+    hdr: wgpu::TextureView,
+    depth: wgpu::TextureView,
+    /// Quarter-resolution bloom ping-pong pair.
+    bloom_a: wgpu::TextureView,
+    bloom_b: wgpu::TextureView,
+    from_hdr: wgpu::BindGroup,
+    from_a: wgpu::BindGroup,
+    from_b: wgpu::BindGroup,
+    post_bind: wgpu::BindGroup,
+}
+
+impl Targets {
+    fn new(
+        device: &wgpu::Device,
+        post_layout: &wgpu::BindGroupLayout,
+        bloom_layout: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
+        width: u32,
+        height: u32,
+    ) -> Self {
+        let make = |format, label, width: u32, height: u32| {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d {
+                        width: width.max(1),
+                        height: height.max(1),
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                })
+                .create_view(&Default::default())
+        };
+        let hdr = make(HDR_FORMAT, "hdr", width, height);
+        let depth = make(DEPTH_FORMAT, "depth", width, height);
+        let bloom_a = make(HDR_FORMAT, "bloom a", width / 4, height / 4);
+        let bloom_b = make(HDR_FORMAT, "bloom b", width / 4, height / 4);
+        let read = |view: &wgpu::TextureView| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("bloom"),
+                layout: bloom_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(sampler),
+                    },
+                ],
+            })
+        };
+        let post_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("post"),
+            layout: post_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&hdr),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&bloom_a),
+                },
+            ],
+        });
+        Self {
+            from_hdr: read(&hdr),
+            from_a: read(&bloom_a),
+            from_b: read(&bloom_b),
+            post_bind,
+            hdr,
+            depth,
+            bloom_a,
+            bloom_b,
+        }
+    }
 }
 
 fn instance_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
