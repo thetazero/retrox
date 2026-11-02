@@ -36,6 +36,9 @@ pub struct OwnedShip {
     /// Saved as the ids of its parts (see [`crate::save::loadout`]).
     #[serde(with = "crate::save::loadout")]
     pub fit: Loadout,
+    /// Hull damage from fighting, until repaired (see [`crate::combat`]).
+    #[serde(default)]
+    pub damage: crate::combat::Damage,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -71,6 +74,7 @@ impl Player {
             ship: OwnedShip {
                 name: format!("{} No. 1", fit.hull().name),
                 fit,
+                damage: Default::default(),
             },
             stored: Vec::new(),
             cargo: GoodMap::default(),
@@ -325,6 +329,7 @@ pub fn run(
             let ship = OwnedShip {
                 name: format!("{} No. {}", hull.name, player.bought),
                 fit,
+                damage: Default::default(),
             };
             let old = std::mem::replace(&mut player.ship, ship);
             player.stored.push(StoredShip {

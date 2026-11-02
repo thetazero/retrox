@@ -29,6 +29,14 @@ pub enum Surface {
     Ice = 5,
     Desert = 7,
     Barren = 8,
+    /// Glows, drawn additively after everything solid (see `fs_glow`): a
+    /// shield bubble lit round a hit (`light.xyz`: the hit's direction in
+    /// object space, `light.w`: 0..1 through its life).
+    Shield = 20,
+    /// A fireball, `light.w` 0..1 through its life.
+    Fire = 21,
+    /// A rim-lit shell: shockwave rings, haloes.
+    Ring = 22,
 }
 
 #[repr(C)]
@@ -51,10 +59,22 @@ impl Instance {
     ) -> Self {
         Self {
             model: model.to_cols_array_2d(),
-            color: [color[0], color[1], color[2], 1.0],
+            // Alpha: how scorched a built thing is (0 clean, 1 a burnt-out
+            // wreck with embers in its cracks).
+            color: [color[0], color[1], color[2], 0.0],
             params: [surface as u32 as f32, emissive, seed, 0.0],
             light,
         }
+    }
+
+    /// Scorch a built thing: 0 clean, up to 1 burnt out and glowing.
+    pub fn with_scorch(mut self, scorch: f32) -> Self {
+        self.color[3] = scorch;
+        self
+    }
+
+    fn glows(&self) -> bool {
+        self.params[0] >= 20.0
     }
 
     /// Built things: panel cells per object unit (0 for none). Ocean
@@ -111,6 +131,8 @@ pub struct Renderer {
     globals: wgpu::Buffer,
     globals_bind: wgpu::BindGroup,
     mesh_pipeline: wgpu::RenderPipeline,
+    /// Additive glows over the solid scene: shields, fire, shockwaves.
+    glow_pipeline: wgpu::RenderPipeline,
     sky_pipeline: wgpu::RenderPipeline,
     post_pipeline: wgpu::RenderPipeline,
     /// Bright-pass downsample, then blurs: horizontal and vertical, narrow
@@ -316,6 +338,51 @@ impl Renderer {
             cache: None,
         });
 
+        let glow_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("glow"),
+            layout: Some(&scene_layout),
+            vertex: wgpu::VertexState {
+                module: &mesh_shader,
+                entry_point: Some("vs"),
+                compilation_options: Default::default(),
+                buffers: &[
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<Vertex>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &vertex_attrs,
+                    }),
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<Instance>() as u64,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &instance_attrs,
+                    }),
+                ],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            // Tested against the solid scene, but not hiding each other.
+            depth_stencil: depth(false),
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &mesh_shader,
+                entry_point: Some("fs_glow"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: HDR_FORMAT,
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::One,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent::REPLACE,
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+
         let sky_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
         let sky_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("sky"),
@@ -456,6 +523,7 @@ impl Renderer {
             globals,
             globals_bind,
             mesh_pipeline,
+            glow_pipeline,
             sky_pipeline,
             post_pipeline,
             bloom_pipelines,
@@ -580,7 +648,8 @@ impl Renderer {
 
         // Sort instances by mesh so each mesh is one instanced draw.
         let mut sorted: Vec<(MeshId, Instance)> = frame.instances.to_vec();
-        sorted.sort_by_key(|(m, _)| m.0);
+        // Solid things first, then glows over them.
+        sorted.sort_by_key(|(m, i)| (i.glows(), m.0));
         if sorted.len() > self.instance_capacity {
             self.instance_capacity = sorted.len().next_power_of_two();
             self.instance_buffer = instance_buffer(&self.device, self.instance_capacity);
@@ -629,12 +698,17 @@ impl Renderer {
                 pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
                 pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
                 let mut start = 0;
+                let mut glowing = false;
                 while start < sorted.len() {
-                    let mesh = sorted[start].0;
+                    let (mesh, first) = sorted[start];
+                    if first.glows() && !glowing {
+                        glowing = true;
+                        pass.set_pipeline(&self.glow_pipeline);
+                    }
                     let end = start
                         + sorted[start..]
                             .iter()
-                            .take_while(|(m, _)| *m == mesh)
+                            .take_while(|(m, i)| *m == mesh && i.glows() == first.glows())
                             .count();
                     let range = &self.meshes[mesh.0];
                     pass.draw_indexed(

@@ -10,6 +10,7 @@ use egui::{
 use glam::{DVec3, Mat4, Vec4};
 use retrox_sim::{BodyKind, EconomyModel};
 
+mod combat;
 pub(crate) mod guide;
 mod map;
 mod mining;
@@ -248,6 +249,7 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
     }
 
     mining::draw(ctx, &h);
+    combat::draw(ctx, &h);
 
     // Top-left: where and when.
     egui::Area::new(egui::Id::unique("where"))
@@ -302,7 +304,7 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
     }
 
     // Bottom: flight instruments.
-    if w.mode == Mode::Normal {
+    if w.mode == Mode::Normal && w.combat.lost.is_none() {
         egui::Area::new(egui::Id::unique("flight"))
             .anchor(Align2::CENTER_BOTTOM, [0.0, -18.0])
             .show(ctx, |ui| flight_panel(ui, w));
@@ -311,7 +313,15 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
     // Prompts.
     let prompts = w.prompts();
     let mut lines: Vec<(Option<&str>, String)> = Vec::new();
-    if w.mode == Mode::Normal {
+    let hostiles = w.hostiles_near();
+    if hostiles > 0 && w.combat.lost.is_none() {
+        let plural = if hostiles == 1 { "" } else { "s" };
+        lines.push((
+            Some("Y"),
+            format!("{hostiles} hostile{plural} near · next target · no fast travel or jumps"),
+        ));
+    }
+    if w.mode == Mode::Normal && w.combat.lost.is_none() {
         match (prompts.fast_travel, prompts.well, w.target) {
             (Some(t), _, _) => lines.push((Some("J"), format!("fast travel to {}", w.name(t)))),
             (None, Some(well), Some(_)) => lines.push((
@@ -536,13 +546,25 @@ fn nav_list(ui: &mut egui::Ui, w: &World, actions: &mut Vec<Action>) {
             painter.line_segment([Pos2::new(x, c.y), Pos2::new(c.x - 6.0, c.y)], stroke);
         }
         place_glyph(painter, w, place, c, ink);
-        painter.text(
+        let name = painter.text(
             Pos2::new(glyph_x + 14.0, c.y),
             Align2::LEFT_CENTER,
             truncate(&w.name(place), 28),
             mono(14.0),
             look.text(AMBER),
         );
+        // Raider bands are reported where they lurk.
+        if let Place::Field(f) = place
+            && w.raiders_reported(f)
+        {
+            painter.text(
+                Pos2::new(name.right() + 8.0, c.y),
+                Align2::LEFT_CENTER,
+                "RAIDERS",
+                mono(11.0),
+                ALARM,
+            );
+        }
         let range = if look.selected { AMBER } else { VFD };
         painter.text(
             Pos2::new(rect.right() - 6.0, c.y),
@@ -761,6 +783,7 @@ fn flight_panel(ui: &mut egui::Ui, w: &World) {
                 width,
                 if throttle < 0.0 { AMBER } else { VFD },
             );
+            combat::gauges(ui, w, width);
             ui.add_space(6.0);
             if let Some(well) = w.current_well() {
                 ui.label(
@@ -1100,6 +1123,17 @@ fn project(view_proj: Mat4, rel: glam::Vec3, screen: egui::Rect) -> Option<Pos2>
 
 /// An arrow at the screen edge pointing toward an off-screen target.
 fn edge_arrow(painter: &egui::Painter, view_proj: Mat4, rel: glam::Vec3, screen: egui::Rect) {
+    edge_arrow_color(painter, view_proj, rel, screen, AMBER);
+}
+
+/// An arrow at the screen's edge pointing toward something off screen.
+fn edge_arrow_color(
+    painter: &egui::Painter,
+    view_proj: Mat4,
+    rel: glam::Vec3,
+    screen: egui::Rect,
+    color: Color32,
+) {
     let clip = view_proj * Vec4::new(rel.x, rel.y, rel.z, 1.0);
     let mut dir = Vec2::new(clip.x, -clip.y);
     if clip.w < 0.0 {
@@ -1112,7 +1146,7 @@ fn edge_arrow(painter: &egui::Painter, view_proj: Mat4, rel: glam::Vec3, screen:
     let side = Vec2::new(-dir.y, dir.x) * 7.0;
     painter.add(egui::Shape::convex_polygon(
         vec![tip, tip - dir * 14.0 + side, tip - dir * 14.0 - side],
-        AMBER,
+        color,
         Stroke::NONE,
     ));
 }

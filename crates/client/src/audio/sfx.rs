@@ -63,10 +63,18 @@ pub enum Cue {
     Clank,
     /// Pneumatic tools in the hangar: a refit.
     Refit,
+    /// An autocannon round: a hard thump and crack.
+    Gun,
+    /// A laser pulse: a falling zap.
+    Zap,
+    /// A shot spent on the shield: an electric fizz.
+    ShieldHit,
+    /// A shot through to the hull: a clang.
+    HullHit,
 }
 
 impl Cue {
-    pub const ALL: [Cue; 30] = [
+    pub const ALL: [Cue; 34] = [
         Cue::Switch,
         Cue::Tick,
         Cue::Confirm,
@@ -97,6 +105,10 @@ impl Cue {
         Cue::MapClose,
         Cue::Clank,
         Cue::Refit,
+        Cue::Gun,
+        Cue::Zap,
+        Cue::ShieldHit,
+        Cue::HullHit,
     ];
 
     pub fn index(self) -> usize {
@@ -107,7 +119,7 @@ impl Cue {
     fn variants(self) -> usize {
         match self {
             Cue::Comms | Cue::Clank | Cue::HullCreak | Cue::Collect => 4,
-            Cue::Switch | Cue::Bump | Cue::Relay | Cue::Fracture => 3,
+            Cue::Switch | Cue::Bump | Cue::Relay | Cue::Fracture | Cue::Gun | Cue::HullHit => 3,
             _ => 1,
         }
     }
@@ -129,6 +141,9 @@ impl Cue {
             Cue::MapOpen | Cue::MapClose => 0.4,
             Cue::HullCreak => 0.3,
             Cue::Fracture => 0.62,
+            Cue::Gun | Cue::Zap => 0.3,
+            Cue::ShieldHit => 0.4,
+            Cue::HullHit => 0.5,
             Cue::Blast => 0.72,
             Cue::JumpArrive | Cue::Land | Cue::Launch => 0.62,
             _ => 0.55,
@@ -565,6 +580,33 @@ fn render(cue: Cue, seed: u64, variant: usize) -> Vec<f32> {
                     rng.range(0.1, 0.35) * (1.0 - at / 2.0),
                 );
             }
+            buf
+        }
+        Cue::Gun => {
+            let pitch = 1.0 + 0.06 * v;
+            let mut buf = synth(0.22, |t| 0.9 * thud(t, 150.0 * pitch, 55.0, 0.05));
+            mix_in(&mut buf, &transient(seed, 0.05, 3200.0, 0.006), 0.0, 1.3);
+            buf
+        }
+        Cue::Zap => synth(0.2, |t| {
+            let f = 2400.0 * decay(t, 0.05) + 300.0;
+            0.5 * decay(t, 0.06) * (TAU * f * t).sin()
+        }),
+        Cue::ShieldHit => {
+            let mut bp = Svf::default();
+            let mut buf = synth(0.35, |t| {
+                let fizz = bp.band(rng.noise(), 2600.0, 3.0, DT) * decay(t, 0.09) * 1.6;
+                fizz + 0.3 * decay(t, 0.12) * (TAU * (900.0 - 600.0 * t) * t).sin()
+            });
+            mix_in(&mut buf, &transient(seed, 0.02, 5000.0, 0.002), 0.0, 0.8);
+            buf
+        }
+        Cue::HullHit => {
+            let pitch = 1.0 + 0.12 * v;
+            let mut buf = synth(0.45, |t| thud(t, 110.0, 45.0, 0.1));
+            let ring = [(340.0, 0.4, 0.15), (571.0, 0.3, 0.1), (893.0, 0.2, 0.06)];
+            mix_in(&mut buf, &synth(0.4, |t| metal(t, &ring, pitch)), 0.0, 0.7);
+            mix_in(&mut buf, &transient(seed, 0.04, 2400.0, 0.006), 0.0, 1.2);
             buf
         }
         Cue::Collect => {

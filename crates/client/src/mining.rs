@@ -901,6 +901,27 @@ impl Mining {
         }
     }
 
+    /// Set something loose in a field for the tractor to pick up: cargo
+    /// spilled from a wreck, say.
+    pub fn drop_loose(
+        &mut self,
+        id: FieldId,
+        pos: DVec3,
+        vel: DVec3,
+        good: Good,
+        tonnes: f64,
+        seed: u64,
+    ) {
+        self.fields.entry(id).or_default().nuggets.push(Nugget {
+            pos,
+            vel,
+            tonnes,
+            good,
+            seed,
+            age: 0.0,
+        });
+    }
+
     /// Leaving a field: loose ore is lost to the dark.
     pub fn leave(&mut self, id: FieldId) {
         if let Some(state) = self.fields.get_mut(&id) {

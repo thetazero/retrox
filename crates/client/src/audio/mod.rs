@@ -348,6 +348,31 @@ impl Audio {
             self.play_with(Cue::Collect, 1.0, pitch, 0.0);
         }
 
+        // Fighting. Guns fire fast: a sound per frame at most.
+        let (a, b) = (was.combat, now.combat);
+        if b.fired > a.fired {
+            let pitch = self.rng.range(0.92, 1.08);
+            self.play_with(Cue::Gun, 1.0, pitch, 0.0);
+        }
+        if b.lasers > a.lasers {
+            self.play(Cue::Zap);
+        }
+        if b.enemy_fired > a.enemy_fired {
+            let pitch = self.rng.range(0.75, 0.85);
+            let pan = self.rng.range(-0.5, 0.5);
+            self.play_with(Cue::Gun, 0.35, pitch, pan);
+        }
+        if b.shield_hits > a.shield_hits {
+            self.play(Cue::ShieldHit);
+        }
+        if b.hull_hits > a.hull_hits {
+            self.play(Cue::HullHit);
+            self.play_with(Cue::HullCreak, 0.5, 1.0, 0.0);
+        }
+        if b.blasts > a.blasts {
+            self.play(Cue::Blast);
+        }
+
         // The station: contracts, deliveries, trades.
         if now.contracts > was.contracts {
             self.play(Cue::Stamp);
@@ -428,6 +453,7 @@ struct Snapshot {
     contracts: usize,
     /// The ship's hull and fit, by name: changes on a refit or a purchase.
     ship: String,
+    combat: crate::combat::Tally,
     stored: usize,
 }
 
@@ -469,6 +495,7 @@ impl Snapshot {
             contracts: player.contracts.len(),
             ship: format!("{} {}", player.ship.name, crate::fit_key(&player.ship.fit)),
             stored: player.stored.len(),
+            combat: world.combat.tally,
         }
     }
 }
