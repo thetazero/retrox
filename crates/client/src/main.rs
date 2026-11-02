@@ -7,7 +7,8 @@
 //! Development flags skip the title and drop straight into a fresh game:
 //! `--seed N`, `--station`, `--undocked`, `--cities`, `--map`, `--course <jumps>`,
 //! `--ship <hull>`, `--screen <trade|hangar|shipyard|contracts>`,
-//! `--combat` (by a raider band), `--brawl` (in a fight), `--lost <s>`
+//! `--combat` (by a raider band), `--brawl` (in a fight), `--behind-hull`
+//! (in a fight, the target hidden by your own hull), `--lost <s>`
 //! (the ship lost that long ago; with `--keys`, it has a checkpoint at a
 //! station to go back to), `--rewind` (rewinding to a checkpoint),
 //! `--arrival` (back at the checkpoint), `--harvesters <gas|ice>` (by a
@@ -95,6 +96,9 @@ struct Flags {
     combat: bool,
     /// With `combat`: the band close in front, battered, fighting at once.
     brawl: bool,
+    /// With `brawl`: the target behind the ship's own hull (#123), and
+    /// held there until a `--screenshot` is taken.
+    behind_hull: bool,
     /// With `brawl`: the ship blown up this many seconds ago.
     lost: Option<f64>,
     /// Show the rewind to a checkpoint, or the arrival back at one (for
@@ -160,7 +164,8 @@ impl Flags {
             skim: has("--skim"),
             harvesters: value("--harvesters").or_else(|| has("--harvesters").then(|| "gas".into())),
             combat: has("--combat") || has("--brawl") || has("--lost") || has("--rewind"),
-            brawl: has("--brawl") || has("--lost") || has("--rewind"),
+            brawl: has("--brawl") || has("--lost") || has("--rewind") || has("--behind-hull"),
+            behind_hull: has("--behind-hull"),
             lost: value("--lost")
                 .and_then(|s| s.parse().ok())
                 .or(has("--rewind").then_some(3.0)),
@@ -289,6 +294,9 @@ impl Flags {
         }
         if self.brawl {
             world.stage_brawl();
+            if self.behind_hull {
+                world.stage_behind_hull();
+            }
             if let Some(t) = self.lost {
                 world.stage_loss(t);
             }
@@ -656,6 +664,13 @@ impl ApplicationHandler for App {
                 };
                 if shoot && r.renderer.capture.is_none() {
                     r.renderer.capture = self.flags.screenshot.clone();
+                }
+                // Held behind the hull until the shot, or it flies off.
+                if self.flags.behind_hull
+                    && self.flags.screenshot.is_some()
+                    && let Some(g) = &mut r.game
+                {
+                    g.world.stage_behind_hull();
                 }
                 r.frame();
                 let shot_done = if self.flags.keys.is_empty() {

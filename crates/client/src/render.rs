@@ -1010,7 +1010,7 @@ impl Targets {
 /// relative) of `radius` metres: its centre and radius in pixels, at full
 /// strength. Never smaller than the HUD's bracket round the target, so
 /// the bracket frames open space, and wider than the target itself, so
-/// its silhouette is clear of the dither (DESIGN §7.2.1).
+/// its whole silhouette shows (DESIGN §7.2.1).
 pub fn reveal_window(view_proj: Mat4, rel: Vec3, radius: f32, w: u32, h: u32) -> Option<[f32; 4]> {
     let clip = view_proj * rel.extend(1.0);
     if clip.w <= 0.0 {
@@ -1023,7 +1023,7 @@ pub fn reveal_window(view_proj: Mat4, rel: Vec3, radius: f32, w: u32, h: u32) ->
     let row_y = Vec3::new(view_proj.x_axis.y, view_proj.y_axis.y, view_proj.z_axis.y);
     let focal = row_y.length() * 0.5 * h;
     let target_px = radius / clip.w * focal;
-    let r = (target_px * 1.6 + 0.012 * h).max(0.045 * h);
+    let r = (target_px * 1.4 + 0.01 * h).max(0.035 * h);
     Some([(ndc.x + 1.0) * 0.5 * w, (1.0 - ndc.y) * 0.5 * h, r, 1.0])
 }
 
@@ -1034,4 +1034,45 @@ fn instance_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
         usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lens() -> Mat4 {
+        // The game's own lens (main.rs).
+        glam::camera::rh::proj::directx::perspective_infinite_reverse(
+            70f32.to_radians(),
+            1920.0 / 1080.0,
+            0.5,
+        )
+    }
+
+    #[test]
+    fn the_window_is_centred_on_the_target() {
+        let [x, y, r, strength] =
+            reveal_window(lens(), Vec3::new(0.0, 0.0, -600.0), 8.0, 1920, 1080).unwrap();
+        assert!((x - 960.0).abs() < 0.5 && (y - 540.0).abs() < 0.5);
+        assert_eq!(strength, 1.0);
+        // A distant fighter is a few pixels: the window is the bracket's
+        // size, not the ship's.
+        assert!((r - 0.035 * 1080.0).abs() < 0.5, "{r}");
+    }
+
+    #[test]
+    fn a_close_target_gets_a_window_round_all_of_it() {
+        let near = Vec3::new(0.0, -20.0, -60.0);
+        let [_, y, r, _] = reveal_window(lens(), near, 12.0, 1920, 1080).unwrap();
+        assert!(y > 540.0, "below the centre");
+        // The window is wider than the target's own radius on screen.
+        let focal = 0.5 * 1080.0 / (35f32.to_radians()).tan();
+        let size = 12.0 / 60.0 * focal;
+        assert!(r > size, "{r} vs {size}");
+    }
+
+    #[test]
+    fn nothing_opens_for_a_target_behind_the_camera() {
+        assert!(reveal_window(lens(), Vec3::new(0.0, 0.0, 50.0), 8.0, 1920, 1080).is_none());
+    }
 }
