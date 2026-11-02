@@ -911,6 +911,31 @@ fn shooting_a_traders_ships_makes_its_faction_hostile() {
 }
 
 #[test]
+fn a_hostile_convoy_left_behind_leaves_the_scene() {
+    let mut world = World::new(1);
+    assert!(world.start_by_traffic(), "seed 1 has traffic");
+    let key = world
+        .traffic
+        .contacts
+        .iter()
+        .max_by_key(|c| c.ships)
+        .unwrap()
+        .key;
+    let faction = world.fleet_faction(key).expect("a faction");
+    world.player.standing.change(faction, -100.0);
+    world.enter_frame(Place::Convoy(key));
+    world.ship.flight_assist = true;
+    world.update(1.0 / 60.0, Controls::default());
+    assert!(world.combat.has_convoy(key), "its ships come into the scene");
+    assert!(world.combat.raiders.iter().any(|r| r.hostile), "and fight");
+    // Far off, out of their reach: they fly on, and the sim's fleet is
+    // drawn again.
+    world.ship.rel += DVec3::new(0.0, 200e3, 0.0);
+    world.update(1.0 / 60.0, Controls::default());
+    assert!(!world.combat.has_convoy(key), "the convoy is still in the scene");
+}
+
+#[test]
 fn intercept_brings_the_ship_alongside_a_convoy() {
     let mut world = World::new(1);
     assert!(world.start_by_traffic(), "seed 1 has traffic");

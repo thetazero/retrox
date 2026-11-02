@@ -108,8 +108,8 @@ impl World {
                         }
                         let name = self.galaxy.pirates.gangs[id].name.clone();
                         self.say(format!(
-                            "Contact: the {name} are moving to intercept · {:.2} AU",
-                            d / 1.496e11
+                            "Contact: the {name} are moving to intercept · {}",
+                            crate::hud::distance(d)
                         ));
                     }
                 }

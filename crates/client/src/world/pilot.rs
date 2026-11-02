@@ -88,14 +88,14 @@ pub fn assist(vel: &mut DVec3, rot: DQuat, local: DVec3, boost: bool, thrust: f6
     }
 }
 
-/// How a ship handles next to the starting ship: thrust and turning
-/// multipliers, within limits so every ship stays flyable.
 /// The fast-travel drive a ship of `stats` has, m/s²: what the player's
 /// own autopilot and a pirate's stalk both fly on.
 pub fn drive_accel_of(stats: &ShipStats) -> f64 {
     DRIVE_ACCEL * handling(stats).0
 }
 
+/// How a ship handles next to the starting ship: thrust and turning
+/// multipliers, within limits so every ship stays flyable.
 pub fn handling(s: &ShipStats) -> (f64, f64) {
     let r = &*REFERENCE;
     let thrust = (s.acceleration() / r.acceleration()).clamp(0.3, 2.5);

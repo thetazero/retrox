@@ -41,6 +41,10 @@ and `--menu pause|quit` opens over a fresh game.
 | `--fire` | hold the mining laser's trigger down |
 | `--traffic` | start in space alongside a trader fleet |
 | `--skim` | start skimming a gas giant |
+| `--cities` | start in orbit of a planet with two cities, cargo bound for one |
+| `--interdict` | fly past a pirate gang's lair until it interdicts the ship |
+| `--convoy` | start alongside a trader fleet, in its frame |
+| `--hostile-convoy` | with `--convoy`: its faction counts you hostile |
 | `--harvesters [gas\|ice]` | start by a harvester at work (default `gas`) |
 | `--combat` | start in the nearest asteroid field with raiders, for them to find |
 | `--brawl` | with the band close in front, battered, fighting at once |
@@ -53,7 +57,7 @@ and `--menu pause|quit` opens over a fresh game.
 | `--sections A,B,…` | with `--ship`: put these sections in its mounts, in order, fully fitted |
 | `--contracts` | start on the dispatch board |
 | `--contract` | also take the first contract on it |
-| `--screen NAME` | start docked on `trade`, `hangar`, `shipyard` or `contracts` |
+| `--screen NAME` | start docked on `trade`, `hangar`, `shipyard`, `contracts` or `bounties` |
 | `--ship-view DEG` | look at your ship from that angle, close up (0 = from behind) |
 | `--screenshot PATH.ppm` | save the 90th frame and quit |
 | `--menu PAGE` | open a menu page: `title`, `new`, `load`, `settings`, or `pause` / `quit` over a fresh game |

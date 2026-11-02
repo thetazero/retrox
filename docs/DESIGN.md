@@ -1165,7 +1165,13 @@ Decided while bringing every screen into one style (issue #77):
   off the body they're on the same way, one step further in. A city row
   carries no range (its planet's row has it). Where the hold's cargo is
   bound, the row is tagged CARGO in amber, as a pirate lair is tagged
-  RAIDERS in red.
+  RAIDERS in red. Under TRAFFIC, trader fleets are teal squares.
+- **Hostiles and standing** (audit 3, #137): anything hostile is alarm
+  red, and anything leaning that way is the same red dimmer: a pirate gang
+  about its own business is a dim red diamond (bright, and doubled, when
+  it's after the player), and a faction that counts you wary reads in dim
+  red. Neutral is dim cream, trusted and honoured teal. Amber stays for
+  paying, buying and selecting, so a rank never borrows it.
 - **Slot plates:** loadout slots carry a stencilled kind plate coloured by
   role (weapons red; engines, power and jump amber; shields, radar and RCS
   teal; radiators and cargo cream).
@@ -1178,7 +1184,10 @@ Decided while bringing every screen into one style (issue #77):
 - **Counts and estimates read as words:** "1 jump", "this system",
   "1 settlement"; an estimated trip is "about 39 d". Never "~": in the
   mono face it reads as a minus sign. Nor "≈": the mono face has no such
-  glyph and draws "=" (so "ABOUT 0.6 T PER FRACTURE").
+  glyph and draws "=" (so "ABOUT 0.6 T PER FRACTURE"). Every count goes
+  through `hud::count` (or `hud::count_as` for "cities"), every jump
+  count through `hud::jumps_text` and every distance through
+  `hud::distance`, so a near target reads in km, not "0.00 AU".
 - **NAVIGATION is a tree of where you go** (#119): the star, then each
   body with what hangs off it, one step in per level: its cities, the
   stations in orbit round it, then its moons with theirs. Stations round
