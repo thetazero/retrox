@@ -126,11 +126,17 @@ fn contract_place(w: &World, to: retrox_sim::SettlementId) -> Option<Place> {
     if w.view.stations.contains(&to) {
         return Some(Place::Station(to));
     }
-    w.view
-        .cities
-        .iter()
-        .find(|&&(city, _)| city == to)
-        .map(|&(_, body)| Place::Body(body))
+    w.city_body(to).map(Place::Body)
+}
+
+/// A settlement's name, and for a city of this system the planet it's on
+/// (issue #116): "Kiolgristio, on Mufath Prime III".
+fn where_name(w: &World, to: retrox_sim::SettlementId) -> String {
+    let name = &w.galaxy.settlements[to].name;
+    match w.city_body(to) {
+        Some(body) => format!("{name}, on {}", w.name(Place::Body(body))),
+        None => name.clone(),
+    }
 }
 
 /// What to do next, from where things stand: one or two sentences, keys
@@ -170,7 +176,9 @@ pub fn hint(w: &World) -> Option<String> {
                         w.galaxy.systems[*system].name
                     )
                 }
-                Some((_, name, _)) => format!("LAUNCH, and take your cargo to {name}."),
+                Some((to, _, _)) => {
+                    format!("LAUNCH, and take your cargo to {}.", where_name(w, *to))
+                }
             },
         });
     }
@@ -231,9 +239,16 @@ pub fn hint(w: &World) -> Option<String> {
                 (true, None) => "Clear to jump: press JUMP on the ▶ lane in HYPERLANES.".to_owned(),
             });
         }
+        // Picked means its row in NAVIGATION: for a city, the planet
+        // targeted with this city to land at.
+        let picked = |place| match place {
+            Place::Body(b) => w.target == Some(place) && w.landing_city(b) == Some(*to),
+            _ => w.target == Some(place),
+        };
         if let Some(place) = contract_place(w, *to)
-            && w.target != Some(place)
+            && !picked(place)
         {
+            let name = where_name(w, *to);
             return Some(format!(
                 "Your cargo is for {name}: click it in NAVIGATION, or [T] through targets."
             ));
