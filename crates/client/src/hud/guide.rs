@@ -40,10 +40,13 @@ pub(crate) fn rich_hint(ui: &mut egui::Ui, text: &str, color: Color32) {
 }
 
 /// The first-steps notes: a lamp for each first, and a hint for what to
-/// do next. Gone once every lamp is lit.
+/// do next. Once every lamp is lit the lamps go and the hint stays, on
+/// its own (issue #127); the setting turns it all off.
 pub fn notes(ctx: &egui::Context, w: &World) {
     let progress = &w.player.progress;
-    if progress.complete() {
+    let complete = progress.complete();
+    let hint = guide::hint(w);
+    if complete && hint.is_none() {
         return;
     }
     let docked = w.docked_at().is_some();
@@ -59,11 +62,16 @@ pub fn notes(ctx: &egui::Context, w: &World) {
     let steps = progress.steps();
     let next = steps.iter().position(|s| !s.1);
     let done = steps.iter().filter(|s| s.1).count();
+    let title = if complete {
+        "Pilot's notes".to_owned()
+    } else {
+        format!("First steps · {done}/{}", steps.len())
+    };
     panel(
         ctx,
         Panel {
             id: "first-steps",
-            title: &format!("First steps · {done}/{}", steps.len()),
+            title: &title,
             anchor,
             offset,
             width: NOTES_W,
@@ -71,21 +79,25 @@ pub fn notes(ctx: &egui::Context, w: &World) {
         },
         |ui| {
             ui.spacing_mut().item_spacing.y = 3.0;
-            // Two columns of lamps.
+            // Two columns of lamps, until they're all lit.
             let half = steps.len().div_ceil(2);
-            ui.horizontal_top(|ui| {
-                for column in [&steps[..half], &steps[half..]] {
-                    ui.vertical(|ui| {
-                        ui.set_width((NOTES_W - 24.0) / 2.0 - 4.0);
-                        for (title, lit) in column {
-                            let is_next = next.is_some_and(|n| steps[n].0 == *title);
-                            step_row(ui, title, *lit, is_next);
-                        }
-                    });
+            if !complete {
+                ui.horizontal_top(|ui| {
+                    for column in [&steps[..half], &steps[half..]] {
+                        ui.vertical(|ui| {
+                            ui.set_width((NOTES_W - 24.0) / 2.0 - 4.0);
+                            for (title, lit) in column {
+                                let is_next = next.is_some_and(|n| steps[n].0 == *title);
+                                step_row(ui, title, *lit, is_next);
+                            }
+                        });
+                    }
+                });
+            }
+            if let Some(text) = hint {
+                if !complete {
+                    ui.add_space(8.0);
                 }
-            });
-            if let Some(text) = guide::hint(w) {
-                ui.add_space(8.0);
                 let frame = egui::Frame::new()
                     .fill(Color32::from_rgba_premultiplied(30, 22, 10, 160))
                     .inner_margin(Margin {

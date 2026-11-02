@@ -912,6 +912,11 @@ from a random generator (pillar 5).
   fuller markets to emptier ones. Lots are sized to the player's hold.
   A board holds 8 contracts at most, 2 per destination, best pay per day
   first. Boards change daily as markets do; some days a port has nothing.
+- **A lot taken stays taken** (issue #126). After ACCEPT, the board posts
+  no more of that good to that consignee until the next day's board, so
+  the job doesn't seem to still be on offer. If the consignee is still
+  short tomorrow, the next lot goes up tagged ANOTHER LOT, as it is for
+  any offer of a good the player already carries there.
 - **Who pays, and what.** The consignee buys the goods at the origin's
   price and pays the fee from its own treasury: freight for the expected
   trip (a rate per tonne-day plus the crew's wage, both the galaxy's own
@@ -1136,9 +1141,15 @@ player.
   dock or land, get paid), lit teal as the player does each one in any
   order, the next one amber. Under the lamps, **one hint** read off the
   situation every frame (where you are, what you carry, your contract's
-  destination, what you're aimed at), with keys drawn as keycaps. The
-  panel goes for good once every lamp is lit; a setting turns it off.
-  The firsts are saved with the player.
+  destination, what you're aimed at), with keys drawn as keycaps. Once
+  every lamp is lit the lamps go but the hint stays, alone in a panel
+  titled PILOT'S NOTES (issue #127: it was the most useful thing on
+  screen); the setting turns it all off. The firsts are saved with the
+  player.
+- **Get paid** means paid for work: a contract delivered, a bounty, or
+  goods of your own sold (bought or mined). Goods kept from a failed
+  contract don't count: they're tracked by the tonne and are the first
+  of that good to go when you sell it.
 - **Controls card** on H (or F1): every key in three columns (flight,
   travel, work & view) over the view, without pausing. The corner of the
   HUD shows only the keys for help and the menu, as keycaps, not a

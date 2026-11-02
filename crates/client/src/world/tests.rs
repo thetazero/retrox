@@ -441,6 +441,33 @@ fn take_a_contract_and_deliver_it_in_another_system() {
 }
 
 #[test]
+fn a_contract_taken_leaves_the_board_until_tomorrow() {
+    // Issue #126: after ACCEPT, the board shows no more of that good to
+    // that consignee today, even with room in the hold for it.
+    let mut world = World::new(1);
+    let offer = world.board[0].clone();
+    world.act(Action::Open(Screen::Contracts));
+    world.act(Action::AcceptContract(0));
+    world.player.contracts[0].offer.amount = 0.0;
+    world.update(1.0 / 60.0, Controls::default());
+    let same = |w: &World| {
+        w.board
+            .iter()
+            .any(|o| o.to == offer.to && o.good == offer.good)
+    };
+    assert!(!same(&world), "reposted the same day");
+    // Tomorrow it's a second lot, if the consignee is still short.
+    world.wait_days(1);
+    let again = world
+        .board
+        .iter()
+        .find(|o| o.to == offer.to && o.good == offer.good);
+    if let Some(again) = again {
+        assert!(crate::contracts::another_lot(&world.player, again));
+    }
+}
+
+#[test]
 fn waiting_stops_when_a_contract_falls_due() {
     let mut world = World::new(1);
     let offer = world.board[0].clone();

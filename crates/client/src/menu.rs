@@ -697,7 +697,7 @@ fn settings_page(
             changed |= switch(ui, &mut settings.first_steps);
         });
         ui.label(
-            RichText::new("a checklist with hints in flight, until you've made your first credits")
+            RichText::new("a checklist of firsts, then a hint on what to do next")
                 .size(11.0)
                 .color(CREAM_DIM),
         );
