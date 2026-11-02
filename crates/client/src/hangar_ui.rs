@@ -3,16 +3,18 @@
 //! keep in storage, or look over and buy ships off the lot. Hovering any
 //! refit option previews its stats against the current fit.
 
-use egui::{Align2, Color32, RichText, Stroke, Vec2};
+use egui::{Align2, Color32, Pos2, Rect, RichText, Stroke, Vec2};
 use retrox_content::ships::{MODULES, SECTIONS, price};
 use retrox_sim::SettlementId;
 use retrox_sim::ship::{Loadout, Mount, ShipStats, Size, SlotKind};
 
 use crate::hangar::{self, Job, Services};
 use crate::hud::{
-    ALARM, AMBER, CREAM, CREAM_DIM, Panel, RED, RED_DARK, VFD, credits, display, panel, section,
+    ALARM, AMBER, CREAM, CREAM_DIM, Panel, RED_DARK, RULE, VFD, credits, display, mono, panel,
+    section, tag,
 };
 use crate::station_ui::screen_header;
+use crate::widgets::{Look, list_row, push};
 use crate::world::{Action, World};
 
 /// What's picked on the loadout: a slot to fill, or a mount to re-section.
@@ -119,45 +121,8 @@ pub fn shipyard_screen(
                 .color(CREAM_DIM),
             );
             ui.add_space(4.0);
-            egui::Grid::new("lot")
-                .num_columns(3)
-                .spacing([12.0, 3.0])
-                .striped(true)
-                .show(ui, |ui| {
-                    for head in ["SHIP", "ROLE", "PRICE"] {
-                        ui.label(RichText::new(head).size(11.0).color(CREAM_DIM));
-                    }
-                    ui.end_row();
-                    for offer in &offers {
-                        let built = hangar::can_build(economy, offer);
-                        let chosen = w.inspect.is_some_and(|h| h.id == offer.hull.id);
-                        let name = RichText::new(offer.hull.name).color(if built {
-                            CREAM
-                        } else {
-                            CREAM_DIM
-                        });
-                        if ui.selectable_label(chosen, name).clicked() {
-                            actions.push(Action::Inspect(offer.hull));
-                        }
-                        ui.label(
-                            RichText::new(format!(
-                                "{:?} {}",
-                                offer.hull.role,
-                                size_letter(offer.hull.size)
-                            ))
-                            .color(CREAM_DIM),
-                        );
-                        let color = if offer.price > w.player.credits {
-                            ALARM
-                        } else if built {
-                            VFD
-                        } else {
-                            CREAM_DIM
-                        };
-                        ui.label(RichText::new(credits(offer.price)).color(color));
-                        ui.end_row();
-                    }
-                });
+            ui.add_space(2.0);
+            lot_list(ui, w, economy, &offers, actions);
         },
     );
 
@@ -198,18 +163,19 @@ pub fn shipyard_screen(
             ui.add_space(10.0);
             let built = hangar::can_build(economy, offer);
             let affordable = offer.price <= w.player.credits;
-            ui.horizontal(|ui| {
-                let buy = egui::Button::new(
-                    RichText::new(format!("BUY · {}", credits(offer.price)))
-                        .font(display(24.0))
-                        .color(CREAM),
-                )
-                .fill(RED)
-                .min_size(Vec2::new(ui.available_width(), 38.0));
-                if ui.add_enabled(built && affordable, buy).clicked() {
-                    actions.push(Action::Hangar(job));
-                }
-            });
+            let width = ui.available_width();
+            if push(
+                ui,
+                &format!("BUY · {}", credits(offer.price)),
+                display(24.0),
+                Look::Primary,
+                built && affordable,
+                Vec2::new(width, 40.0),
+            )
+            .clicked()
+            {
+                actions.push(Action::Hangar(job));
+            }
             let why = if !built {
                 format!(
                     "the yard needs {:.0} t of hull for one · it has {:.0} t",
@@ -248,7 +214,7 @@ fn loadout(
         );
     }
     for (m, (mount, fitted)) in fit.mounts().enumerate() {
-        ui.add_space(4.0);
+        ui.add_space(8.0);
         ui.horizontal(|ui| {
             let name = fitted.map_or("(empty)", |f| f.section.name);
             let where_ = match mount {
@@ -257,48 +223,187 @@ fn loadout(
                     format!("{position:?} {}", size_letter(*size)).to_uppercase()
                 }
             };
-            ui.label(RichText::new(where_).size(11.0).color(CREAM_DIM));
+            tag(ui, &where_, CREAM_DIM);
             ui.label(
                 RichText::new(name.to_uppercase())
-                    .font(display(19.0))
+                    .font(display(21.0))
                     .color(CREAM),
             );
             if matches!(mount, Mount::Open { .. }) && services.outfitter {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let picked = *pick == Some(Pick::Mount(m));
-                    if ui.selectable_label(picked, "SWAP SECTION").clicked() {
+                    let look = if picked {
+                        Look::Tint(AMBER)
+                    } else {
+                        Look::Plain
+                    };
+                    let text = if picked { "CLOSE" } else { "SWAP SECTION" };
+                    if push(ui, text, mono(12.0), look, true, Vec2::new(0.0, 24.0)).clicked() {
                         *pick = (!picked).then_some(Pick::Mount(m));
                     }
                 });
             }
         });
+        ui.add_space(2.0);
         if *pick == Some(Pick::Mount(m)) {
             section_choices(ui, w, m, hover_now, actions);
         }
         let Some(fitted) = fitted else { continue };
+        ui.spacing_mut().item_spacing.y = 0.0;
         for (s, (slot, module)) in fitted.slots().enumerate() {
             let picked = *pick == Some(Pick::Slot { mount: m, slot: s });
-            let label = format!(
-                "  {} {}  {}",
-                kind_code(slot.kind),
-                size_letter(slot.size),
-                module.map_or("— empty —", |m| m.name)
-            );
-            let text = if module.is_some() {
-                RichText::new(label)
-            } else {
-                RichText::new(label).color(CREAM_DIM)
-            };
-            let clicked = ui
-                .add_enabled(services.outfitter, egui::Button::selectable(picked, text))
-                .clicked();
-            if clicked {
+            let (rect, response, look) = list_row(ui, 26.0, picked, services.outfitter, AMBER);
+            if response.clicked() {
                 *pick = (!picked).then_some(Pick::Slot { mount: m, slot: s });
+            }
+            let painter = ui.painter();
+            let y = rect.center().y;
+            // The slot's kind as a small stencilled plate, its size after.
+            let plate = Rect::from_min_size(
+                Pos2::new(rect.left() + 12.0, y - 8.0),
+                Vec2::new(36.0, 16.0),
+            );
+            let kind_color = kind_color(slot.kind);
+            painter.rect_filled(plate, 0.0, kind_color.gamma_multiply(0.16));
+            painter.rect_stroke(
+                plate,
+                0.0,
+                Stroke::new(1.0, kind_color.gamma_multiply(0.7)),
+                egui::StrokeKind::Inside,
+            );
+            painter.text(
+                plate.center(),
+                Align2::CENTER_CENTER,
+                kind_code(slot.kind),
+                mono(11.0),
+                kind_color,
+            );
+            painter.text(
+                Pos2::new(plate.right() + 8.0, y),
+                Align2::LEFT_CENTER,
+                size_letter(slot.size),
+                mono(12.0),
+                CREAM_DIM,
+            );
+            let (name, color) = match module {
+                Some(m) => (m.name, look.text(AMBER)),
+                None => ("— empty —", RULE),
+            };
+            painter.text(
+                Pos2::new(plate.right() + 26.0, y),
+                Align2::LEFT_CENTER,
+                name,
+                mono(14.0),
+                color,
+            );
+            if look.enabled {
+                // An open/closed chevron at the right.
+                let c = Pos2::new(rect.right() - 14.0, y);
+                let points = if picked {
+                    vec![
+                        c + Vec2::new(-4.0, -2.0),
+                        c + Vec2::new(4.0, -2.0),
+                        c + Vec2::new(0.0, 3.0),
+                    ]
+                } else {
+                    vec![
+                        c + Vec2::new(-2.0, -4.0),
+                        c + Vec2::new(3.0, 0.0),
+                        c + Vec2::new(-2.0, 4.0),
+                    ]
+                };
+                let ink = if look.hot || picked { CREAM } else { RULE };
+                painter.add(egui::Shape::convex_polygon(points, ink, Stroke::NONE));
             }
             if picked {
                 module_choices(ui, w, m, s, hover_now, actions);
             }
         }
+        ui.spacing_mut().item_spacing.y = 4.0;
+    }
+}
+
+/// The lot: one row per hull, with its role and size, and its price in
+/// teal if the yard has built one, dim if not, red if you can't afford it.
+fn lot_list(
+    ui: &mut egui::Ui,
+    w: &World,
+    economy: &retrox_sim::economy::LocalEconomy,
+    offers: &[hangar::Offer],
+    actions: &mut Vec<Action>,
+) {
+    ui.spacing_mut().item_spacing.y = 0.0;
+    let (head, _) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), 18.0), egui::Sense::hover());
+    let painter = ui.painter();
+    for (x, text, align) in [
+        (head.left() + 12.0, "SHIP", Align2::LEFT_CENTER),
+        (head.left() + 210.0, "ROLE", Align2::LEFT_CENTER),
+        (head.right() - 8.0, "PRICE", Align2::RIGHT_CENTER),
+    ] {
+        painter.text(
+            Pos2::new(x, head.center().y),
+            align,
+            text,
+            mono(11.0),
+            CREAM_DIM,
+        );
+    }
+    painter.line_segment(
+        [head.left_bottom(), head.right_bottom()],
+        Stroke::new(1.0, RULE),
+    );
+    for offer in offers {
+        let built = hangar::can_build(economy, offer);
+        let chosen = w.inspect.is_some_and(|h| h.id == offer.hull.id);
+        let (rect, response, look) = list_row(ui, 30.0, chosen, true, AMBER);
+        if response.clicked() {
+            actions.push(Action::Inspect(offer.hull));
+        }
+        let painter = ui.painter();
+        let y = rect.center().y;
+        let name = if built || look.hot || chosen {
+            look.text(AMBER)
+        } else {
+            CREAM_DIM
+        };
+        painter.text(
+            Pos2::new(rect.left() + 12.0, y + 1.0),
+            Align2::LEFT_CENTER,
+            offer.hull.name.to_uppercase(),
+            display(20.0),
+            name,
+        );
+        painter.text(
+            Pos2::new(rect.left() + 210.0, y),
+            Align2::LEFT_CENTER,
+            format!("{:?}", offer.hull.role).to_uppercase(),
+            mono(12.0),
+            CREAM_DIM,
+        );
+        let size = Rect::from_center_size(Pos2::new(rect.left() + 290.0, y), Vec2::splat(16.0));
+        painter.rect_stroke(size, 0.0, Stroke::new(1.0, RULE), egui::StrokeKind::Inside);
+        painter.text(
+            size.center(),
+            Align2::CENTER_CENTER,
+            size_letter(offer.hull.size),
+            mono(11.0),
+            CREAM_DIM,
+        );
+        let color = if offer.price > w.player.credits {
+            ALARM
+        } else if built {
+            VFD
+        } else {
+            CREAM_DIM
+        };
+        painter.text(
+            Pos2::new(rect.right() - 8.0, y),
+            Align2::RIGHT_CENTER,
+            credits(offer.price),
+            mono(14.0),
+            color,
+        );
     }
 }
 
@@ -337,12 +442,31 @@ fn fleet(
                     if !at_here {
                         return;
                     }
-                    if ui.button("BOARD").clicked() {
+                    if push(
+                        ui,
+                        "BOARD",
+                        mono(12.0),
+                        Look::Tint(VFD),
+                        true,
+                        Vec2::new(0.0, 22.0),
+                    )
+                    .clicked()
+                    {
                         actions.push(Action::Hangar(Job::Board(i)));
                     }
                     if services.shipyard {
                         let refund = -hangar::quote(player, Job::SellShip(i)).unwrap_or(0.0);
-                        if ui.button(format!("SELL {}", credits(refund))).clicked() {
+                        let text = format!("SELL {}", credits(refund));
+                        if push(
+                            ui,
+                            &text,
+                            mono(12.0),
+                            Look::Plain,
+                            true,
+                            Vec2::new(0.0, 22.0),
+                        )
+                        .clicked()
+                        {
                             actions.push(Action::Hangar(Job::SellShip(i)));
                         }
                     }
@@ -463,7 +587,19 @@ fn choice_row(
             } else {
                 credits(cost)
             };
-            let button = ui.add_enabled(affordable, egui::Button::new(verb));
+            let look = if cost < 0.0 {
+                Look::Tint(VFD)
+            } else {
+                Look::Tint(AMBER)
+            };
+            let button = push(
+                ui,
+                verb,
+                mono(12.0),
+                look,
+                affordable,
+                Vec2::new(44.0, 22.0),
+            );
             let color = if !affordable {
                 ALARM
             } else if cost < 0.0 {
@@ -679,5 +815,16 @@ fn size_letter(size: Size) -> &'static str {
         Size::Small => "S",
         Size::Medium => "M",
         Size::Large => "L",
+    }
+}
+
+/// A colour per slot kind, so a loadout reads at a glance: weapons red,
+/// power and engines amber, defence teal, the rest cream.
+fn kind_color(kind: SlotKind) -> Color32 {
+    match kind {
+        SlotKind::Weapon => crate::hud::RED_HOT,
+        SlotKind::Engine | SlotKind::Power | SlotKind::JumpDrive => AMBER,
+        SlotKind::Shield | SlotKind::Radar | SlotKind::Rcs => VFD,
+        SlotKind::Radiator | SlotKind::Cargo => CREAM_DIM,
     }
 }

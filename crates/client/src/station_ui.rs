@@ -9,9 +9,10 @@ use retrox_sim::economy::Good;
 use crate::hangar;
 use crate::hud::{
     ALARM, AMBER, CREAM, CREAM_DIM, Panel, RED, RED_DARK, RULE, VFD, credits, display,
-    economy_name, glow_label, mono, panel, section, segment_bar, tag,
+    economy_name, glow_label, mono, panel, section, segment_bar,
 };
 use crate::trade;
+use crate::widgets::{Look, push};
 use crate::world::{Action, Screen, World};
 
 pub fn draw(ctx: &egui::Context, w: &World, here: SettlementId, actions: &mut Vec<Action>) {
@@ -133,26 +134,47 @@ fn hub(ctx: &egui::Context, w: &World, here: SettlementId, actions: &mut Vec<Act
 
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                let primary =
-                    egui::Button::new(RichText::new(leave_label).font(display(24.0)).color(CREAM))
-                        .fill(RED)
-                        .min_size(Vec2::new(130.0, 34.0));
-                if ui.add(primary).clicked() {
+                if push(
+                    ui,
+                    leave_label,
+                    display(24.0),
+                    Look::Primary,
+                    true,
+                    Vec2::new(130.0, 36.0),
+                )
+                .clicked()
+                {
                     actions.push(leave);
                 }
                 ui.add_space(10.0);
                 if let Some(wait) = w.waiting {
                     let text = format!("WAITING · DAY {} OF {}", wait.waited, wait.days);
                     ui.label(RichText::new(text).color(CREAM));
-                    let button = egui::Button::new("STOP").min_size(Vec2::new(0.0, 34.0));
-                    if ui.add(button).clicked() {
+                    if push(
+                        ui,
+                        "STOP",
+                        mono(14.0),
+                        Look::Tint(AMBER),
+                        true,
+                        Vec2::new(60.0, 36.0),
+                    )
+                    .clicked()
+                    {
                         actions.push(Action::StopWaiting);
                     }
                 } else {
                     ui.label(RichText::new("WAIT").color(CREAM_DIM));
                     for (days, text) in [(1, "1 D"), (7, "7 D"), (30, "30 D")] {
-                        let button = egui::Button::new(text).min_size(Vec2::new(0.0, 34.0));
-                        if ui.add(button).clicked() {
+                        if push(
+                            ui,
+                            text,
+                            mono(14.0),
+                            Look::Plain,
+                            true,
+                            Vec2::new(48.0, 36.0),
+                        )
+                        .clicked()
+                        {
                             actions.push(Action::Wait(days));
                         }
                     }
@@ -227,12 +249,16 @@ pub(crate) fn menu_button(ui: &mut egui::Ui, title: &str, note: &str, enabled: b
 /// The row at the top of every sub-screen: back to the menu, and credits.
 pub(crate) fn screen_header(ui: &mut egui::Ui, w: &World, actions: &mut Vec<Action>) {
     ui.horizontal(|ui| {
-        if ui
-            .add(egui::Button::new(
-                RichText::new("◀ BACK").font(display(20.0)),
-            ))
-            .on_hover_text("back to the menu (Esc)")
-            .clicked()
+        if push(
+            ui,
+            "◀ BACK",
+            display(20.0),
+            Look::Plain,
+            true,
+            Vec2::new(0.0, 30.0),
+        )
+        .on_hover_text("back to the menu (Esc)")
+        .clicked()
         {
             actions.push(Action::Open(Screen::Hub));
         }
@@ -246,8 +272,6 @@ pub(crate) fn screen_header(ui: &mut egui::Ui, w: &World, actions: &mut Vec<Acti
 fn trade_screen(ctx: &egui::Context, w: &World, here: SettlementId, actions: &mut Vec<Action>) {
     let settlement = &w.galaxy.settlements[here];
     let economy = &settlement.economy;
-    let market = &economy.market;
-    let model = w.galaxy.factions[settlement.owner].economy;
     let capacity = w.stats().cargo_t;
     let carried = w.player.cargo_t();
     panel(
@@ -257,7 +281,7 @@ fn trade_screen(ctx: &egui::Context, w: &World, here: SettlementId, actions: &mu
             title: &format!("Trade · {}", settlement.name),
             anchor: Align2::LEFT_TOP,
             offset: [24.0, 150.0],
-            width: 780.0,
+            width: 720.0,
             collapsible: None,
         },
         |ui| {
@@ -288,58 +312,7 @@ fn trade_screen(ctx: &egui::Context, w: &World, here: SettlementId, actions: &mu
                 .color(CREAM_DIM),
             );
             ui.add_space(4.0);
-            egui::Grid::new("trade-grid")
-                .num_columns(8)
-                .striped(true)
-                .spacing([14.0, 8.0])
-                .show(ui, |ui| {
-                    for head in ["GOOD", "STOCK", "BUY", "SELL", "HOLD", "", "", ""] {
-                        ui.label(RichText::new(head).size(11.0).color(CREAM_DIM));
-                    }
-                    ui.end_row();
-                    for good in Good::ALL {
-                        let stock = market.stock[good];
-                        let have = w.player.cargo[good];
-                        ui.label(RichText::new(good.name()).color(CREAM));
-                        ui.label(RichText::new(format!("{stock:.0} t")).color(VFD));
-                        let buy = trade::buy_cost(market, model, good, 1.0);
-                        let sell = trade::sell_value(market, model, good, 1.0);
-                        ui.label(RichText::new(format!("{buy:.2}")).color(AMBER));
-                        ui.label(RichText::new(format!("{sell:.2}")).color(VFD));
-                        ui.label(RichText::new(format!("{have:.0} t")).color(if have > 0.0 {
-                            CREAM
-                        } else {
-                            RULE
-                        }));
-                        let max = trade::max_buy(&w.player, capacity, economy, model, good);
-                        ui.horizontal(|ui| {
-                            for (label, n) in [("+1", 1.0), ("+10", 10.0), ("MAX", max)] {
-                                let n = n.min(max);
-                                let b = ui.add_enabled(n >= 1.0, egui::Button::new(label));
-                                if b.clicked() {
-                                    actions.push(Action::Trade(good, n));
-                                }
-                            }
-                        });
-                        ui.horizontal(|ui| {
-                            for (label, n) in [("−1", 1.0), ("−10", 10.0), ("ALL", have)] {
-                                let n = n.min(have).floor();
-                                let b = ui.add_enabled(n >= 1.0, egui::Button::new(label));
-                                if b.clicked() {
-                                    actions.push(Action::Trade(good, -n));
-                                }
-                            }
-                        });
-                        if market.shortfall[good] > 0.01 {
-                            tag(ui, "SHORTAGE", ALARM);
-                        } else if market.fill(good) > 2.5 {
-                            tag(ui, "SURPLUS", VFD);
-                        } else {
-                            ui.label("");
-                        }
-                        ui.end_row();
-                    }
-                });
+            market_table(ui, w, here, capacity, actions);
             ui.add_space(6.0);
             ui.label(
                 RichText::new(format!(
@@ -351,4 +324,165 @@ fn trade_screen(ctx: &egui::Context, w: &World, here: SettlementId, actions: &mu
             );
         },
     );
+}
+
+/// Column positions across the market table, from its left edge.
+const COL_STOCK: f32 = 150.0;
+const COL_BUY: f32 = 240.0;
+const COL_SELL: f32 = 310.0;
+const COL_HOLD: f32 = 380.0;
+const COL_BANKS: f32 = 400.0;
+const BANK_W: f32 = 132.0;
+
+/// The market as rows of goods: name and stock (with a gauge of how full
+/// the market is), prices, what you carry, then a bank of buy keys in amber
+/// and sell keys in teal.
+fn market_table(
+    ui: &mut egui::Ui,
+    w: &World,
+    here: SettlementId,
+    capacity: f64,
+    actions: &mut Vec<Action>,
+) {
+    let economy = &w.galaxy.settlements[here].economy;
+    let market = &economy.market;
+    let model = w.galaxy.factions[w.galaxy.settlements[here].owner].economy;
+    let width = ui.available_width();
+    let (head, _) = ui.allocate_exact_size(Vec2::new(width, 18.0), Sense::hover());
+    let painter = ui.painter();
+    let x0 = head.left() + 10.0;
+    for (i, (x, text, align)) in [
+        (x0, "GOOD", Align2::LEFT_CENTER),
+        (head.left() + COL_STOCK, "STOCK", Align2::RIGHT_CENTER),
+        (head.left() + COL_BUY, "BUY", Align2::RIGHT_CENTER),
+        (head.left() + COL_SELL, "SELL", Align2::RIGHT_CENTER),
+        (head.left() + COL_HOLD, "HOLD", Align2::RIGHT_CENTER),
+        (
+            head.left() + COL_BANKS + BANK_W / 2.0,
+            "BUY",
+            Align2::CENTER_CENTER,
+        ),
+        (
+            head.left() + COL_BANKS + BANK_W * 1.5 + 10.0,
+            "SELL",
+            Align2::CENTER_CENTER,
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let color = match i {
+            5 => AMBER,
+            6 => VFD,
+            _ => CREAM_DIM,
+        };
+        painter.text(
+            Pos2::new(x, head.center().y),
+            align,
+            text,
+            mono(11.0),
+            color,
+        );
+    }
+    painter.line_segment(
+        [head.left_bottom(), head.right_bottom()],
+        Stroke::new(1.0, RULE),
+    );
+    ui.spacing_mut().item_spacing.y = 0.0;
+    for (i, good) in Good::ALL.into_iter().enumerate() {
+        let stock = market.stock[good];
+        let have = w.player.cargo[good];
+        let (row, _) = ui.allocate_exact_size(Vec2::new(width, 38.0), Sense::hover());
+        let painter = ui.painter();
+        if i % 2 == 1 {
+            painter.rect_filled(row, 0.0, crate::widgets::CARD_FILL.gamma_multiply(0.6));
+        }
+        painter.line_segment(
+            [row.left_bottom(), row.right_bottom()],
+            Stroke::new(1.0, RULE.gamma_multiply(0.45)),
+        );
+        let y = row.center().y;
+        let shortage = market.shortfall[good] > 0.01;
+        let surplus = !shortage && market.fill(good) > 2.5;
+        // A tab down the left edge flags shortage or surplus.
+        if shortage || surplus {
+            painter.rect_filled(
+                Rect::from_min_size(row.min, Vec2::new(3.0, row.height())),
+                0.0,
+                if shortage { ALARM } else { VFD },
+            );
+        }
+        let note = if shortage {
+            Some(("SHORTAGE", ALARM))
+        } else if surplus {
+            Some(("SURPLUS", VFD))
+        } else {
+            None
+        };
+        painter.text(
+            Pos2::new(
+                row.left() + 10.0,
+                if note.is_some() { y - 6.0 } else { y + 1.0 },
+            ),
+            Align2::LEFT_CENTER,
+            good.name().to_uppercase(),
+            display(20.0),
+            CREAM,
+        );
+        if let Some((text, color)) = note {
+            painter.text(
+                Pos2::new(row.left() + 10.0, y + 10.0),
+                Align2::LEFT_CENTER,
+                text,
+                mono(10.0),
+                color,
+            );
+        }
+        let cell = |x: f32, text: String, color: Color32| {
+            painter.text(
+                Pos2::new(row.left() + x, y),
+                Align2::RIGHT_CENTER,
+                text,
+                mono(15.0),
+                color,
+            );
+        };
+        cell(COL_STOCK, format!("{stock:.0} t"), VFD);
+        let buy = trade::buy_cost(market, model, good, 1.0);
+        let sell = trade::sell_value(market, model, good, 1.0);
+        cell(COL_BUY, format!("{buy:.2}"), AMBER);
+        cell(COL_SELL, format!("{sell:.2}"), VFD);
+        cell(
+            COL_HOLD,
+            format!("{have:.0} t"),
+            if have > 0.0 { CREAM } else { RULE },
+        );
+        let max = trade::max_buy(&w.player, capacity, economy, model, good);
+        let buys = [("+1", 1.0), ("+10", 10.0), ("MAX", max)].map(|(l, n)| (l, n.min(max)));
+        let sells =
+            [("−1", 1.0), ("−10", 10.0), ("ALL", have)].map(|(l, n)| (l, n.min(have).floor()));
+        let bank_rect = |x: f32| {
+            Rect::from_min_size(
+                Pos2::new(row.left() + x, row.top() + 7.0),
+                Vec2::new(BANK_W, row.height() - 14.0),
+            )
+        };
+        let id = egui::Id::unique(("trade-bank", i));
+        let keys = buys.map(|(l, n)| (l, n >= 1.0));
+        if let Some(k) =
+            crate::widgets::bank(ui, bank_rect(COL_BANKS), id.with("buy"), &keys, AMBER)
+        {
+            actions.push(Action::Trade(good, buys[k].1));
+        }
+        let keys = sells.map(|(l, n)| (l, n >= 1.0));
+        if let Some(k) = crate::widgets::bank(
+            ui,
+            bank_rect(COL_BANKS + BANK_W + 10.0),
+            id.with("sell"),
+            &keys,
+            VFD,
+        ) {
+            actions.push(Action::Trade(good, -sells[k].1));
+        }
+    }
 }

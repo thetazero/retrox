@@ -404,9 +404,15 @@ impl Menu {
                 if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     actions.push(MenuAction::NewGame(seed_from_text(&self.seed_text)));
                 }
-                let reroll = egui::Button::new(RichText::new("ROLL").font(display(22.0)))
-                    .min_size(Vec2::new(0.0, 38.0));
-                if ui.add(reroll).on_hover_text("a random seed").clicked() {
+                let reroll = crate::widgets::push(
+                    ui,
+                    "ROLL",
+                    display(22.0),
+                    crate::widgets::Look::Plain,
+                    true,
+                    Vec2::new(0.0, 38.0),
+                );
+                if reroll.on_hover_text("a random seed").clicked() {
                     self.seed_text = random_seed().to_string();
                 }
             });
@@ -893,21 +899,24 @@ fn page_panel(
 
 /// The big red button.
 fn primary(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    ui.add(
-        egui::Button::new(
-            RichText::new(text.to_uppercase())
-                .font(display(26.0))
-                .color(CREAM),
-        )
-        .fill(RED)
-        .min_size(Vec2::new(170.0, 40.0)),
+    crate::widgets::push(
+        ui,
+        &text.to_uppercase(),
+        display(26.0),
+        crate::widgets::Look::Primary,
+        true,
+        Vec2::new(170.0, 40.0),
     )
 }
 
 fn secondary(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    ui.add(
-        egui::Button::new(RichText::new(text.to_uppercase()).font(display(22.0)))
-            .min_size(Vec2::new(0.0, 40.0)),
+    crate::widgets::push(
+        ui,
+        &text.to_uppercase(),
+        display(22.0),
+        crate::widgets::Look::Plain,
+        true,
+        Vec2::new(0.0, 40.0),
     )
 }
 

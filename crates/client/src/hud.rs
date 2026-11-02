@@ -379,49 +379,7 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
                 collapsible: Some(false),
             },
             |ui| {
-                if !open_space {
-                    ui.label(RichText::new("leave the gravity well to jump").color(AMBER));
-                }
-                let next_hop = w.next_hop();
-                egui::Grid::new("lanes")
-                    .num_columns(3)
-                    .spacing([12.0, 4.0])
-                    .show(ui, |ui| {
-                        for lane in w.lanes() {
-                            if next_hop == Some(lane.to) {
-                                ui.label(RichText::new(format!("▶ {}", lane.name)).color(AMBER));
-                            } else {
-                                ui.label(&lane.name);
-                            }
-                            ui.label(
-                                RichText::new(format!(
-                                    "{:.1} ly · {:.0} d",
-                                    lane.length_ly, lane.days
-                                ))
-                                .color(CREAM_DIM),
-                            );
-                            if ui
-                                .add_enabled(open_space, egui::Button::new("JUMP"))
-                                .clicked()
-                            {
-                                actions.push(Action::Jump(lane.to));
-                            }
-                            ui.end_row();
-                        }
-                    });
-                if let Some(dest) = w.course {
-                    ui.label(
-                        RichText::new(format!("course plotted to {}", w.galaxy.systems[dest].name))
-                            .color(AMBER),
-                    );
-                }
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    keycap(ui, "M");
-                    if ui.button("GALAXY MAP").clicked() {
-                        actions.push(Action::ToggleMap);
-                    }
-                });
+                lanes_list(ui, w, open_space, &mut actions);
             },
         );
         panel(
@@ -437,42 +395,7 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
             |ui| {
                 egui::ScrollArea::vertical()
                     .max_height(screen.height() * 0.55)
-                    .show(ui, |ui| {
-                        egui::Grid::new("nav")
-                            .num_columns(2)
-                            .spacing([12.0, 1.0])
-                            .show(ui, |ui| {
-                                for place in w.nav_places() {
-                                    let indent = match place {
-                                        Place::Body(b)
-                                            if w.galaxy.bodies[b].kind == BodyKind::Moon =>
-                                        {
-                                            "  "
-                                        }
-                                        Place::Station(_) => "◇ ",
-                                        Place::Field(_) => "∴ ",
-                                        _ => "",
-                                    };
-                                    let label = format!("{indent}{}", truncate(&w.name(place), 30));
-                                    if ui
-                                        .selectable_label(w.target == Some(place), label)
-                                        .clicked()
-                                    {
-                                        actions.push(Action::Target(place));
-                                    }
-                                    ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Center),
-                                        |ui| {
-                                            ui.label(
-                                                RichText::new(distance(w.distance_to(place)))
-                                                    .color(CREAM_DIM),
-                                            );
-                                        },
-                                    );
-                                    ui.end_row();
-                                }
-                            });
-                    });
+                    .show(ui, |ui| nav_list(ui, w, &mut actions));
             },
         );
     }
@@ -566,6 +489,229 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
     }
 
     actions
+}
+
+/// The system's places as a list of instrument rows: a glyph for what each
+/// is (moons hang off their planet), its name, and the range in VFD teal.
+fn nav_list(ui: &mut egui::Ui, w: &World, actions: &mut Vec<Action>) {
+    ui.spacing_mut().item_spacing.y = 0.0;
+    let places = w.nav_places();
+    let mut heading: Option<&str> = None;
+    for (i, &place) in places.iter().enumerate() {
+        let group = match place {
+            Place::Star | Place::Body(_) => None,
+            Place::Field(_) => Some("Fields"),
+            Place::Station(_) => Some("Stations"),
+        };
+        if group.is_some() && group != heading {
+            ui.add_space(8.0);
+            section(ui, group.unwrap_or_default());
+            ui.add_space(2.0);
+            heading = group;
+        }
+        let selected = w.target == Some(place);
+        let (rect, response, look) = crate::widgets::list_row(ui, 25.0, selected, true, AMBER);
+        if response.clicked() {
+            actions.push(Action::Target(place));
+        }
+        let moon = matches!(place, Place::Body(b) if w.galaxy.bodies[b].kind == BodyKind::Moon);
+        let painter = ui.painter();
+        let glyph_x = rect.left() + if moon { 32.0 } else { 16.0 };
+        let c = Pos2::new(glyph_x, rect.center().y);
+        let ink = if look.selected && !look.hot {
+            AMBER
+        } else {
+            CREAM_DIM
+        };
+        if moon {
+            // A bracket back to the planet above; continues if the next
+            // place is also a moon.
+            let next_moon = places.get(i + 1).is_some_and(
+                |p| matches!(p, Place::Body(b) if w.galaxy.bodies[*b].kind == BodyKind::Moon),
+            );
+            let x = rect.left() + 16.0;
+            let bottom = if next_moon { rect.bottom() } else { c.y };
+            let stroke = Stroke::new(1.0, RULE);
+            painter.line_segment([Pos2::new(x, rect.top()), Pos2::new(x, bottom)], stroke);
+            painter.line_segment([Pos2::new(x, c.y), Pos2::new(c.x - 6.0, c.y)], stroke);
+        }
+        place_glyph(painter, w, place, c, ink);
+        painter.text(
+            Pos2::new(glyph_x + 14.0, c.y),
+            Align2::LEFT_CENTER,
+            truncate(&w.name(place), 28),
+            mono(14.0),
+            look.text(AMBER),
+        );
+        let range = if look.selected { AMBER } else { VFD };
+        painter.text(
+            Pos2::new(rect.right() - 6.0, c.y),
+            Align2::RIGHT_CENTER,
+            distance(w.distance_to(place)),
+            mono(13.0),
+            if look.hot {
+                CREAM
+            } else {
+                range.gamma_multiply(0.85)
+            },
+        );
+    }
+}
+
+/// A small chart symbol for a place.
+fn place_glyph(painter: &egui::Painter, w: &World, place: Place, c: Pos2, ink: Color32) {
+    let stroke = Stroke::new(1.2, ink);
+    match place {
+        Place::Star => {
+            painter.circle_filled(c, 4.0, AMBER);
+            for k in 0..8 {
+                let d = Vec2::angled(k as f32 * std::f32::consts::FRAC_PI_4);
+                painter.line_segment([c + d * 5.5, c + d * 7.5], Stroke::new(1.0, AMBER));
+            }
+        }
+        Place::Body(b) => match w.galaxy.bodies[b].kind {
+            BodyKind::Moon => {
+                painter.circle_filled(c, 2.5, ink);
+            }
+            BodyKind::GasGiant => {
+                painter.circle_stroke(c, 5.0, stroke);
+                painter.line_segment([c + Vec2::new(-8.5, 2.5), c + Vec2::new(8.5, -2.5)], stroke);
+            }
+            BodyKind::Belt => {
+                for k in 0..5 {
+                    let a = std::f32::consts::PI * (0.15 + 0.175 * k as f32);
+                    painter.circle_filled(c + Vec2::angled(a) * Vec2::new(7.0, -4.0), 1.2, ink);
+                }
+            }
+            BodyKind::Planet(_) => {
+                painter.circle_stroke(c, 5.0, stroke);
+                painter.circle_filled(c + Vec2::new(-1.5, -1.5), 1.6, ink);
+            }
+        },
+        Place::Field(_) => {
+            for d in [
+                Vec2::new(-4.0, 2.5),
+                Vec2::new(0.0, -3.0),
+                Vec2::new(4.0, 2.0),
+            ] {
+                painter.circle_filled(c + d, 1.6, ink);
+            }
+        }
+        Place::Station(_) => {
+            let r = 5.0;
+            painter.add(egui::Shape::closed_line(
+                vec![
+                    c + Vec2::new(0.0, -r),
+                    c + Vec2::new(r, 0.0),
+                    c + Vec2::new(0.0, r),
+                    c + Vec2::new(-r, 0.0),
+                ],
+                Stroke::new(1.2, VFD),
+            ));
+        }
+    }
+}
+
+/// The lanes out of this system: name, length and days, and a jump key
+/// (dark while the gravity well holds the ship).
+fn lanes_list(ui: &mut egui::Ui, w: &World, open_space: bool, actions: &mut Vec<Action>) {
+    ui.spacing_mut().item_spacing.y = 0.0;
+    let next_hop = w.next_hop();
+    if !open_space {
+        ui.horizontal(|ui| {
+            lamp(ui, "IN WELL", true, AMBER);
+            ui.label(RichText::new("leave the gravity well to jump").color(AMBER));
+        });
+        ui.add_space(6.0);
+    }
+    for lane in w.lanes() {
+        let on_course = next_hop == Some(lane.to);
+        let (rect, response, look) = crate::widgets::list_row(ui, 30.0, on_course, true, AMBER);
+        if response.clicked() {
+            actions.push(Action::PlotCourse(Some(lane.to)));
+        }
+        let painter = ui.painter();
+        let y = rect.center().y;
+        let mut x = rect.left() + 12.0;
+        if on_course {
+            painter.add(egui::Shape::convex_polygon(
+                vec![
+                    Pos2::new(x - 3.0, y - 5.0),
+                    Pos2::new(x + 4.0, y),
+                    Pos2::new(x - 3.0, y + 5.0),
+                ],
+                AMBER,
+                Stroke::NONE,
+            ));
+        }
+        x += 10.0;
+        painter.text(
+            Pos2::new(x, y),
+            Align2::LEFT_CENTER,
+            truncate(&lane.name, 18),
+            mono(14.0),
+            look.text(AMBER),
+        );
+        painter.text(
+            Pos2::new(rect.right() - 86.0, y),
+            Align2::RIGHT_CENTER,
+            format!("{:.1} LY · {:.0} D", lane.length_ly, lane.days),
+            mono(12.0),
+            if on_course {
+                AMBER
+            } else {
+                VFD.gamma_multiply(0.85)
+            },
+        );
+        let key = Rect::from_min_size(
+            Pos2::new(rect.right() - 76.0, rect.top() + 4.0),
+            Vec2::new(72.0, rect.height() - 8.0),
+        );
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(key));
+        let look = if on_course {
+            crate::widgets::Look::Primary
+        } else {
+            crate::widgets::Look::Plain
+        };
+        if crate::widgets::push(
+            &mut child,
+            "JUMP",
+            display(18.0),
+            look,
+            open_space,
+            key.size(),
+        )
+        .clicked()
+        {
+            actions.push(Action::Jump(lane.to));
+        }
+    }
+    if let Some(dest) = w.course {
+        ui.add_space(6.0);
+        ui.label(
+            RichText::new(format!(
+                "COURSE · {}",
+                w.galaxy.systems[dest].name.to_uppercase()
+            ))
+            .color(AMBER),
+        );
+    }
+    ui.add_space(8.0);
+    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        keycap(ui, "M");
+        if crate::widgets::push(
+            ui,
+            "GALAXY MAP",
+            display(18.0),
+            crate::widgets::Look::Plain,
+            true,
+            Vec2::new(0.0, 24.0),
+        )
+        .clicked()
+        {
+            actions.push(Action::ToggleMap);
+        }
+    });
 }
 
 /// Key prompts, one per line; a line without a key is a warning.

@@ -6,7 +6,7 @@
 //!
 //! Development flags skip the title and drop straight into a fresh game:
 //! `--seed N`, `--station`, `--undocked`, `--map`, `--course <jumps>`,
-//! `--ship <hull>`,
+//! `--ship <hull>`, `--screen <trade|hangar|shipyard|contracts>`,
 //! `--ship-view <deg>`, `--screenshot <path.ppm>`. `--menu <page>` opens a
 //! menu page instead (`title`, `new`, `load`, `settings`, `handbook[:chapter]`, or `pause` or `quit`
 //! over a fresh game), for screenshots. `--keys` plays a key script
@@ -31,6 +31,7 @@ mod station_ui;
 mod title;
 mod trade;
 mod traffic;
+mod widgets;
 mod world;
 
 use std::collections::HashSet;
@@ -91,6 +92,9 @@ struct Flags {
     ship_view: Option<f64>,
     /// Open this menu page.
     menu: Option<String>,
+    /// Docked: open this station screen (`trade`, `hangar`, `shipyard`,
+    /// `contracts`). Implies `--station`.
+    screen: Option<String>,
     /// Press these keys, one a frame (`--keys down,enter,wait60,esc`), as
     /// if typed; `waitN` waits N frames (and any wait lasts until a game
     /// being started is ready). Quits when done, unless `--screenshot`
@@ -121,6 +125,7 @@ impl Flags {
             screenshot: value("--screenshot").map(PathBuf::from),
             ship_view: value("--ship-view").and_then(|s| s.parse().ok()),
             menu: value("--menu"),
+            screen: value("--screen"),
             keys: value("--keys")
                 .map(|k| k.split(',').map(|s| s.trim().to_lowercase()).collect())
                 .unwrap_or_default(),
@@ -145,6 +150,7 @@ impl Flags {
                     || self.ship.is_some()
                     || self.ship_view.is_some()
                     || self.screenshot.is_some()
+                    || self.screen.is_some()
             }
         }
     }
@@ -152,7 +158,7 @@ impl Flags {
     /// A fresh world set up as the flags ask.
     fn world(&self) -> World {
         let mut world = World::new(self.seed.unwrap_or(1));
-        if self.station {
+        if self.station || self.screen.is_some() {
             world.start_at_station();
         }
         if let Some(mut fit) = self.ship.as_deref().and_then(retrox_content::ships::stock) {
@@ -163,6 +169,20 @@ impl Flags {
         }
         if self.contracts {
             world.act(Action::Open(Screen::Contracts));
+        }
+        let screen = match self.screen.as_deref() {
+            Some("trade") => Some(Screen::Trade),
+            Some("hangar") => Some(Screen::Hangar),
+            Some("shipyard") => Some(Screen::Shipyard),
+            Some("contracts") => Some(Screen::Contracts),
+            Some(other) => {
+                eprintln!("--screen: no screen {other}");
+                None
+            }
+            None => None,
+        };
+        if let Some(screen) = screen {
+            world.act(Action::Open(screen));
         }
         if self.take_contract {
             world.act(Action::AcceptContract(0));
