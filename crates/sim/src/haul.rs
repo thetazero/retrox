@@ -201,7 +201,7 @@ impl Traffic {
         self.inbound.get(&(to, good)).copied().unwrap_or(0.0)
     }
 
-    fn add(&mut self, to: SettlementId, good: Good, amount: f64) {
+    pub(crate) fn add(&mut self, to: SettlementId, good: Good, amount: f64) {
         let entry = self.inbound.entry((to, good)).or_default();
         *entry += amount;
         if *entry <= 1e-9 {
@@ -530,6 +530,7 @@ pub fn trade(state: &mut GalaxyState) {
         }
     }
     crate::bubble::step(state, &contracts, &board);
+    crate::pirates::step(state);
     found_companies(state);
     crate::economy::update_all_prices(state);
 }
@@ -537,12 +538,19 @@ pub fn trade(state: &mut GalaxyState) {
 fn arrive(state: &mut GalaxyState, contracts: &Contracts, board: &Board, key: CompanyId, n: usize) {
     let today = state.time;
     let Location::Travelling {
-        to, arrive, jumps, ..
+        from,
+        to,
+        arrive,
+        jumps,
+        ..
     } = state.companies[key].fleets[n].at
     else {
         return;
     };
     if arrive != today {
+        return;
+    }
+    if !crate::pirates::coarse_raid(state, key, n, from, to) {
         return;
     }
     if jumps && !roll_losses(state, key, n, to) {

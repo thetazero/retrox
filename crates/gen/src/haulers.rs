@@ -30,6 +30,21 @@ pub fn classes(state: &mut GalaxyState) -> Vec<ShipClassId> {
     ids
 }
 
+/// The hulls pirate gangs fly (DESIGN §7.2.2): light fighters, and a
+/// gunship for a gang big enough to crew one.
+pub fn raider_hulls(state: &mut GalaxyState) {
+    for (id, heavy) in [("interceptor", false), ("heavy-fighter", false), ("gunship", true)] {
+        let Some(fit) = stock(id) else {
+            continue;
+        };
+        state.pirates.hulls.push(retrox_sim::pirates::RaiderHull {
+            id: id.to_owned(),
+            accel: fit.stats().acceleration(),
+            heavy,
+        });
+    }
+}
+
 /// A few companies at every populated settlement, more and bigger at
 /// large ones, each starting docked at home with one fleet.
 pub fn seed(rng: &mut Rng, state: &mut GalaxyState, classes: &[ShipClassId]) {
