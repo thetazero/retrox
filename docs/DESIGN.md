@@ -584,6 +584,20 @@ minutes (pillar 4):
   breaks at its edge. That stop, the galaxy time the climb takes, and the
   fact that every launch starts inside one are what make wells matter.
 - Flying out by hand still works, for anyone who wants to.
+- **Every city planet has a highport above it** (#112), so the hop from a
+  station down to the city really happens: undock, [J] down, land; launch,
+  [J] up. The galaxy generator puts one station over each planet with a
+  city of at least 1 population (on seed 1, 708 of 754 city planets; the
+  frontier outposts go without). It is a settlement of its own, named
+  "*Planet* Highport", owned by the planet's biggest city and holding 8%
+  of that city's people, so a system's population is unchanged. It has
+  its own market but does no mining (the planet below does that); it can
+  run a gas plant if the system has gas. It orbits at 2.6–3.2 radii:
+  above the 2-radii landing range, with its 20 km arrival point well
+  inside the 4-radii well. A colony that finds its site taken settles a
+  station at 3 radii instead of on the well's edge, for the same reason.
+  Cities founded later in history get no port by rule; that is left to
+  colonization.
 
 A planet stop now takes about as long as a station stop: a few seconds
 of autopilot each way plus the landing sequence.
