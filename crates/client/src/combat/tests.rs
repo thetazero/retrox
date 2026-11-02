@@ -1,4 +1,5 @@
 use super::*;
+use crate::world::{assist, handling, steer};
 use retrox_content::ships::stock;
 
 fn vessel(hull: &str) -> Vessel {
@@ -161,6 +162,29 @@ fn leading_a_crossing_target_meets_it() {
     assert!((tpos + tvel * t - lead).length() < 0.5);
 }
 
+/// A pirate of hull `hull` at `pos`, flying toward +Z at 150 m/s,
+/// guarding the origin.
+fn raider_at(hull: &str, pos: DVec3) -> Raider {
+    let craft = Craft {
+        pos,
+        vel: DVec3::new(0.0, 0.0, 150.0),
+        rot: look_rotation(DVec3::Z),
+        spin: DVec3::ZERO,
+    };
+    let mut r = Raider::new(
+        0,
+        vessel(hull),
+        craft,
+        Crew::Pirate,
+        DVec3::ZERO,
+        (0.7, 0.7),
+        &mut Rng::new(1),
+    );
+    r.rng = Rng::new(7);
+    r.burst = 0.0;
+    r
+}
+
 /// A pilot that does what a player should: nose on the lead, close to gun
 /// range, trigger down when it's lined up.
 fn pilot_step(c: &Combat, me: &mut Craft, burn: &mut f64, dt: f64) -> bool {
@@ -202,29 +226,7 @@ fn duel(raider: &str, fight_back: bool, seconds: f64) -> (f64, bool, bool) {
         rot: DQuat::IDENTITY,
         spin: DVec3::ZERO,
     };
-    let fit = stock(raider).unwrap();
-    c.raiders.push(Raider {
-        id: 0,
-        vessel: Vessel::new(fit, Damage::default()),
-        craft: Craft {
-            pos: DVec3::new(300.0, 100.0, -5000.0),
-            vel: DVec3::new(0.0, 0.0, 150.0),
-            rot: look_rotation(DVec3::Z),
-            spin: DVec3::ZERO,
-        },
-        burn: 0.0,
-        tactic: Tactic::Attack,
-        timer: 0.0,
-        skill: 0.7,
-        rng: Rng::new(7),
-        jink: DVec3::ZERO,
-        jink_t: 0.0,
-        burst: 0.0,
-        home: DVec3::ZERO,
-        crew: Crew::Pirate,
-        hostile: true,
-        slot: None,
-    });
+    c.raiders.push(raider_at(raider, DVec3::new(300.0, 100.0, -5000.0)));
     c.target = Some(0);
     let dt = 1.0 / 60.0;
     let mut t = 0.0;
@@ -266,4 +268,147 @@ fn a_new_pilot_who_fights_back_can_win() {
         won,
         "the starting ship should be able to beat one interceptor ({t:.1}s)"
     );
+}
+
+const DT: f64 = 1.0 / 60.0;
+
+/// A ship sitting still at `pos`, nose to -Z.
+fn still(pos: DVec3) -> Craft {
+    Craft {
+        pos,
+        vel: DVec3::ZERO,
+        rot: DQuat::IDENTITY,
+        spin: DVec3::ZERO,
+    }
+}
+
+fn idle(craft: Craft) -> Pilot {
+    Pilot {
+        craft,
+        burn: 0.0,
+        trigger: false,
+    }
+}
+
+fn starting_fight() -> Combat {
+    Combat::new(
+        stock(crate::hangar::STARTING_HULL).unwrap(),
+        Damage::default(),
+    )
+}
+
+#[test]
+fn raiders_give_up_past_their_leash_and_come_back_inside_it() {
+    // The raider guards the origin; the player is in reach, then not.
+    let mut r = raider_at("interceptor", DVec3::new(0.0, 0.0, -2000.0));
+    r.think(DT, Some(still(DVec3::new(0.0, 0.0, LEASH - 1000.0))), &[]);
+    assert_eq!(r.tactic, Tactic::Attack, "inside 16 km it attacks");
+
+    let far = still(DVec3::new(0.0, 0.0, LEASH + 500.0));
+    r.think(DT, Some(far), &[]);
+    assert_eq!(r.tactic, Tactic::Return, "past 16 km it gives up");
+
+    // It doesn't come straight back the moment the player edges inside:
+    // only once they're well within.
+    let edge = still(DVec3::new(0.0, 0.0, LEASH * 0.85));
+    for _ in 0..120 {
+        r.think(DT, Some(edge), &[]);
+    }
+    assert_eq!(r.tactic, Tactic::Return);
+    r.think(DT, Some(still(DVec3::new(0.0, 0.0, LEASH * 0.7))), &[]);
+    assert_eq!(r.tactic, Tactic::Attack);
+}
+
+#[test]
+fn a_badly_hurt_raider_runs_and_a_lightly_hurt_one_does_not() {
+    let player = still(DVec3::ZERO);
+    let mut r = raider_at("interceptor", DVec3::new(0.0, 0.0, -3000.0));
+    let structure = r.vessel.parts[0].structure;
+    r.vessel.damage.sections[0] = structure * 0.5;
+    for _ in 0..(60 * 20) {
+        r.think(DT, Some(player), &[]);
+        assert_ne!(r.tactic, Tactic::Flee, "half its hull left: it fights on");
+    }
+
+    r.vessel.damage.sections[0] = structure * 0.8;
+    let mut t = 0.0;
+    while r.tactic != Tactic::Flee {
+        r.think(DT, Some(player), &[]);
+        t += DT;
+        assert!(t < 30.0, "a fifth of its hull left and it never ran");
+    }
+    // Running: it opens the range.
+    let from = r.craft.pos.length();
+    for _ in 0..(60 * 5) {
+        r.think(DT, Some(player), &[]);
+    }
+    assert_eq!(r.tactic, Tactic::Flee, "once running it keeps running");
+    assert!(r.craft.pos.length() > from + 500.0);
+}
+
+#[test]
+fn a_running_raider_escapes_past_14_km_and_does_not_hold_the_ship() {
+    let mut c = starting_fight();
+    let mut r = raider_at("interceptor", DVec3::new(0.0, 0.0, -12_000.0));
+    r.tactic = Tactic::Flee;
+    c.raiders.push(r);
+    let me = still(DVec3::ZERO);
+    assert_eq!(
+        c.hostiles_within(me.pos, HOSTILE_RANGE),
+        0,
+        "a raider on the run doesn't keep the ship from travel"
+    );
+    c.update(DT, idle(me), &[]);
+    assert_eq!(c.raiders.len(), 1, "12 km off, it is still in the scene");
+    let mut t = 0.0;
+    while !c.raiders.is_empty() {
+        let d = c.raiders[0].craft.pos.length();
+        c.update(DT, idle(me), &[]);
+        t += DT;
+        assert!(t < 60.0, "never got away");
+        if c.raiders.is_empty() {
+            assert!(d > 13_900.0, "gone at {d:.0} m");
+        }
+    }
+    assert!(c.killed.is_empty(), "escaping isn't dying");
+}
+
+#[test]
+fn a_destroyed_raider_spills_salvage_and_leaves_a_wreck_for_three_minutes() {
+    let mut c = starting_fight();
+    let at = DVec3::new(0.0, 0.0, -3000.0);
+    c.raiders.push(raider_at("interceptor", at));
+    let pilot = idle(still(DVec3::ZERO));
+    c.hit_raider(0, 1e6, &pilot);
+    let out = c.update(DT, pilot, &[]);
+    assert!(c.raiders.is_empty());
+    assert_eq!(c.killed, vec![0]);
+    assert_eq!(out.kills, vec![(0, Crew::Pirate)]);
+    assert!(
+        out.messages
+            .iter()
+            .any(|m| m == "Raider destroyed · the gang is broken"),
+        "{:?}",
+        out.messages
+    );
+
+    // Components and metal, three to two, a few tonnes, tumbling out
+    // from where it died.
+    let goods: Vec<Good> = out.salvage.iter().map(|s| s.2).collect();
+    assert_eq!(goods, vec![Good::Components, Good::Metal]);
+    let tonnes: f64 = out.salvage.iter().map(|s| s.3).sum();
+    assert!((0.5..=9.6).contains(&tonnes), "{tonnes} t");
+    assert!((out.salvage[0].3 / tonnes - 0.6).abs() < 1e-9);
+    for s in &out.salvage {
+        assert!((s.0 - at).length() < 10.0, "spilled where it died");
+    }
+
+    assert_eq!(c.wrecks.len(), 1);
+    assert!((c.wrecks[0].pos - at).length() < 10.0);
+    for _ in 0..179 {
+        c.update(1.0, pilot, &[]);
+    }
+    assert_eq!(c.wrecks.len(), 1, "the wreck tumbles on for three minutes");
+    c.update(1.5, pilot, &[]);
+    assert!(c.wrecks.is_empty(), "then drifts out of view");
 }

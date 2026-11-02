@@ -41,6 +41,7 @@ use retrox_sim::ship::ShipStats;
 use retrox_sim::{AsteroidField, FieldId};
 use serde::{Deserialize, Serialize};
 
+use crate::combat::random_dir;
 use crate::world::{SECONDS_PER_DAY, rock_offset};
 
 /// How far the rock under the crosshair is read out, metres.
@@ -960,20 +961,6 @@ impl Mining {
         self.fields
             .get(&id)
             .is_some_and(|s| s.broken.contains_key(&index))
-    }
-}
-
-fn random_dir(rng: &mut Rng) -> DVec3 {
-    loop {
-        let v = DVec3::new(
-            rng.range(-1.0, 1.0),
-            rng.range(-1.0, 1.0),
-            rng.range(-1.0, 1.0),
-        );
-        let l = v.length_squared();
-        if l > 1e-4 && l <= 1.0 {
-            return v / l.sqrt();
-        }
     }
 }
 
