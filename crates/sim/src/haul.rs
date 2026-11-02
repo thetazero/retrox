@@ -295,8 +295,8 @@ const MIN_PROFIT_PER_DAY: f64 = 1.0;
 const FUEL_PER_SHIP_DAY: f64 = 0.5;
 const FUEL_PER_CARGO_T_DAY: f64 = 0.002;
 /// Crew upkeep per ship per day, in credits, paid monthly.
-const UPKEEP_PER_SHIP_DAY: f64 = 2.0;
-const UPKEEP_PER_CARGO_T_DAY: f64 = 0.02;
+pub(crate) const UPKEEP_PER_SHIP_DAY: f64 = 2.0;
+pub(crate) const UPKEEP_PER_CARGO_T_DAY: f64 = 0.02;
 /// A buyer spends at most this share of its treasury on one delivery.
 const MAX_SPEND_SHARE: f64 = 0.5;
 /// A company spends at most this share of its credits on one cargo.

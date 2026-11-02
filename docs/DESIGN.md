@@ -625,11 +625,12 @@ from a random generator (pillar 5).
   A board holds 8 contracts at most, 2 per destination, best pay per day
   first. Boards change daily as markets do; some days a port has nothing.
 - **Who pays, and what.** The consignee buys the goods at the origin's
-  price and pays the fee from its own treasury: the price gap between
-  the two markets, its faction's delivery premium if planned (the same
-  premium NPC haulers earn), and freight for the expected trip (a rate
-  per tonne-day plus the crew's wage), scaled up by how short it is. It
-  only commits what it can afford.
+  price and pays the fee from its own treasury: freight for the expected
+  trip (a rate per tonne-day plus the crew's wage, both the galaxy's own
+  hauler upkeep): a wage, not a profit. The price gap and a
+  planned faction's delivery premium go to traders, not to a captain
+  carrying someone else's goods (§7.8). It only commits what it can
+  afford.
 - **Deposit.** Taking a contract costs a deposit of the cargo's value,
   returned on delivery. Contract cargo rides in the hold but can't be
   sold.
@@ -691,6 +692,77 @@ from a random generator (pillar 5).
   place and date.
 - Saves' headers carry the exact galaxy clock (for the counter); older
   headers without it still load.
+
+### 7.8 Earnings and progression
+
+Every career in §2 the player can follow today earns a living, and the
+ship ladder is long enough to save up along (issue #84). Money comes out
+of the economy, never from a payout table (pillar 5), so the levers are
+the sim's own numbers:
+
+- **Ships cost about twice their materials.** Finished hull sells at
+  120 cr/t: a tonne takes 1 t of metal, 0.3 t of components and 0.1 t of
+  fuel (56 cr at base prices), and a shipyard marks that up as a factory
+  marks up components (§5.4). Every ship and part is priced from it
+  (§7.4). At half that, ships cost barely more than their raw metal and
+  a few hours of any work bought a freighter. NPC companies buy hulls at
+  the same price; five simulated years end with 4% fewer NPC ships and
+  the same shortages.
+- **A new pilot owns the courier and 2 000 cr.** That covers a first
+  contract's deposit or a hold of cargo, not another ship. (It was
+  25 000 cr, which bought any medium ship on day one.)
+- **A contract pays carriage.** Its fee is the hauler's keep for the
+  trip at the galaxy's own upkeep rates: 0.02 cr per tonne-day plus a
+  crew's 2 cr a day (§7.5.1). How short the consignee is decides whether
+  it posts and how the board is ordered, not the pay. The price gap
+  between the two markets, and a planned faction's delivery premium,
+  belong to whoever buys the goods and carries them at their own risk:
+  a trader, or an NPC hauler. So each career earns from its own thing:
+  contracts from hauling, trading from price gaps, mining from what it
+  digs. Contracts used to pay the gap, the premium and a shortage
+  markup too, at 3 cr/t-day and 30 cr/day (50–150× NPC upkeep), so a
+  courier on contracts made 35–78k cr/h while mining made 1–3k, and
+  nobody would mine.
+- **Mining is unchanged:** ore sells at its market price. A faster laser
+  or a longer tractor barely moves it (+0–15% in the bench). In a courier
+  the 12 t hold forces ~25 station trips an hour, and gluts at the local
+  market set the price. A miner grows by refitting: a gunship with mining
+  lasers in the bow and a cargo bay amidships (43 500 cr) cuts five times
+  as fast. A miner mines in fields the nav list shows clear of raiders
+  (§7.2), and sits a raided stretch out docked.
+
+**Measured** with the career bench (`cargo test -p retrox-client careers
+-- --ignored --nocapture`, `crates/client/src/world/careers.rs`). Bots
+play an hour of each career in a fresh game, seeds 1–4. They fly the real
+world, with turning, nudging around a field and menus charged at a
+practised pilot's pace. They play well, so a new player should expect
+somewhat less, contracts most of all (the bot reads a board instantly).
+
+| Career, ship | cr per hour (seeds 1–4) |
+|---|---|
+| Mining, courier (12 t, light laser) | 1 950 · 2 990 · 970 · 1 670 |
+| Freight contracts, courier | 2 840 · 3 920 · 2 340 · 2 530 |
+| Trading, courier | 16 510 · 4 360 · 8 920 · −980 |
+| Mining, gunship refit (180 t, 2 lasers) | 1 520 · 8 080 · 1 120 · 1 720 |
+| Freight contracts, hauler (360 t) | 8 900 · 7 180 · 7 620 · 8 210 |
+| Trading, hauler | 27 280 · 9 870 · 17 110 · 7 470 |
+
+In a courier, contracts earn about 1.5× mining on average (1.3× to 2.4×
+by seed). Mining needs no capital and never meets a bare board. Trading
+pays best and swings most. Planned economies hold one price everywhere,
+so the money is in market space and across the border (§5.4). A trader
+who guesses wrong loses money. The bot trader also knows prices two jumps
+out, which a player has to learn.
+
+**The ladder** (stock fits): racer 4 060, courier 5 930, interceptor
+6 180, light trader 6 590, heavy fighter 10 150; blockade runner 38 800,
+hauler 41 200, gunship 50 500; express freighter 243 000, bulk freighter
+302 000, frigate 413 000. From the courier and 2 000 cr, the light
+trader (twice the hold) is about 2 hours of contracts or 2–4 of mining
+away; a medium ship is ~15–20 hours of either, less for a good trader. A
+medium freighter on contracts takes ~30 hours to buy a large ship (a
+trader, half that), which leaves fleets and capital ships (§7.5) the
+rest of the ~100-hour arc (§2).
 
 ## 8. Art direction & audio
 

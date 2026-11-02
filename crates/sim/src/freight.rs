@@ -11,12 +11,13 @@
 //! contract on the board is one the galaxy needs carried, and taking one
 //! moves the goods from where they pile up to where they're missing.
 //!
-//! The fee is what the delivery is worth to the consignee:
-//! - the price gap between the two markets (what a trader would earn),
-//! - its faction's delivery premium, for planned factions (see
-//!   [`crate::fiscal::contract_premium`]), and
-//! - freight for the trip: a rate per tonne-day plus the crew's wage,
-//!   both growing with how short the consignee is.
+//! The fee is carriage (DESIGN §7.8): the hauler's keep for the trip, a
+//! rate per tonne-day plus the crew's wage. How short the consignee is
+//! decides whether it posts at all, and orders the board, not the pay.
+//! The price gap between the two markets, and a planned faction's
+//! delivery premium, belong to whoever buys the goods and
+//! carries them at their own risk: a trader (or an NPC hauler), not a
+//! captain paid to move someone else's cargo.
 //!
 //! Money moves (in the client, which owns the player's purse):
 //! - **Accept:** the goods leave this market. The consignee pays this
@@ -51,11 +52,14 @@ const MIN_SHORTAGE: f64 = 0.25;
 /// The settlement whose board it is releases stock down to this share of
 /// its target, so it never ends up shorter than the consignee started.
 const RELEASE_TO: f64 = 1.0 - MIN_SHORTAGE;
-/// Freight, in credits per tonne per day of the trip, at the smallest
-/// shortage; it doubles for an empty market.
-const FREIGHT_RATE: f64 = 3.0;
-/// The crew's wage, in credits per day of the trip, likewise.
-const WAGE: f64 = 30.0;
+/// Freight, in credits per tonne per day of the trip. It is what the galaxy's own
+/// haulers spend keeping a tonne of hold in service (DESIGN §7.8): the
+/// galaxy's haulers move goods for that, so a consignee won't pay a captain
+/// much more.
+const FREIGHT_RATE: f64 = crate::haul::UPKEEP_PER_CARGO_T_DAY;
+/// The crew's wage, in credits per day of the trip, likewise: a hauler
+/// crew's upkeep. The player's ship burns no fuel yet, so none is paid.
+const WAGE: f64 = crate::haul::UPKEEP_PER_SHIP_DAY;
 /// The smallest lot worth posting, as a share of the hold.
 const MIN_LOT_SHARE: f64 = 0.25;
 /// Days allowed for each system on the route (flying to the jump point,
@@ -126,7 +130,6 @@ pub fn board(
     }
     let market = &origin.economy.market;
     let model = model(state, here);
-    let open = crate::fiscal::open_contracts(state);
     let today = state.time;
 
     let mut offers: Vec<(f64, Offer)> = Vec::new();
@@ -137,7 +140,6 @@ pub fn board(
                 continue;
             }
             let dest_market = &dest.economy.market;
-            let dest_model = model_of(state, dest.owner);
             for good in Good::ALL {
                 let spare = market.stock[good] - RELEASE_TO * market.target(good);
                 let target = dest_market.target(good);
@@ -158,15 +160,10 @@ pub fn board(
                     continue;
                 }
                 let buy = |n: f64| market.price_at(good, market.stock[good] - n / 2.0, model);
-                let sell_stock = dest_market.stock[good] + coming;
-                let sell = |n: f64| dest_market.price_at(good, sell_stock + n / 2.0, dest_model);
-                let premium = crate::fiscal::contract_premium(state, &open, to, good, sell_stock);
                 let trip_days = days + SYSTEM_DAYS * f64::from(jumps + 1);
                 let price = |n: f64| {
                     let value = buy(n) * n;
-                    let gap = (sell(n) - buy(n)).max(0.0);
-                    let freight = (n * FREIGHT_RATE + WAGE) * trip_days * (1.0 + shortage);
-                    let fee = n * (gap + premium) + freight;
+                    let fee = (n * FREIGHT_RATE + WAGE) * trip_days;
                     (value, fee)
                 };
                 // The consignee only commits what it can afford.
