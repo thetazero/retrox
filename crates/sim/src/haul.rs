@@ -263,11 +263,13 @@ pub(crate) struct Board {
 
 #[derive(Clone, Copy, Debug)]
 struct Listing {
-    /// The settlement paying the most for each good.
-    buyers: GoodMap<Option<(SettlementId, f64)>>,
+    /// The settlement paying the most for each good, and that price.
+    /// Single precision: listings only rank, and kept small, a month's
+    /// trade lists read fewer cache lines.
+    buyers: GoodMap<Option<(SettlementId, f32)>>,
     /// The settlement whose surplus would fetch the most at base prices,
-    /// with the good, that surplus and its margin per unit.
-    source: Option<(SettlementId, Good, f64, f64)>,
+    /// with the good, and what it would fetch.
+    source: Option<(SettlementId, Good, f32)>,
 }
 
 /// Buyers listed per good, surpluses and shipyards listed, in a system's
@@ -335,15 +337,15 @@ impl Board {
             });
             let market = &s.economy.market;
             for good in Good::ALL {
-                let price = market.price[good];
+                let price = market.price[good] as f32;
                 if listing.buyers[good].is_none_or(|(_, best)| price > best) {
                     listing.buyers[good] = Some((id, price));
                 }
                 let surplus = market.surplus(good);
-                let margin = (good.base_price() - price).max(0.0);
-                let value = surplus * margin;
-                if value > 0.0 && listing.source.is_none_or(|(_, _, s, m)| value > s * m) {
-                    listing.source = Some((id, good, surplus, margin));
+                let margin = (good.base_price() - market.price[good]).max(0.0);
+                let value = (surplus * margin) as f32;
+                if value > 0.0 && listing.source.is_none_or(|(_, _, v)| value > v) {
+                    listing.source = Some((id, good, value));
                 }
             }
         }
@@ -396,17 +398,17 @@ impl Board {
                         at,
                         ly,
                         jumps,
-                        rank: price,
+                        rank: f64::from(price),
                     };
                     insert_ranked(&mut lists.wanted[good], entry);
                 }
             }
-            if let Some((at, _, surplus, margin)) = listing.source {
+            if let Some((at, _, value)) = listing.source {
                 let entry = Listed {
                     at,
                     ly,
                     jumps,
-                    rank: surplus * margin,
+                    rank: f64::from(value),
                 };
                 insert_ranked(&mut lists.sources, entry);
             }
