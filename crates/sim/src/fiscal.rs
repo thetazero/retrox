@@ -10,6 +10,7 @@
 //! give them no other reason to. A faction's balance can go negative: it
 //! has then issued that much money, up to the debt limit [`crate::ledger`] sets.
 
+use serde::{Deserialize, Serialize};
 use slotmap::SecondaryMap;
 
 use crate::economy::Good;
@@ -114,51 +115,76 @@ pub fn contract_premium(
     good.base_price() * CONTRACT_PREMIUM * shortage * share
 }
 
-/// A faction's share of today's welfare round, worked out in place so the
-/// daily books allocate nothing.
-#[derive(Clone, Copy, Debug, Default)]
+/// A faction's welfare round. Each day's books pay out what the day before
+/// set aside, shared by the claims staked the day before, and stake
+/// today's claims for tomorrow: one pass over settlements, with the sums
+/// kept here. Saved with the faction, so a loaded game pays the same.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct Welfare {
-    /// Whether the faction has no positive balance, and so prints money
+    /// Whether the faction had no positive balance, and so prints money
     /// for relief only.
     pub printing: bool,
-    /// The sum of its settlements' claims.
-    pub claims: f64,
-    /// What it pays out today, shared by claim.
+    /// What it pays out today.
     pub budget: f64,
+    /// Its settlements' claims, which share the budget.
+    pub claims: f64,
+    /// Claims staked today, if it pays from a positive balance (by
+    /// population) and if it prints (by how far below their reserve they
+    /// are). Which applies is only known once every tax is in.
+    pub staked_paying: f64,
+    pub staked_printing: f64,
+    /// Its settlements' population, added up as the books go; it becomes
+    /// [`Faction::population`](crate::Faction::population) at the end, so
+    /// the debt limit holds still meanwhile.
+    pub counted: f64,
 }
 
-/// What a settlement claims of its faction's welfare: by population (twice
-/// over below its reserve), or only by how far below its reserve it is if
-/// the faction is printing.
-fn claim(state: &GalaxyState, id: SettlementId, printing: bool) -> f64 {
-    let s = &state.settlements[id];
-    let gap = (reserve(state, id) - s.economy.treasury).max(0.0);
+/// What a settlement holding `treasury` claims of its faction's welfare:
+/// by population (twice over below its reserve), or only by how far below
+/// its reserve it is if the faction is printing.
+fn claim(population: f64, treasury: f64, reserve: f64, printing: bool) -> f64 {
+    let gap = (reserve - treasury).max(0.0);
     if printing {
         gap * RELIEF_SHARE
     } else if gap > 0.0 {
-        2.0 * s.economy.population
+        2.0 * population
     } else {
-        s.economy.population
+        population
     }
 }
 
-/// Planning phase, money part: taxes, then welfare. Ledger transfers in a
-/// few passes over settlements, companies and factions, with the per-faction
-/// sums kept on the factions themselves.
-pub fn taxes_and_welfare(state: &mut GalaxyState) {
-    for i in 0..state.settlements.slot_count() {
-        let Some(id) = state.settlements.key_at(i) else {
-            continue;
-        };
-        let owner = state.settlements[id].owner;
-        let rate = match state.factions[owner].economy {
-            EconomyModel::Planned => PLANNED_TAX,
-            EconomyModel::Market => MARKET_TAX,
-        };
-        let tax = rate * (state.settlements[id].economy.treasury - reserve(state, id)).max(0.0);
-        ledger::pay(state, Account::Settlement(id), Account::Faction(owner), tax);
-    }
+/// Daily books, a settlement's money: it pays its tax, takes its share of
+/// welfare, and stakes its claim for tomorrow.
+pub(crate) fn settle(state: &mut GalaxyState, id: SettlementId) {
+    let owner = state.settlements[id].owner;
+    let Some(faction) = state.factions.get(owner) else {
+        return;
+    };
+    let rate = match faction.economy {
+        EconomyModel::Planned => PLANNED_TAX,
+        EconomyModel::Market => MARKET_TAX,
+    };
+    let welfare = faction.welfare;
+    let reserve = reserve(state, id);
+    let tax = rate * (state.settlements[id].economy.treasury - reserve).max(0.0);
+    ledger::pay(state, Account::Settlement(id), Account::Faction(owner), tax);
 
+    let economy = &state.settlements[id].economy;
+    let (population, treasury) = (economy.population, economy.treasury);
+    if welfare.claims > 0.0 {
+        let mine = claim(population, treasury, reserve, welfare.printing);
+        let pay = welfare.budget * mine / welfare.claims;
+        ledger::pay(state, Account::Faction(owner), Account::Settlement(id), pay);
+    }
+    let w = &mut state.factions[owner].welfare;
+    w.staked_paying += claim(population, treasury, reserve, false);
+    w.staked_printing += claim(population, treasury, reserve, true);
+}
+
+/// Daily books, after every settlement: companies pay their taxes, then
+/// each faction counts its people and, with every tax in, sets aside
+/// tomorrow's welfare.
+pub(crate) fn close_books(state: &mut GalaxyState) {
     for i in 0..state.companies.slot_count() {
         let Some(key) = state.companies.key_at(i) else {
             continue;
@@ -178,50 +204,27 @@ pub fn taxes_and_welfare(state: &mut GalaxyState) {
         ledger::pay(state, Account::Company(key), Account::Faction(owner), tax);
     }
 
-    // Welfare: who prints, then everyone's claims, then budgets, then pay.
-    for faction in state.factions.values_mut() {
-        faction.welfare = Welfare {
-            printing: faction.treasury <= 0.0,
-            ..Welfare::default()
-        };
-    }
-    for i in 0..state.settlements.slot_count() {
-        let Some(id) = state.settlements.key_at(i) else {
-            continue;
-        };
-        let owner = state.settlements[id].owner;
-        let Some(printing) = state.factions.get(owner).map(|f| f.welfare.printing) else {
-            continue;
-        };
-        let c = claim(state, id, printing);
-        state.factions[owner].welfare.claims += c;
-    }
     for i in 0..state.factions.slot_count() {
         let Some(id) = state.factions.key_at(i) else {
             continue;
         };
-        let f = &state.factions[id];
-        let budget = if !f.welfare.printing {
-            f.treasury * WELFARE_SHARE
+        let f = &mut state.factions[id];
+        f.population = f.welfare.counted;
+        let printing = f.treasury <= 0.0;
+        let (claims, budget) = if !printing {
+            (f.welfare.staked_paying, f.treasury * WELFARE_SHARE)
         } else {
-            let need = f.welfare.claims * thrift(state, id);
-            need.min(ledger::spendable(state, Account::Faction(id)) * WELFARE_DEBT_SHARE)
+            let claims = f.welfare.staked_printing;
+            let need = claims * thrift(state, id);
+            let room = ledger::spendable(state, Account::Faction(id)) * WELFARE_DEBT_SHARE;
+            (claims, need.min(room))
         };
-        state.factions[id].welfare.budget = budget;
-    }
-    for i in 0..state.settlements.slot_count() {
-        let Some(id) = state.settlements.key_at(i) else {
-            continue;
+        state.factions[id].welfare = Welfare {
+            printing,
+            budget,
+            claims,
+            ..Welfare::default()
         };
-        let owner = state.settlements[id].owner;
-        let Some(welfare) = state.factions.get(owner).map(|f| f.welfare) else {
-            continue;
-        };
-        if welfare.claims <= 0.0 {
-            continue;
-        }
-        let pay = welfare.budget * claim(state, id, welfare.printing) / welfare.claims;
-        ledger::pay(state, Account::Faction(owner), Account::Settlement(id), pay);
     }
 }
 

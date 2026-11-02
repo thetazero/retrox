@@ -351,8 +351,9 @@ pub struct Faction {
     pub treasury: f64,
     /// Total population of its settlements, refreshed daily.
     pub population: f64,
-    /// Today's welfare round, worked out in place; see [`crate::fiscal`].
-    #[serde(skip)]
+    /// What it pays out in welfare tomorrow, and to whom; see
+    /// [`crate::fiscal::Welfare`].
+    #[serde(default)]
     pub welfare: crate::fiscal::Welfare,
 }
 

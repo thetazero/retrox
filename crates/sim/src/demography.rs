@@ -50,10 +50,10 @@ pub fn site_capacity(site: Site, regions: &Arena<Region>, bodies: &Arena<Body>) 
 /// missing `hunger` (0..1) of its food.
 pub fn change(population: f64, capacity: f64, hunger: f64) -> f64 {
     if hunger > 0.0 {
-        return -population * STARVATION_PER_YEAR * hunger / DAYS_PER_YEAR;
+        return -population * (STARVATION_PER_YEAR / DAYS_PER_YEAR) * hunger;
     }
     let capacity = capacity.max(1e-6);
-    population * GROWTH_PER_YEAR / DAYS_PER_YEAR * (1.0 - population / capacity)
+    population * (GROWTH_PER_YEAR / DAYS_PER_YEAR) * (1.0 - population / capacity)
 }
 
 /// Recompute every faction's total population.
@@ -84,7 +84,7 @@ pub fn live(economy: &mut LocalEconomy, capacity: f64) -> bool {
     };
     economy.population = (population + change(population, capacity, hunger)).max(0.0);
     economy.refresh_demand();
-    economy.hunger += (hunger - economy.hunger) / HUNGER_DAYS;
+    economy.hunger += (hunger - economy.hunger) * (1.0 / HUNGER_DAYS);
     let famine = if economy.famine {
         economy.hunger > FAMINE_ENDS
     } else {

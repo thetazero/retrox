@@ -7,7 +7,7 @@ use slotmap::new_key_type;
 
 use crate::bodies::{BodyId, Orbit, RegionId};
 use crate::economy::LocalEconomy;
-use crate::{FactionId, GalaxyTime, SystemId};
+use crate::{FactionId, GalaxyState, GalaxyTime, SystemId};
 
 new_key_type! {
     /// Settlements can be founded and destroyed, so they use generational keys.
@@ -61,4 +61,49 @@ pub fn reviewing(
     offset: u64,
 ) -> impl Iterator<Item = SettlementId> + '_ {
     review_slots(day, offset, settlements.slot_count()).filter_map(|i| settlements.key_at(i))
+}
+
+/// Every settlement's daily books (DESIGN §5.1.1), in one walk over the
+/// settlements: it produces and consumes, its population changes by what
+/// it ate, its project takes today's materials, and it pays its taxes and
+/// takes its welfare. Then companies pay their taxes and factions close
+/// their books. Arithmetic and ledger transfers only: nothing is searched
+/// for and nothing allocated.
+///
+/// One thread: at tens of nanoseconds a settlement, rayon would cost more
+/// to start than it saves, and money moving through shared faction
+/// accounts keeps the order fixed.
+pub fn books(state: &mut GalaxyState) {
+    for faction in state.factions.values_mut() {
+        faction.welfare.counted = 0.0;
+    }
+    for i in 0..state.settlements.slot_count() {
+        let Some(id) = state.settlements.key_at(i) else {
+            continue;
+        };
+        let GalaxyState {
+            settlements,
+            factions,
+            regions,
+            bodies,
+            history,
+            time,
+            ..
+        } = &mut *state;
+        let settlement = &mut settlements[id];
+        let economy = &mut settlement.economy;
+        economy.produce();
+        let capacity = crate::demography::site_capacity(settlement.site, regions, bodies);
+        if crate::demography::live(economy, capacity) {
+            history.record(*time, crate::HistoryKind::Famine { settlement: id });
+        }
+        if let Some(faction) = factions.get_mut(settlement.owner) {
+            faction.welfare.counted += economy.population;
+        }
+        if economy.project.is_some() && economy.population > 0.0 {
+            crate::construction::progress(state, id);
+        }
+        crate::fiscal::settle(state, id);
+    }
+    crate::fiscal::close_books(state);
 }

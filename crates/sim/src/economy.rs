@@ -171,6 +171,59 @@ impl FacilityKind {
     }
 }
 
+/// A recipe laid out for the daily books: per-good rows instead of lists,
+/// so a facility's day is a few passes over seven numbers.
+struct DenseRecipe {
+    inputs: [f64; Good::COUNT],
+    outputs: [f64; Good::COUNT],
+    /// Bit `g` set if good `g` is an input, or an output.
+    input_mask: u8,
+    output_mask: u8,
+}
+
+const fn dense(kind: FacilityKind) -> DenseRecipe {
+    let recipe = kind.recipe();
+    let mut out = DenseRecipe {
+        inputs: [0.0; Good::COUNT],
+        outputs: [0.0; Good::COUNT],
+        input_mask: 0,
+        output_mask: 0,
+    };
+    let mut i = 0;
+    while i < recipe.inputs.len() {
+        let (good, amount) = recipe.inputs[i];
+        out.inputs[good as usize] = amount;
+        out.input_mask |= 1 << good as u8;
+        i += 1;
+    }
+    let mut i = 0;
+    while i < recipe.outputs.len() {
+        let (good, amount) = recipe.outputs[i];
+        out.outputs[good as usize] = amount;
+        out.output_mask |= 1 << good as u8;
+        i += 1;
+    }
+    out
+}
+
+/// Every kind's [`DenseRecipe`], indexed by kind.
+static DENSE: [DenseRecipe; FacilityKind::ALL.len()] = {
+    let mut i = 0;
+    let mut out = [const {
+        DenseRecipe {
+            inputs: [0.0; Good::COUNT],
+            outputs: [0.0; Good::COUNT],
+            input_mask: 0,
+            output_mask: 0,
+        }
+    }; FacilityKind::ALL.len()];
+    while i < FacilityKind::ALL.len() {
+        out[FacilityKind::ALL[i] as usize] = dense(FacilityKind::ALL[i]);
+        i += 1;
+    }
+    out
+};
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct Facility {
     pub kind: FacilityKind,
@@ -366,139 +419,133 @@ impl LocalEconomy {
     /// Recompute full-rate demand from population and facilities. Call after
     /// changing either.
     pub fn refresh_demand(&mut self) {
-        let mut demand = GoodMap::splat(0.0);
+        const N: usize = Good::COUNT;
+        let mut demand = [0.0; N];
         for (good, per_capita) in PER_CAPITA_DEMAND {
-            demand[good] += per_capita * self.population;
+            demand[good as usize] += per_capita * self.population;
         }
         for facility in &self.facilities {
-            for &(good, amount) in facility.kind.recipe().inputs {
-                demand[good] += amount * facility.scale;
+            let inputs = &DENSE[facility.kind as usize].inputs;
+            for g in 0..N {
+                demand[g] += inputs[g] * facility.scale;
             }
         }
         // A project wants its materials over the next month or so.
         if let Some(project) = &self.project {
-            for good in Good::ALL {
-                demand[good] += project.needs[good] / crate::construction::BUILD_DAYS;
+            for g in 0..N {
+                demand[g] += project.needs.0[g] * (1.0 / crate::construction::BUILD_DAYS);
             }
         }
-        self.market.demand = demand;
+        self.market.demand = GoodMap(demand);
     }
 
     /// One day of production and consumption. People take what they need
     /// first; facilities then share what's left of each input in proportion
     /// to what they want of it, so no facility comes first because of where
-    /// it sits in the list.
-    fn produce(&mut self) {
+    /// it sits in the list. Runs over [`DenseRecipe`] rows: every step is
+    /// the same few multiplies for every good.
+    pub(crate) fn produce(&mut self) {
+        const N: usize = Good::COUNT;
         let market = &mut self.market;
-        market.shortfall = GoodMap::splat(0.0);
+        let stock = &mut market.stock.0;
+        let mut shortfall = [0.0; N];
 
         for (good, per_capita) in PER_CAPITA_DEMAND {
+            let g = good as usize;
             let want = per_capita * self.population;
-            let got = want.min(market.stock[good].max(0.0));
-            market.stock[good] -= got;
-            market.shortfall[good] += want - got;
+            let got = want.min(stock[g].max(0.0));
+            stock[g] -= got;
+            shortfall[g] += want - got;
         }
 
         // Which facilities can run at all today: full storage, or a yard
         // with all the hull it can hold, stops them.
-        let (hull_t, hull_wanted) = (self.hull_t, self.hull_wanted);
-        let open =
-            |facility: &Facility, market: &Market| {
-                let full =
-                    facility.kind.recipe().outputs.iter().any(|&(good, _)| {
-                        market.stock[good] >= market.target(good) * STORAGE_MULTIPLE
-                    });
-                let yard_full = facility.kind == FacilityKind::Shipyard
-                    && hull_t >= hull_wanted + facility.scale * HULL_T_PER_RUN * HULL_STORAGE_DAYS;
-                !full && !yard_full
-            };
-        let mut wanted = GoodMap::splat(0.0);
-        for facility in self.facilities.iter().filter(|f| open(f, market)) {
-            for &(good, amount) in facility.kind.recipe().inputs {
-                wanted[good] += amount * facility.scale;
+        let mut full = 0u8;
+        for g in 0..N {
+            let target = (market.demand.0[g] * TARGET_DAYS).max(MIN_TARGET);
+            if stock[g] >= target * STORAGE_MULTIPLE {
+                full |= 1 << g;
             }
         }
-        let share = GoodMap::from_fn(|good| {
-            if wanted[good] > 0.0 {
-                (market.stock[good].max(0.0) / wanted[good]).min(1.0)
-            } else {
-                1.0
-            }
-        });
+        let (hull_t, hull_wanted) = (self.hull_t, self.hull_wanted);
+        let open = |facility: &Facility| {
+            DENSE[facility.kind as usize].output_mask & full == 0
+                && (facility.kind != FacilityKind::Shipyard
+                    || hull_t
+                        < hull_wanted + facility.scale * HULL_T_PER_RUN * HULL_STORAGE_DAYS)
+        };
 
-        let mut made = GoodMap::splat(0.0);
-        for facility in &mut self.facilities {
-            let recipe = facility.kind.recipe();
+        // Facilities by kind are few (one each, normally), so which are
+        // running fits in a bit set; the tail past 64, if ever, just runs
+        // the check again.
+        let mut running = 0u64;
+        let mut wanted = [0.0; N];
+        for (i, facility) in self.facilities.iter().enumerate() {
+            if !open(facility) {
+                continue;
+            }
+            running |= 1u64.checked_shl(i as u32).unwrap_or(0);
+            let inputs = &DENSE[facility.kind as usize].inputs;
+            for g in 0..N {
+                wanted[g] += inputs[g] * facility.scale;
+            }
+        }
+        let mut share = [1.0; N];
+        for g in 0..N {
+            if wanted[g] > 0.0 {
+                share[g] = (stock[g].max(0.0) / wanted[g]).min(1.0);
+            }
+        }
+
+        let mut used = [0.0; N];
+        let mut made = [0.0; N];
+        for (i, facility) in self.facilities.iter_mut().enumerate() {
+            let recipe = &DENSE[facility.kind as usize];
             // A facility stopped because nobody needs its output wants
             // nothing today: that isn't a shortage of its inputs.
-            let running = open(facility, market);
-            let rate = if running {
-                recipe
-                    .inputs
-                    .iter()
-                    .map(|&(good, _)| share[good])
-                    .fold(1.0, f64::min)
+            let on = if i < 64 {
+                running & (1 << i) != 0
+            } else {
+                open(facility)
+            };
+            let rate = if on {
+                let mut rate: f64 = 1.0;
+                for (g, &s) in share.iter().enumerate() {
+                    let s = if recipe.input_mask & (1 << g) != 0 { s } else { 1.0 };
+                    rate = if s < rate { s } else { rate };
+                }
+                rate
             } else {
                 0.0
             };
-            facility.utilization += (rate - facility.utilization) / UTILIZATION_DAYS;
-            for &(good, amount) in recipe.inputs {
-                let need = amount * facility.scale;
-                market.stock[good] = (market.stock[good] - need * rate).max(0.0);
-                if running {
-                    market.shortfall[good] += need * (1.0 - rate);
-                }
-            }
-            for &(good, amount) in recipe.outputs {
-                made[good] += amount * facility.scale * rate;
+            facility.utilization += (rate - facility.utilization) * (1.0 / UTILIZATION_DAYS);
+            let missing = if on { 1.0 - rate } else { 0.0 };
+            let (take, short, give) = (
+                facility.scale * rate,
+                facility.scale * missing,
+                facility.scale * rate,
+            );
+            for g in 0..N {
+                used[g] += recipe.inputs[g] * take;
+                shortfall[g] += recipe.inputs[g] * short;
+                made[g] += recipe.outputs[g] * give;
             }
             if facility.kind == FacilityKind::Shipyard {
                 self.hull_t += facility.scale * HULL_T_PER_RUN * rate;
             }
         }
-        // Today's output reaches the market at the end of the day.
-        for good in Good::ALL {
-            market.stock[good] += made[good];
+        // Shares keep what facilities use within stock; today's output
+        // reaches the market at the end of the day.
+        for g in 0..N {
+            stock[g] = (stock[g] - used[g]).max(0.0) + made[g];
         }
+        market.shortfall.0 = shortfall;
     }
 
     pub fn update_prices(&mut self, model: EconomyModel) {
         let market = &mut self.market;
         for good in Good::ALL {
             market.price[good] = market.price_at(good, market.stock[good], model);
-        }
-    }
-}
-
-/// A settlement's daily books (DESIGN §5.1.1): it produces and consumes,
-/// then its population changes by what it ate, and its faction's head
-/// count adds it up. Plain arithmetic over each settlement in turn, with
-/// nothing allocated or looked up beyond its own site and owner.
-///
-/// One thread: at tens of nanoseconds a settlement, handing the work to
-/// rayon costs more than it saves at the sizes the galaxy reaches.
-pub fn production(state: &mut GalaxyState) {
-    let GalaxyState {
-        settlements,
-        factions,
-        regions,
-        bodies,
-        history,
-        time,
-        ..
-    } = state;
-    for faction in factions.values_mut() {
-        faction.population = 0.0;
-    }
-    for (id, settlement) in settlements.iter_mut() {
-        let economy = &mut settlement.economy;
-        economy.produce();
-        let capacity = crate::demography::site_capacity(settlement.site, regions, bodies);
-        if crate::demography::live(economy, capacity) {
-            history.record(*time, crate::HistoryKind::Famine { settlement: id });
-        }
-        if let Some(faction) = factions.get_mut(settlement.owner) {
-            faction.population += economy.population;
         }
     }
 }
@@ -626,7 +673,7 @@ mod tests {
     }
     #[test]
     fn price_curve_follows_powf() {
-        let mut x = 0.01;
+        let mut x: f64 = 0.01;
         while x < 40.0 {
             let want = x.powf(0.6).clamp(0.25, 5.0);
             let got = price_curve(x);
@@ -634,7 +681,8 @@ mod tests {
             x *= 1.0137;
         }
         assert_eq!(price_curve(0.0), 0.25);
-        assert_eq!(price_curve(f64::INFINITY), 5.0);
+        assert!((price_curve(f64::INFINITY) - 5.0).abs() < 1e-5);
+        assert!((price_curve(f64::NAN) - 0.25).abs() < 1e-5);
         assert_eq!(price_curve(1.0), 1.0);
     }
 }

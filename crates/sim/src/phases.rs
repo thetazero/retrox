@@ -8,9 +8,7 @@ use crate::GalaxyState;
 /// projects take their materials, and money moves as taxes and welfare.
 /// Arithmetic only.
 pub fn production(state: &mut GalaxyState) {
-    crate::economy::production(state);
-    crate::construction::progress_all(state);
-    crate::fiscal::taxes_and_welfare(state);
+    crate::settlement::books(state);
 }
 
 /// Decisions: the settlements whose monthly review falls today choose what

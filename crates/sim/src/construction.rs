@@ -200,20 +200,6 @@ pub fn choose(state: &GalaxyState, id: SettlementId) -> Option<Project> {
     })
 }
 
-/// Daily books, construction part: every project takes today's share of
-/// its materials from the local market.
-pub fn progress_all(state: &mut GalaxyState) {
-    for i in 0..state.settlements.slot_count() {
-        let Some(id) = state.settlements.key_at(i) else {
-            continue;
-        };
-        let economy = &state.settlements[id].economy;
-        if economy.population > 0.0 && economy.project.is_some() {
-            progress(state, id);
-        }
-    }
-}
-
 /// Monthly reviews, construction part: today's reviewing settlements let
 /// idle facilities decay, forget half their old hull orders, and start a
 /// project if they have none.
@@ -240,9 +226,9 @@ fn review_one(state: &mut GalaxyState, id: SettlementId) {
     }
 }
 
-/// Use today's share of materials from the local market; finish when
-/// nothing is left to use.
-fn progress(state: &mut GalaxyState, id: SettlementId) {
+/// Daily books, construction part: use today's share of materials from
+/// the local market; finish when nothing is left to use.
+pub(crate) fn progress(state: &mut GalaxyState, id: SettlementId) {
     let owner = state.settlements[id].owner;
     let planned = state.factions[owner].economy == EconomyModel::Planned;
     let Some(project) = state.settlements[id].economy.project.clone() else {
@@ -252,6 +238,9 @@ fn progress(state: &mut GalaxyState, id: SettlementId) {
     let mut needs = project.needs;
     let mut used = 0.0;
     for good in Good::ALL {
+        if needs[good] <= 0.0 {
+            continue;
+        }
         let today = ledger::consume(state, id, good, (total[good] / BUILD_DAYS).min(needs[good]));
         needs[good] -= today;
         used += today;
