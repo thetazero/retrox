@@ -12,6 +12,7 @@ pub mod fiscal;
 pub mod haul;
 pub mod history;
 pub mod phases;
+pub mod rng;
 pub mod settlement;
 pub mod ship;
 pub mod state;
@@ -22,6 +23,7 @@ pub use arena::{Arena, Id};
 pub use bodies::{Body, BodyId, BodyKind, Orbit, Orbiting, PlanetClass, Region, RegionId};
 pub use fields::{AsteroidField, FieldId};
 pub use history::{History, HistoryEvent, HistoryKind};
+pub use rng::Rng;
 pub use settlement::{Settlement, SettlementId, Site};
 pub use state::{
     EconomyModel, Faction, FactionId, GalaxyPos, GalaxyState, Hyperlane, LaneId, Resources,
