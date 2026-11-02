@@ -2,9 +2,11 @@
 
 struct Globals {
     view_proj: mat4x4<f32>,
+    inv_view_proj: mat4x4<f32>,
     star_color: vec4<f32>,
     // x: time (s), y: exposure
     misc: vec4<f32>,
+    sky: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> g: Globals;
 
@@ -12,12 +14,14 @@ struct VIn {
     @location(0) pos: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) shade: f32,
+    @location(10) paint: f32,
     @location(3) m0: vec4<f32>,
     @location(4) m1: vec4<f32>,
     @location(5) m2: vec4<f32>,
     @location(6) m3: vec4<f32>,
     @location(7) color: vec4<f32>,
-    // x: surface mode, y: emissive, z: seed, w: unused
+    // x: surface mode, y: emissive, z: seed, w: detail scale (built
+    // things: cells per object unit) or sea level (ocean worlds)
     @location(8) params: vec4<f32>,
     // xyz: direction to the star (world), w: intensity
     @location(9) light: vec4<f32>,
@@ -33,6 +37,7 @@ struct VOut {
     @location(4) @interpolate(flat) light: vec4<f32>,
     @location(5) shade: f32,
     @location(6) view_dir: vec3<f32>,
+    @location(7) paint: f32,
 };
 
 @vertex
@@ -48,6 +53,7 @@ fn vs(v: VIn) -> VOut {
     o.light = v.light;
     o.shade = v.shade;
     o.view_dir = normalize(-world.xyz);
+    o.paint = v.paint;
     return o;
 }
 
@@ -102,19 +108,117 @@ const LAVA: u32 = 6u;
 const DESERT: u32 = 7u;
 const BARREN: u32 = 8u;
 
+// Paints for built things (must match meshes.rs).
+const HULL: u32 = 0u;
+const RED: u32 = 1u;
+const GLASS: u32 = 2u;
+const SOLAR: u32 = 3u;
+const FOIL: u32 = 4u;
+const WINDOWS: u32 = 5u;
+const METAL: u32 = 6u;
+const BEACON: u32 = 7u;
+
+// Sovietwave ambient: a cool teal sky above, a dusky violet below.
+fn ambient_light(n: vec3<f32>) -> vec3<f32> {
+    return mix(vec3<f32>(0.05, 0.025, 0.075), vec3<f32>(0.03, 0.065, 0.085), n.y * 0.5 + 0.5);
+}
+
+// Faint panel seams on a grid in object space, faded out before they alias.
+fn seams(p: vec3<f32>, w: vec3<f32>) -> f32 {
+    let q = abs(fract(p) - 0.5);
+    let fade = 1.0 - smoothstep(0.08, 0.25, max(w.x, max(w.y, w.z)));
+    let edge = max(max(1.0 - smoothstep(0.0, w.x * 1.5 + 0.01, 0.5 - q.x),
+                       1.0 - smoothstep(0.0, w.y * 1.5 + 0.01, 0.5 - q.y)),
+                   1.0 - smoothstep(0.0, w.z * 1.5 + 0.01, 0.5 - q.z));
+    return edge * fade;
+}
+
+// fw: fwidth of the detail-scaled object position, taken in uniform control flow.
+fn built(i: VOut, n: vec3<f32>, mu: f32, fw: vec3<f32>) -> vec3<f32> {
+    let paint = u32(round(i.paint));
+    let scale = i.params.w;
+    let p = i.obj * max(scale, 0.0001);
+    var base = i.color.rgb * i.shade;
+    var spec = 0.06;
+    var gloss = 12.0;
+    var emissive = vec3<f32>(0.0);
+
+    if (paint == RED) {
+        base = vec3<f32>(0.6, 0.075, 0.05) * i.shade;
+        spec = 0.12;
+    } else if (paint == GLASS) {
+        base = vec3<f32>(0.015, 0.02, 0.03);
+        spec = 0.9;
+        gloss = 80.0;
+        emissive = vec3<f32>(1.0, 0.5, 0.18) * 0.35;
+    } else if (paint == SOLAR) {
+        let cell = abs(fract(p * 3.0) - 0.5);
+        let grid = step(0.44, max(cell.x, cell.z));
+        base = mix(vec3<f32>(0.03, 0.045, 0.14), vec3<f32>(0.32, 0.3, 0.28), grid);
+        spec = 0.8;
+        gloss = 40.0;
+    } else if (paint == FOIL) {
+        let crinkle = noise(p * 6.0) * 0.6 + noise(p * 17.0) * 0.4;
+        base = vec3<f32>(0.78, 0.5, 0.14) * (0.6 + 0.7 * crinkle);
+        spec = 0.9 * crinkle + 0.2;
+        gloss = 20.0;
+    } else if (paint == WINDOWS) {
+        // Rows of windows, some lit.
+        let q = p * vec3<f32>(2.0, 3.0, 2.0);
+        let c = vec3<i32>(floor(q));
+        let f = abs(fract(q) - 0.5);
+        let pane = step(max(f.x, f.z), 0.32) * step(f.y, 0.22);
+        let lit = step(0.45, hash3(c));
+        let warm = mix(vec3<f32>(1.0, 0.62, 0.3), vec3<f32>(0.6, 0.9, 1.0), step(0.93, hash3(c + vec3<i32>(7, 3, 1))));
+        let far = smoothstep(0.15, 0.5, length(fw * vec3<f32>(2.0, 3.0, 2.0)));
+        emissive = warm * mix(pane * lit, 0.25, far) * 1.6;
+        base = base * (1.0 - 0.7 * pane);
+    } else if (paint == METAL) {
+        base = vec3<f32>(0.09, 0.085, 0.09) * i.shade;
+        spec = 0.5;
+        gloss = 30.0;
+    } else if (paint == BEACON) {
+        let on = step(0.8, fract(g.misc.x * 0.6 + i.params.z * 0.13));
+        base = vec3<f32>(0.3, 0.02, 0.02);
+        emissive = vec3<f32>(1.0, 0.08, 0.04) * (0.3 + 12.0 * on);
+    }
+    if (scale > 0.0 && (paint == HULL || paint == RED)) {
+        base = base * (1.0 - 0.3 * seams(p, fw));
+    }
+
+    let light_color = mix(vec3<f32>(1.0), g.star_color.rgb, 0.4);
+    let ndl = dot(n, i.light.xyz);
+    // Slightly wrapped key light: softer terminators on hard facets.
+    let lit = clamp((ndl + 0.1) / 1.1, 0.0, 1.0) * i.light.w;
+    let h = normalize(i.light.xyz + i.view_dir);
+    let highlight = pow(max(dot(n, h), 0.0), gloss) * spec * step(0.0, ndl) * i.light.w;
+    // Cool rim so silhouettes read against the sky.
+    let rim = pow(1.0 - mu, 4.0) * vec3<f32>(0.1, 0.16, 0.22);
+    var color = base * (lit * light_color + ambient_light(n) * 2.0 + vec3<f32>(0.04 * mu))
+        + highlight * light_color + rim + emissive;
+    color = color + i.color.rgb * i.params.y;
+    return color;
+}
+
 @fragment
 fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     let mode = u32(round(i.params.x));
+    let fw = fwidth(i.obj * max(i.params.w, 0.0001));
     // Spheres are wound consistently: only their front faces count. (Kit
     // meshes stay two-sided.)
     if (mode != PLAIN && !front) { discard; }
     var n = normalize(i.normal);
     // Two-sided lighting for meshes seen from "inside".
     if (dot(n, i.view_dir) < 0.0 && mode == PLAIN) { n = -n; }
+    let mu = max(dot(n, i.view_dir), 0.0);
+
+    if (mode == PLAIN) {
+        return vec4<f32>(built(i, n, mu, fw), 1.0);
+    }
+
     // Per-body offset into noise space (seed is an integer < 10000).
     let s = i.params.z;
     let p = i.obj + vec3<f32>(s % 97.0, (s / 97.0) % 89.0, s * 0.37 % 83.0);
-    let mu = max(dot(n, i.view_dir), 0.0);
 
     if (mode == STAR) {
         let limb = 0.55 + 0.45 * pow(mu, 0.5);
@@ -125,31 +229,52 @@ fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     var base = i.color.rgb * i.shade;
     var emissive = vec3<f32>(0.0);
     var atmosphere = vec3<f32>(0.0);
+    var water = 0.0;
     if (mode == GAS) {
-        let bands = sin(i.obj.y * 14.0 + fbm(p * 2.5) * 4.0);
-        base = mix(base * 0.7, base * 1.15, 0.5 + 0.5 * bands);
+        let warp = fbm(p * 2.5) * 4.0;
+        let bands = sin(i.obj.y * 14.0 + warp) + 0.4 * sin(i.obj.y * 37.0 + warp * 1.7);
+        base = mix(base * 0.62, base * 1.18, 0.5 + 0.35 * bands);
+        // A great storm, for some.
+        let storm = smoothstep(0.82, 0.95, fbm(p * 1.3 + vec3<f32>(3.0)));
+        base = mix(base, base * vec3<f32>(1.25, 0.8, 0.65), storm * 0.6);
         atmosphere = base * 0.6;
     } else if (mode == OCEAN) {
-        let land = fbm(p * 2.2);
-        let sea = mix(vec3<f32>(0.02, 0.06, 0.16), vec3<f32>(0.04, 0.12, 0.26), smoothstep(0.35, 0.56, land));
-        let ground = mix(vec3<f32>(0.16, 0.26, 0.1), vec3<f32>(0.36, 0.32, 0.22), fbm(p * 6.0));
-        base = select(sea, ground, land > 0.56);
-        let ice = smoothstep(0.82, 0.9, abs(i.obj.y) + fbm(p * 5.0) * 0.1);
+        // Sea level from params.w: higher means more ocean.
+        let sea_level = select(0.56, i.params.w, i.params.w > 0.0);
+        let land = fbm(p * 2.2) + fbm(p * 9.0) * 0.12;
+        let depth = smoothstep(sea_level - 0.25, sea_level, land);
+        let sea = mix(vec3<f32>(0.01, 0.035, 0.11), vec3<f32>(0.03, 0.12, 0.22), depth);
+        let lowland = mix(vec3<f32>(0.11, 0.2, 0.07), vec3<f32>(0.3, 0.26, 0.14), fbm(p * 6.0));
+        let highland = vec3<f32>(0.36, 0.32, 0.27);
+        let ground = mix(lowland, highland, smoothstep(sea_level + 0.08, sea_level + 0.25, land));
+        let is_land = step(sea_level, land);
+        base = mix(sea, ground, is_land);
+        water = 1.0 - is_land;
+        let ice = smoothstep(0.8, 0.88, abs(i.obj.y) + fbm(p * 5.0) * 0.12);
         base = mix(base, vec3<f32>(0.85, 0.9, 0.95), ice);
-        let clouds = smoothstep(0.55, 0.75, fbm(p * 3.0 + vec3<f32>(g.misc.x * 0.001)));
-        base = mix(base, vec3<f32>(0.85), clouds * 0.45);
-        atmosphere = vec3<f32>(0.3, 0.5, 1.0);
+        water = water * (1.0 - ice);
+        let clouds = smoothstep(0.5, 0.75, fbm(p * 3.0 + vec3<f32>(g.misc.x * 0.001)));
+        base = mix(base, vec3<f32>(0.9), clouds * 0.6);
+        water = water * (1.0 - clouds);
+        atmosphere = vec3<f32>(0.3, 0.55, 1.0);
     } else if (mode == ROCKY || mode == DESERT || mode == BARREN) {
         let t = fbm(p * 3.0);
-        base = base * (0.65 + 0.7 * t);
+        base = base * (0.6 + 0.8 * t);
         if (mode == BARREN) {
             // Crater-ish speckle.
-            base = base * (0.8 + 0.4 * smoothstep(0.4, 0.8, noise(p * 9.0)));
+            base = base * (0.75 + 0.5 * smoothstep(0.4, 0.8, noise(p * 9.0)));
+        }
+        if (mode == DESERT) {
+            let dunes = sin(i.obj.y * 40.0 + fbm(p * 4.0) * 8.0);
+            base = base * (0.92 + 0.08 * dunes);
+            atmosphere = vec3<f32>(0.75, 0.45, 0.22) * 0.5;
         }
         if (mode == ROCKY) { atmosphere = vec3<f32>(0.25, 0.3, 0.4) * 0.5; }
-        if (mode == DESERT) { atmosphere = vec3<f32>(0.6, 0.4, 0.2) * 0.5; }
     } else if (mode == ICE) {
-        base = mix(base, vec3<f32>(0.95, 0.97, 1.0), fbm(p * 4.0) * 0.6);
+        base = mix(base, vec3<f32>(0.8, 0.84, 0.88), fbm(p * 4.0) * 0.6) * 0.8;
+        let cracks = 1.0 - smoothstep(0.0, 0.03, abs(fbm(p * 5.0) - 0.5));
+        base = mix(base, vec3<f32>(0.35, 0.55, 0.7), cracks * 0.5);
+        atmosphere = vec3<f32>(0.5, 0.7, 0.9) * 0.2;
     } else if (mode == LAVA) {
         let cracks = smoothstep(0.48, 0.52, fbm(p * 4.0));
         base = vec3<f32>(0.08, 0.06, 0.05);
@@ -160,18 +285,15 @@ fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     let lit = max(ndl, 0.0) * i.light.w;
     // Starlight, desaturated a little so orange suns don't tint everything.
     let light_color = mix(vec3<f32>(1.0), g.star_color.rgb, 0.4);
-    var ambient = 0.03;
-    var fill = 0.0;
-    if (mode == PLAIN) {
-        // Built things get some fill so they read in shadow.
-        ambient = 0.06;
-        fill = 0.12 * mu;
-    }
-    var color = base * (lit * light_color + vec3<f32>(ambient + fill)) + emissive;
-    // Thin atmosphere glow at the limb, on the day side.
-    let rim = pow(1.0 - mu, 3.0) * smoothstep(-0.2, 0.3, ndl);
-    color = color + atmosphere * rim * i.light.w;
-    // Small emissive parts (windows, lamps) for built things.
-    color = color + i.color.rgb * i.params.y;
+    var color = base * (lit * light_color + vec3<f32>(0.012)) + emissive;
+    // Sun glint on open water.
+    let h = normalize(i.light.xyz + i.view_dir);
+    color = color + water * pow(max(dot(n, h), 0.0), 60.0) * 0.6 * lit * light_color;
+    // Atmosphere: a glow at the limb on the day side, reddening toward the
+    // terminator.
+    let rim = pow(1.0 - mu, 2.5) * smoothstep(-0.25, 0.35, ndl);
+    let dusk = vec3<f32>(1.0, 0.42, 0.22) * length(atmosphere);
+    let air = mix(dusk, atmosphere, smoothstep(0.0, 0.45, ndl));
+    color = color + air * rim * i.light.w * 0.8;
     return vec4<f32>(color, 1.0);
 }
