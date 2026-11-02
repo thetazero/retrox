@@ -470,6 +470,10 @@ rather than space bugs.
   churning fireball with secondaries, a white core flash, a shockwave
   ring, flung hull plates and embers, and leave a burnt-out wreck with
   embers in its cracks, tumbling, for three minutes.
+- **Sounds (§8).** Synthesized like the rest: a thump and crack per
+  autocannon round (raiders' quieter and lower), a falling zap for
+  lasers, an electric fizz on the shield, a metal clang and hull creak
+  when shots get through, and the volatile-rock blast for ships going up.
 - **Losing the ship** shows a "ship lost" card and restores the last
   checkpoint (§7.7); everything else about death is its own issue.
 
