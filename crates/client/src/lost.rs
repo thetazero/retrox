@@ -55,7 +55,7 @@ impl LostInfo {
             hull: world.player.ship.fit.hull().name,
             place: place.strip_prefix("in space ").unwrap_or(&place).to_owned(),
             date: world.date().to_string(),
-            by_raiders: world.combat.field.is_some(),
+            by_raiders: !world.combat.raiders.is_empty(),
             clock_s: world.clock_s,
             checkpoint,
         }

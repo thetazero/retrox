@@ -6,7 +6,7 @@
 use glam::DVec3;
 
 use super::{Mode, Place, World, rock_offset};
-use crate::combat::{Combat, Craft, HOSTILE_RANGE, Pilot, REPAIR_PER_POINT};
+use crate::combat::{Craft, HOSTILE_RANGE, Pilot, REPAIR_PER_POINT};
 
 impl World {
     /// Where the fight is anchored: the field whose band is out, else
@@ -72,12 +72,10 @@ impl World {
         // Refits change the guns, shields and sections.
         if self.combat.player.fit != self.player.ship.fit {
             let lost = self.combat.lost;
-            let bands = std::mem::take(&mut self.combat.bands);
-            self.combat = Combat::new(
+            self.combat.rebuild(
                 self.player.ship.fit.clone(),
                 self.player.ship.damage.clone(),
             );
-            self.combat.bands = bands;
             self.combat.lost = lost;
         }
 
@@ -255,15 +253,10 @@ impl World {
         if share >= 1.0 {
             *d = Default::default();
         }
-        self.combat = {
-            let bands = std::mem::take(&mut self.combat.bands);
-            let mut c = Combat::new(
-                self.player.ship.fit.clone(),
-                self.player.ship.damage.clone(),
-            );
-            c.bands = bands;
-            c
-        };
+        self.combat.rebuild(
+            self.player.ship.fit.clone(),
+            self.player.ship.damage.clone(),
+        );
         let what = if share >= 1.0 {
             "Hull repaired"
         } else {
