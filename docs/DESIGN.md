@@ -30,13 +30,18 @@ not a theme park — everything in-world is fictional, nothing is overdone.
    travel, hauling and waiting.
 5. **Systems over scripts.** Prefer emergent outcomes. Authored content
    (storylets) sets up situations; the simulation decides how they play out.
+6. **History is simulated, not authored.** Generation builds the physical
+   galaxy and a single cradle of civilization, then runs the real sim
+   forward for centuries. Every faction, border, colony, ruin and grudge
+   the player finds is the output of that history (§4.2).
 
 ### Non-goals (for now)
 
 - Multiplayer.
 - Seamless planetary landing (see §7.6).
-- Deterministic history replay (generation *is* deterministic; history isn't).
-- Named NPC characters / crew personalities. Ships and factions are faceless.
+- Named NPC characters / crew personalities. Ships and factions are
+  faceless. Historical figures exist only as names in the history record
+  (founders, admirals, rebel leaders) — no personalities, no dialogue.
 - Permadeath.
 
 ## 2. Core loops
@@ -98,10 +103,15 @@ Rules:
 - **Detail level is a function of both distance and time rate** — the same
   LOD mechanism (§5.2) handles "far away" and "time is moving fast".
 
-## 4. Galaxy & procedural generation
+## 4. Galaxy & world generation
 
-- **~5000 star systems**, generated from a seed. Generation is
-  deterministic: same seed → same starting galaxy.
+Generation has two stages: build the physical galaxy, then simulate its
+history. The whole thing is deterministic — same seed and config, same
+starting galaxy (§5.1).
+
+### 4.1 The physical galaxy
+
+- **~5000 star systems**, generated from a seed.
 - **Hyperlanes** connect systems into a graph. The graph is deliberately
   uneven: dense cores, sparse frontiers, chokepoints and long bridges.
   Lane topology drives trade routes, war fronts and piracy.
@@ -110,11 +120,29 @@ Rules:
   traversed by supercruise.
 - Resources are distributed by system type so that supply chains must
   cross space.
-- **Factions are procedural**: origin region, ideology, **economic model**
-  (planned or market, §5.4), tech level, aesthetic variant, attitudes
-  toward others. Factions can form, split, merge and die over time.
-- Starting history: optionally run the sim for N years at generation time
-  so the galaxy begins with a past (wars already fought, ruins, borders).
+- Nothing civilizational is placed here: no factions, territory,
+  population or facilities. Those come from history.
+
+### 4.2 Simulated prehistory
+
+- History starts from **one cradle** — a single homeworld at the dawn of
+  FTL, shared by **2–4 rival nations**. Every later faction descends from
+  one of them, so the galaxy shares an origin but starts with rivalry: a
+  space race outward, and the first wars before space is widely settled.
+- The sim then runs for a fixed **`history_years`** (tunable; ~400 to
+  start). How far settlement has spread when it stops varies by seed.
+- Prehistory runs the **same sim rules as play** (§5), at a coarser time
+  step (§5.1), so the galaxy the player enters is a state the live sim can
+  sustain — not a hand-balanced snapshot.
+- What the player inherits is all output: factions and their family tree,
+  borders, populations, facilities, markets, tech levels, known lanes,
+  ship designs, remnants (ruins, wrecks, abandoned colonies), and the
+  history record itself (§5.7).
+- **The player starts at that fixed present day and picks where.** A
+  start screen shows the map and its history (shared with the legends
+  tool, §9), so choosing a starting system is choosing a place with a
+  past.
+- Target: prehistory finishes in about a minute on a desktop (tunable).
 
 ## 5. Simulation
 
@@ -132,7 +160,22 @@ Rules:
   6. Events & storylets
   7. News generation
 - **Multithreaded** via rayon within phases (read previous state, write
-  phase outputs, merge). History is not deterministic, and that's fine.
+  phase outputs, merge).
+- **Deterministic, for the whole game:** same seed + same player actions →
+  same history. Rules that keep it so:
+  - Randomness comes from RNG streams derived from (seed, purpose, time,
+    entity), never from a shared generator or thread order.
+  - Parallel phases produce per-item results and merge them in a fixed
+    order; no order-dependent reductions.
+  - The client–sim boundary is an **input log**. Local flight physics
+    needn't be deterministic; what gets written back to the sim ("flagship
+    destroyed on day N", "cargo sold") is recorded as input. Saves are
+    snapshots for speed, but seed + log reproduces them.
+  - Linux first. Same-seed results across platforms will eventually need a
+    portable math library for `powf`/`exp`/etc.
+- **Time steps have a size.** Phases take a `dt`; play ticks daily,
+  prehistory and fast-forward use coarser steps (monthly or longer) — the
+  same "detail depends on time rate" idea as §3.
 - Headless runs ("simulate 500 years, dump history") are a first-class
   tool for balancing and testing.
 
@@ -175,7 +218,16 @@ Rules:
 
 ### 5.5 Factions
 
-- Procedural, can form/split/merge/die.
+- Procedural, can form/split/merge/die. The only factions placed by hand
+  are the cradle's founding nations (§4.2); every other faction arises in
+  the sim.
+- **Secession is how new factions are born.** Holding territory costs
+  more the further it is from the capital; shortages and overextension
+  erode stability; unstable regions break away. This loop is what stops
+  history converging on one empire or an empty galaxy.
+- **Factions have a family tree.** A breakaway inherits language, economic
+  model, ideology and tech from its parent, then drifts. Names follow the
+  lineage (the Free Ports of Kessa broke from the Union of Kessa).
 - Have territory, fleets, economy, tech, relations, and goals.
 - Player can join a faction and hold **military rank**.
 - **Reputation** per faction; **bounties** issued by faction law.
@@ -191,6 +243,49 @@ Rules:
 - Information is something you can act on — and, eventually, trade in.
 - The news feed is the main window into the off-screen simulation and
   should be diegetic (broadcasts/papers received at stations or on comms).
+- **The past is reported with bias too.** Prehistory reaches the player
+  through each faction's version of it: one faction's hero of the Sereth
+  bridge is another's war criminal.
+
+### 5.7 History engine
+
+What prehistory (§4.2) needs from the sim — and what keeps running during
+play:
+
+- **Population** grows when fed and shrinks under shortfall.
+- **Colonization:** factions expand along known lanes toward resources and
+  room.
+- **Construction:** facilities are built where prices and shortfalls call
+  for them.
+- **Politics:** stability, overextension and secession (§5.5); relations,
+  war and conquest, with battles resolved abstractly (§5.3).
+- **Outside shocks** at purely random rates — plagues that spread along
+  trade flows, resource discoveries, lanes collapsing or opening. They use
+  the storylet plumbing (§6) and act *through* the sim (a plague hits busy
+  trade hubs hardest), never as one-off stat changes. No director: the
+  internal loops have to keep history moving on their own.
+- **Tech** per faction, inherited on secession, spread by trade and
+  contact — and **losable**. Collapse brings dark ages, so ruins of an
+  earlier era can hold better tech than anyone has now. Modules carry a
+  tech requirement.
+- **Lane discovery:** each faction knows its own set of lanes. The player
+  starts with their faction's charts; charts are information that can be
+  bought and traded (§5.6). A discovered lane can reshape a region.
+- **Ship designs evolve.** Factions generate designs from the section and
+  module kit (§7.4) within their tech and economy, in lineages; old hull
+  classes stay in service. Stock ships become examples, not the catalog.
+- **Remnants** persist where history left them: ruins of collapsed
+  colonies, wreck fields at battle sites, abandoned stations, fallen
+  capitals — each tagged with its origin event, era, faction and tech.
+  They survive ownership changes and are salvage, exploration and
+  storylet hooks.
+- **The history record** is rich and queryable: every founding,
+  secession, war, battle, collapse, famine and shock, linked to the
+  systems, factions, ships and historical figures involved.
+
+Rough build order, each step adding to the world on its own: factions and
+politics → remnants → tech → lane discovery → ship designs (which needs
+tech).
 
 ## 6. Events
 
@@ -286,8 +381,9 @@ rather than space bugs.
 ### 7.7 Death
 
 - On ship destruction, **restore the last checkpoint** (last dock /
-  autosave). Because history isn't deterministic, the galaxy may play out
-  differently after a restore — the future isn't fixed.
+  autosave). Because the game is deterministic, the same future plays out
+  again unless you act differently — what you learned before dying is
+  yours to use.
 
 ## 8. Art direction & audio
 
@@ -321,8 +417,12 @@ retrox/
     gen/      # procedural generation (galaxy, systems, factions, ship visuals)
     content/  # storylets, goods, module & hull definitions (data-only Rust)
     client/   # rendering, input, audio, local physics, UI
-    tools/    # headless runner, history dumps, balancing
+    tools/    # headless runner, history dumps, legends, balancing
 ```
+
+- **tools** gains `retrox legends` (browse and query the history record)
+  and a time-lapse map (borders every N years) for tuning the history
+  engine. The in-game start screen (§4.2) reuses the legends views.
 
 - **sim:** no engine dependencies. Typed arenas, explicit phases, rayon.
   Serializable with serde — a save is (mostly) one serialized struct.
@@ -356,6 +456,9 @@ retrox/
    ship combat.
 9. **Storylets & aliens.**
 10. **Art pass:** cockpit, galaxy chart instrument, post-processing, audio.
+11. **History engine:** cradle generation, the §5.7 rules, `dt`-sized
+    steps, determinism rules, legends tool and time-lapse map, start
+    screen. Order relative to the others is flexible.
 
 ## 11. Open questions
 
@@ -366,3 +469,8 @@ retrox/
 - Faction count and size at generation; agent budget in the bubble.
 - Gamepad support / control scheme.
 - Does the player's character age over a ~30-year save? (Probably ignored.)
+- History tuning: default `history_years`, prehistory step size, and how
+  strong the secession loop and shock rates should be.
+- How tech is lost and recovered in detail; how charts are traded.
+- How historical figures are generated (lifespans, which events earn a
+  name).
