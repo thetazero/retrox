@@ -7,6 +7,7 @@
 pub mod arena;
 pub mod bodies;
 pub mod economy;
+pub mod fields;
 pub mod haul;
 pub mod history;
 pub mod phases;
@@ -18,6 +19,7 @@ pub mod time;
 
 pub use arena::{Arena, Id};
 pub use bodies::{Body, BodyId, BodyKind, Orbit, Orbiting, PlanetClass, Region, RegionId};
+pub use fields::{AsteroidField, FieldId};
 pub use history::{History, HistoryEvent, HistoryKind};
 pub use settlement::{Settlement, SettlementId, Site};
 pub use state::{
