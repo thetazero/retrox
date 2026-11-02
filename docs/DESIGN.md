@@ -521,6 +521,31 @@ Decided while hand-building every hull (PR #86):
   racer cream and sky blue.
 - Stencilled seven-segment hull numbers, and weathering on enamel paint.
 
+### 8.2 Galaxy map instrument
+
+Decided while building the star chart (issue #71):
+
+- The map is seen **through a round chart glass** set in an enamelled
+  console, not as a full-screen canvas: the console frame is what makes it
+  read as a physical instrument, and the round glass keeps the eye on the
+  focus.
+- Every view control has a **physical scale**: a bearing ring graduated
+  in degrees turns as the view orbits and is read against a fixed red
+  index (galactic bearing, 0° along +x); elevation and range have their own
+  arc scales with amber pointers; range is logarithmic.
+- **Drum counters** (cream on black, rolling over at each whole number)
+  repeat the chart drive's settings and the focus position. Mechanical
+  readouts belong to instruments that are set by hand; live ship data stays
+  on teal VFD.
+- The galactic plane carries **range rings and bearing spokes** round the
+  focus in faint phosphor teal, replacing the square grid.
+- Moving the chart's focus (double-click, CENTRE) **slews** it with
+  easing, as a motor-driven chart would, and a SLEW lamp lights while it
+  runs.
+- The course panel shows a **jump interlock** of lamps (course set, well
+  clear, jump ready), so why a jump is unavailable reads at a glance.
+- Systems keep their faction colours: the chart is information first.
+
 ## 9. Technical architecture
 
 Pure Rust, Linux first.

@@ -50,6 +50,12 @@ fn main() {
     let fire = std::env::args().any(|a| a == "--fire");
     // `--map`: start with the galaxy map open.
     let map = std::env::args().any(|a| a == "--map");
+    // `--course <jumps>`: plot a course to the nearest system at least that
+    // many jumps away (for checking the map's course display).
+    let course = std::env::args()
+        .skip_while(|a| a != "--course")
+        .nth(1)
+        .and_then(|s| s.parse::<usize>().ok());
     // `--ship <hull>`: start in that stock ship instead (for testing).
     let ship = std::env::args().skip_while(|a| a != "--ship").nth(1);
     // `--screenshot <path.ppm>`: save the 90th frame and quit (for checking
@@ -77,6 +83,7 @@ fn main() {
         field,
         fire,
         map,
+        course,
         ship,
         screenshot,
         ship_view,
@@ -101,6 +108,8 @@ struct App {
     fire: bool,
     /// Start with the galaxy map open.
     map: bool,
+    /// Plot a course this many jumps long.
+    course: Option<usize>,
     ship: Option<String>,
     screenshot: Option<std::path::PathBuf>,
     ship_view: Option<f64>,
@@ -192,6 +201,22 @@ impl ApplicationHandler for App {
         }
 
         world.map_open = self.map;
+        if let Some(jumps) = self.course {
+            let here = world.galaxy.systems[world.system].position;
+            let mut systems: Vec<_> = world
+                .galaxy
+                .systems
+                .iter()
+                .map(|(id, s)| (id, s.position))
+                .collect();
+            systems.sort_by(|a, b| here.distance(a.1).total_cmp(&here.distance(b.1)));
+            let dest = systems
+                .into_iter()
+                .find(|&(id, _)| world.route(id).is_some_and(|r| r.len() > jumps));
+            if let Some((dest, _)) = dest {
+                world.act(Action::PlotCourse(Some(dest)));
+            }
+        }
 
         let meshes = Meshes {
             sphere: renderer.add_mesh(&meshes::icosphere(5)),
