@@ -271,6 +271,8 @@ pub struct World {
     /// position: muzzle to where it stops.
     pub beam: Option<(DVec3, DVec3)>,
     pub message: Option<(String, f32)>,
+    /// How hard the ship hit something this frame, m/s into the surface.
+    pub bump: f64,
     /// The player's money and ships.
     pub player: Player,
     /// Which docked screen is showing.
@@ -380,6 +382,7 @@ impl World {
             mining: Mining::default(),
             beam: None,
             message: None,
+            bump: 0.0,
             player,
             screen: Screen::Hub,
             inspect: None,
@@ -873,6 +876,7 @@ impl World {
     }
 
     pub fn update(&mut self, dt: f64, controls: Controls) {
+        self.bump = 0.0;
         if let Some((_, t)) = &mut self.message {
             *t -= dt as f32;
             if *t <= 0.0 {

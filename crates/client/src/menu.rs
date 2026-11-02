@@ -288,7 +288,7 @@ impl Menu {
                 ..Item::page("Load", &load_note, Page::Load)
             },
             Item::page("Handbook", "how to fly and get started", Page::Handbook),
-            Item::page("Settings", "controls and display", Page::Settings),
+            Item::page("Settings", "controls, display, sound", Page::Settings),
             Item::action("Quit", "back to the desktop", MenuAction::Quit),
         ]
     }
@@ -316,7 +316,7 @@ impl Menu {
                 "controls and how to get started",
                 Page::Handbook,
             ),
-            Item::page("Settings", "controls and display", Page::Settings),
+            Item::page("Settings", "controls, display, sound", Page::Settings),
             Item::page("Quit to title", "leave this game", Page::ConfirmQuit),
         ]
     }
@@ -666,8 +666,14 @@ fn settings_page(
         let mut changed = false;
         section(ui, "Controls");
         setting_row(ui, "Mouse sensitivity", |ui| {
-            let (moved, _) =
-                vfd_slider(ui, &mut settings.mouse_sensitivity, SENSITIVITY_RANGE, 0.05);
+            let (moved, _) = vfd_slider(
+                ui,
+                &mut settings.mouse_sensitivity,
+                SENSITIVITY_RANGE,
+                0.05,
+                times,
+                Some(1.0),
+            );
             changed |= moved;
         });
         setting_row(ui, "Invert pitch", |ui| {
@@ -696,11 +702,27 @@ fn settings_page(
         setting_row(ui, "Interface size", |ui| {
             let mut scale = f64::from(settings.ui_scale);
             let range = f64::from(*UI_SCALE_RANGE.start())..=f64::from(*UI_SCALE_RANGE.end());
-            let (_, released) = vfd_slider(ui, &mut scale, range, 0.05);
+            let (_, released) = vfd_slider(ui, &mut scale, range, 0.05, times, Some(1.0));
             settings.ui_scale = scale as f32;
             // Resize once the slider is let go, so it stays under the mouse.
             changed |= released;
         });
+        ui.add_space(10.0);
+        section(ui, "Sound");
+        for (label, volume) in [
+            ("Volume", &mut settings.master_volume),
+            ("Music", &mut settings.music_volume),
+            ("Effects", &mut settings.effects_volume),
+        ] {
+            setting_row(ui, label, |ui| {
+                let mut v = f64::from(*volume);
+                // Heard while dragging (the game reads the setting every
+                // frame); written to disk when let go.
+                let (_, released) = vfd_slider(ui, &mut v, 0.0..=1.0, 0.05, percent, None);
+                *volume = v as f32;
+                changed |= released;
+            });
+        }
         ui.add_space(12.0);
         ui.horizontal(|ui| {
             if secondary(ui, "Defaults").clicked() {
@@ -728,17 +750,28 @@ fn setting_row(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui)) 
     });
 }
 
-/// A segmented VFD bar to drag, with its value beside it. Returns whether
-/// the value moved, and whether it was just let go (or clicked).
+fn times(v: f64) -> String {
+    format!("{v:.2}×")
+}
+
+fn percent(v: f64) -> String {
+    format!("{:>4.0}%", v * 100.0)
+}
+
+/// A segmented VFD bar to drag, with its value beside it (as `readout`
+/// writes it) and a tick at `mark`. Returns whether the value moved, and
+/// whether it was just let go (or clicked).
 fn vfd_slider(
     ui: &mut egui::Ui,
     value: &mut f64,
     range: std::ops::RangeInclusive<f64>,
     step: f64,
+    readout: fn(f64) -> String,
+    mark: Option<f64>,
 ) -> (bool, bool) {
     let (lo, hi) = (*range.start(), *range.end());
     // Laid out right to left: the readout, then the bar.
-    glow_label(ui, &format!("{:.2}×", *value), mono(15.0), VFD);
+    glow_label(ui, &readout(*value), mono(15.0), VFD);
     ui.add_space(6.0);
     let n = 30;
     let width = 240.0;
@@ -763,7 +796,7 @@ fn vfd_slider(
             Pos2::new(bar.left() + i as f32 * (seg + gap), bar.top()),
             Vec2::new(seg, bar.height()),
         );
-        if i < lit.max(1) {
+        if i < lit.max(usize::from(mark.is_some())) {
             painter.rect_filled(r.expand(1.0), 0.0, VFD.gamma_multiply(0.18));
             painter.rect_filled(r, 0.0, VFD);
         } else {
@@ -771,14 +804,16 @@ fn vfd_slider(
         }
     }
     // Where 1.0× (as tuned) sits.
-    let one = rect.left() + ((1.0 - lo) / (hi - lo)) as f32 * width;
-    painter.line_segment(
-        [
-            Pos2::new(one, bar.bottom() + 2.0),
-            Pos2::new(one, rect.bottom()),
-        ],
-        Stroke::new(1.0, if hot { CREAM } else { RULE }),
-    );
+    if let Some(mark) = mark {
+        let at = rect.left() + ((mark - lo) / (hi - lo)) as f32 * width;
+        painter.line_segment(
+            [
+                Pos2::new(at, bar.bottom() + 2.0),
+                Pos2::new(at, rect.bottom()),
+            ],
+            Stroke::new(1.0, if hot { CREAM } else { RULE }),
+        );
+    }
     let response = response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
     let released = response.drag_stopped() || response.clicked();
     (*value != before, released)

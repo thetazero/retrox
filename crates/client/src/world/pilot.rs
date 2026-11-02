@@ -233,6 +233,7 @@ impl World {
                 self.ship.rel += n * (radius - len);
                 let into = self.ship.vel.dot(n);
                 if into < 0.0 {
+                    self.bump = self.bump.max(-into);
                     self.ship.vel -= n * into * 1.3;
                 }
             }
