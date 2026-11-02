@@ -32,6 +32,15 @@ fn starts_landed_at_a_capital_city() {
     assert!(world.galaxy.factions.values().any(|f| f.capital == city));
 }
 
+/// Issue #165: mining is a first way in, so a fresh game starts where
+/// there's a field to mine. Seed 8's biggest capital has none.
+#[test]
+fn starts_in_a_system_with_an_asteroid_field() {
+    let world = World::new(8);
+    assert!(!world.view.fields.is_empty());
+    assert!(matches!(world.mining_spot(), Some(MiningSpot::Here(_))));
+}
+
 #[test]
 fn can_leave_a_planets_well_after_launch() {
     let mut world = World::new(1);

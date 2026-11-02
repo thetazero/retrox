@@ -999,6 +999,15 @@ somewhere, live somewhere, and fly for real near the player.
   going (§7.8).
 - Fields remember: broken and worked rocks stay that way for ~120 galaxy
   days, then the field is whole again.
+- **A first mine within reach** (#165): about a quarter of galaxies
+  put their biggest capital in a system with no belt, so a new pilot
+  told to go mining had nowhere to go. A fresh game now starts at the
+  biggest faction capital city *whose system has an asteroid field*
+  (falling back to the biggest capital only if none has one), so a field
+  is a fast travel from the first launch. Wherever the player is, the
+  hints name where to mine: the nearest field in this system, or, from a
+  system with none, the nearest system with fields along the hyperlanes
+  (within 12 jumps), as public knowledge like shipyards (§7.4.1).
 
 ### 7.3.1 Gas skimming (#68)
 
@@ -1406,6 +1415,18 @@ player.
   §7.8.1). On the dispatch board the hint names the nearest job the
   player can take (#129), the quickest to pay. Delivery says what came back in full: the
   fee and the deposit, so the jump in the purse adds up.
+- **Hints link to what they name** (#165): a place in a hint is an
+  amber, underlined link (`{Belt B}` in the hint's text). Clicking a
+  field or station picks it as the target, as its NAVIGATION row would
+  (the row scrolls into view); clicking a system plots a course there.
+  The mining hint names the nearest field this way (*Or LAUNCH and go
+  mining at Belt B, the nearest asteroid field*), or from a system
+  without fields the nearest system that has them, then follows the
+  plotted course (*Off to mine in Aliondgae. Clear to jump…*). Keys are
+  still keycaps; a link is for a name the player would otherwise have
+  to hunt for in a long list.
+- **Hints name the way out by its button**: docked at a station it is
+  UNDOCK, landed it is LAUNCH.
 - **Edge arrows** (#117): a target off screen gets an arrow at the edge
   of the view (amber for the target, red for hostiles) pointing the short
   way round to turn toward it, whether it is beside, behind or below the
@@ -1467,6 +1488,11 @@ Decided while bringing every screen into one style (issue #77):
   station under its body drops the body's name too (*Highport*), the
   bracket says whose it is. Names that still don't fit are cut to the
   pixel room left by the range and any tag, never to a fixed count.
+  A list longer than the panel shows a solid scroll bar at all times
+  (#165: with a dozen moons the FIELDS block sat out of sight with
+  nothing to say it was there), a row picked from elsewhere ([T], a
+  hint's link) scrolls into view, and the panel is measured afresh in
+  each new system rather than kept at the last system's height.
 - **Text over the scene gets a backing** (#124, #156): blocks of
   free-floating text (the corner key strip, the readout on the rock under
   the reticle) sit on a dark plate; single labels on markers and rocks sit
@@ -1576,6 +1602,11 @@ Decided while making mining in a belt look finished (issue #156):
   flight away; up to 14, nearest first, never overlapping. The rock
   under the reticle has its readout instead, and worked-out rocks go
   untagged.
+- **Quarries are tagged as landmarks** (#165): *ORE C · QUARRY*, out to
+  the prospector's 3 km rather than 1.5 km, and on top of the 14
+  nearest, so a miner can find one. Every field has quarries (about one
+  rock in ten is over 60 m), but rarely within 1.5 km of where fast
+  travel stops, which read as "this belt has none".
 - **Loose ore** is a small diamond: filled while the tractor has it,
   hollow out of its reach, dim cream when the hold is full. The nearest
   piece out of reach says how far it is (*LOOSE ORE · 196 m*), or *HOLD

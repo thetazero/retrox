@@ -8,12 +8,14 @@ use super::{
     section, title_band,
 };
 use crate::guide::{self, KeyRow, Seg};
-use crate::world::{Mode, World};
+use crate::world::{Action, Mode, World};
 
 const NOTES_W: f32 = 380.0;
 
-/// Text with `[K]` keys drawn as keycaps, wrapping at the width given.
-pub(crate) fn rich_hint(ui: &mut egui::Ui, text: &str, color: Color32) {
+/// Text with `[K]` keys drawn as keycaps and `{Place}` names as links,
+/// wrapping at the width given. Returns the link clicked, if any.
+pub(crate) fn rich_hint(ui: &mut egui::Ui, text: &str, color: Color32) -> Option<String> {
+    let mut clicked = None;
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = Vec2::new(0.0, 3.0);
         for seg in guide::segments(text) {
@@ -22,6 +24,23 @@ pub(crate) fn rich_hint(ui: &mut egui::Ui, text: &str, color: Color32) {
                     ui.add_space(1.0);
                     keycap(ui, k);
                     ui.add_space(1.0);
+                }
+                // Amber like a picked target, underlined like a link.
+                Seg::Place(name) => {
+                    let link = ui
+                        .add(
+                            egui::Label::new(
+                                RichText::new(name)
+                                    .font(mono(13.0))
+                                    .color(AMBER)
+                                    .underline(),
+                            )
+                            .sense(Sense::click()),
+                        )
+                        .on_hover_cursor(egui::CursorIcon::PointingHand);
+                    if link.clicked() {
+                        clicked = Some(name.to_owned());
+                    }
                 }
                 // Word by word, so the line can wrap between them.
                 Seg::Text(t) => {
@@ -37,11 +56,29 @@ pub(crate) fn rich_hint(ui: &mut egui::Ui, text: &str, color: Color32) {
             }
         }
     });
+    clicked
+}
+
+/// What a hint's link names (#165): a place in this system picks it as
+/// the target, as its NAVIGATION row would; a system plots a course.
+fn follow_link(w: &World, name: &str) -> Option<Action> {
+    if let Some(place) = w
+        .nav_places()
+        .into_iter()
+        .find(|&p| w.short_name(p) == name)
+    {
+        return Some(Action::Target(place));
+    }
+    w.galaxy
+        .systems
+        .iter()
+        .find(|(_, s)| s.name == name)
+        .map(|(id, _)| Action::PlotCourse(Some(id)))
 }
 
 /// The first-steps notes: a lamp for each first, and a hint for what to
 /// do next. Gone once every lamp is lit.
-pub fn notes(ctx: &egui::Context, w: &World) {
+pub fn notes(ctx: &egui::Context, w: &World, actions: &mut Vec<Action>) {
     let progress = &w.player.progress;
     if progress.complete() {
         return;
@@ -96,7 +133,9 @@ pub fn notes(ctx: &egui::Context, w: &World) {
                     })
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
-                        rich_hint(ui, &text, CREAM);
+                        if let Some(link) = rich_hint(ui, &text, CREAM) {
+                            actions.extend(follow_link(w, &link));
+                        }
                     });
                 let r = frame.response.rect;
                 ui.painter().rect_filled(

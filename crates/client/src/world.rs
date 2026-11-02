@@ -72,6 +72,7 @@ pub const LANDING_RADII: f64 = 2.0;
 /// Fast travel to a planet with a city on it stops this many radii out:
 /// low enough to land straight away.
 pub const APPROACH_RADII: f64 = 1.6;
+pub use field::MiningSpot;
 pub use pilot::{COMBAT_SPEED, STRAFE_SPEED, assist, handling, look_rotation, steer};
 pub use yards::{Nearby, Service};
 
@@ -432,20 +433,31 @@ pub struct Waiting {
 impl World {
     pub fn new(seed: u64) -> Self {
         let galaxy = generate(seed, &GalaxyConfig::default());
-        // Start landed at the biggest faction capital that's a city.
+        // Start landed at the biggest faction capital that's a city, in a
+        // system with an asteroid field to mine (issue #165): mining is a
+        // first way in, so it has to be there, a fast travel away. Only if
+        // no capital has one does the biggest capital do.
+        let has_field = |system| {
+            galaxy
+                .fields
+                .iter()
+                .any(|(_, f)| galaxy.bodies[f.belt].system == system)
+        };
         let (city, body) = galaxy
             .factions
             .values()
             .filter_map(|f| {
                 let s = galaxy.settlements.get(f.capital)?;
                 match s.site {
-                    Site::Region(r) => {
-                        Some((f.capital, galaxy.regions[r].body, s.economy.population))
-                    }
+                    Site::Region(r) => Some((
+                        f.capital,
+                        galaxy.regions[r].body,
+                        (has_field(s.system), s.economy.population),
+                    )),
                     _ => None,
                 }
             })
-            .max_by(|a, b| a.2.total_cmp(&b.2))
+            .max_by(|a, b| a.2.0.cmp(&b.2.0).then(a.2.1.total_cmp(&b.2.1)))
             .map(|(s, b, _)| (s, b))
             .expect("some faction capital is a city");
         let system = galaxy.settlements[city].system;
