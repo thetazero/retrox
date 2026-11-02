@@ -584,6 +584,32 @@ Decided while building the star chart (issue #71):
   clear, jump ready), so why a jump is unavailable reads at a glance.
 - Systems keep their faction colours: the chart is information first.
 
+### 8.3 Help for new pilots
+
+Decided while making the game learnable (issue #79). Pillar 5 applies to
+teaching too: no scripted tutorial campaign, nothing that waits on the
+player.
+
+- **First-steps notes**: a HUD panel of indicator lamps, one per first
+  (take on work, launch, pick a target, fast travel, jump a hyperlane,
+  dock or land, get paid), lit teal as the player does each one in any
+  order, the next one amber. Under the lamps, **one hint** read off the
+  situation every frame (where you are, what you carry, your contract's
+  destination, what you're aimed at), with keys drawn as keycaps. The
+  panel goes for good once every lamp is lit; a setting turns it off.
+  The firsts are saved with the player.
+- **Controls card** on H (or F1): every key in three columns (flight,
+  travel, work & view) over the view, without pausing. The corner of the
+  HUD shows only the keys for help and the menu, as keycaps, not a
+  paragraph of plain text.
+- **Pilot's handbook**: a page on the title screen and in the pause menu,
+  in chapters (first steps, controls, making a living). It is the one
+  place that explains the game in prose. The handbook and the controls
+  card draw from the same key tables, so they can't disagree.
+- The suggested first run is a freight contract: it pays for sure and
+  walks the player through launching, the galaxy map, a jump, fast travel
+  and docking. Mining and trade are offered as the other ways in.
+
 ## 9. Technical architecture
 
 Pure Rust, Linux first.

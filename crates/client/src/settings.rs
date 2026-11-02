@@ -17,6 +17,8 @@ pub struct Settings {
     pub fullscreen: bool,
     /// Size of the interface, 1.0 as designed.
     pub ui_scale: f32,
+    /// Show the first-steps notes until they're all done.
+    pub first_steps: bool,
 }
 
 impl Default for Settings {
@@ -26,6 +28,7 @@ impl Default for Settings {
             invert_pitch: false,
             fullscreen: false,
             ui_scale: 1.0,
+            first_steps: true,
         }
     }
 }
@@ -95,6 +98,7 @@ mod tests {
             invert_pitch: true,
             fullscreen: true,
             ui_scale: 1.25,
+            first_steps: false,
         };
         changed.save(&path).unwrap();
         assert_eq!(Settings::load(&path), changed);

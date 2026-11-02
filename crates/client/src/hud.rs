@@ -10,6 +10,7 @@ use egui::{
 use glam::{DVec3, Mat4, Vec4};
 use retrox_sim::{BodyKind, EconomyModel};
 
+pub(crate) mod guide;
 mod map;
 mod mining;
 
@@ -128,6 +129,10 @@ pub struct HudInput<'a> {
     pub camera: DVec3,
     pub stick: glam::DVec2,
     pub captured: bool,
+    /// The controls card is up (H).
+    pub controls_card: bool,
+    /// Show the first-steps notes (a setting).
+    pub notes: bool,
 }
 
 pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
@@ -551,19 +556,14 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
         _ => {}
     }
 
-    // Controls help.
-    egui::Area::new(egui::Id::unique("help"))
-        .anchor(Align2::LEFT_BOTTOM, [18.0, -14.0])
-        .show(ctx, |ui| {
-            let text = if h.captured {
-                "mouse steer · W/S throttle · X stop · A/D strafe · SPACE/CTRL lift · Q/E roll · SHIFT boost\n\
-                 J fast travel · T next target · M galaxy map · V camera · Z flight assist · TAB free mouse\n\
-                 LMB or R mining laser · G prospect · ESC menu"
-            } else {
-                "TAB or click the view to fly with the mouse · arrow keys also steer · M galaxy map · ESC menu"
-            };
-            ui.label(RichText::new(text).size(11.0).color(CREAM_DIM));
-        });
+    // Help for new pilots.
+    if h.notes {
+        guide::notes(ctx, w);
+    }
+    guide::key_strip(ctx, w, h.captured);
+    if h.controls_card {
+        guide::controls_card(ctx);
+    }
 
     actions
 }

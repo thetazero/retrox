@@ -8,12 +8,14 @@
 //! `--seed N`, `--station`, `--undocked`, `--map`, `--course <jumps>`,
 //! `--ship <hull>`,
 //! `--ship-view <deg>`, `--screenshot <path.ppm>`. `--menu <page>` opens a
-//! menu page instead (`title`, `new`, `load`, `settings`, or `pause` or `quit`
+//! menu page instead (`title`, `new`, `load`, `settings`, `handbook[:chapter]`, or `pause` or `quit`
 //! over a fresh game), for screenshots. `--keys` plays a key script
 //! (see [`Flags::keys`]).
 
 mod contracts;
 mod contracts_ui;
+mod guide;
+mod handbook;
 mod hangar;
 mod hangar_ui;
 mod hud;
@@ -291,6 +293,8 @@ struct Running {
     fire: bool,
     stick: DVec2,
     captured: bool,
+    /// The controls card (H) is up.
+    controls_card: bool,
     last_frame: Instant,
     start: Instant,
     frames: u32,
@@ -378,6 +382,7 @@ impl ApplicationHandler for App {
             fire: self.flags.fire,
             stick: DVec2::ZERO,
             captured: false,
+            controls_card: false,
             last_frame: Instant::now(),
             start: Instant::now(),
             frames: 0,
@@ -415,6 +420,12 @@ impl ApplicationHandler for App {
             Some("new") => Some(Page::NewGame),
             Some("load") => Some(Page::Load),
             Some("settings") => Some(Page::Settings),
+            Some(m) if m.starts_with("handbook") => {
+                // `handbook:N` opens chapter N.
+                let chapter = m.split(':').nth(1).and_then(|n| n.parse().ok());
+                r.menu.set_chapter(chapter.unwrap_or(0));
+                Some(Page::Handbook)
+            }
             Some("pause") => {
                 r.paused = true;
                 None
@@ -797,6 +808,10 @@ impl Running {
                     world.ship.throttle = 0.0;
                     None
                 }
+                KeyCode::KeyH | KeyCode::F1 => {
+                    self.controls_card = !self.controls_card;
+                    None
+                }
                 KeyCode::Tab => {
                     capture = Some(!capture.unwrap_or(self.captured));
                     None
@@ -941,6 +956,8 @@ impl Running {
                             camera: cam_pos,
                             stick: self.stick,
                             captured: self.captured,
+                            controls_card: self.controls_card,
+                            notes: self.settings.first_steps,
                         },
                     );
                 }
@@ -1017,6 +1034,8 @@ impl Running {
                         'j' => Some(KeyCode::KeyJ),
                         't' => Some(KeyCode::KeyT),
                         'm' => Some(KeyCode::KeyM),
+                        'h' => Some(KeyCode::KeyH),
+                        'g' => Some(KeyCode::KeyG),
                         _ => None,
                     };
                     self.just_pressed.extend(code);
