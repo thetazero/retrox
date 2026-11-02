@@ -59,7 +59,7 @@ pub const INTERCEPTOR_BODY: Section = Section {
         slot(Rcs, S, [0.0, 0.0, 0.0]),
         slot(Power, S, [0.0, 0.0, -1.5]),
         slot(Shield, S, [0.0, 0.4, 0.0]),
-        slot(Radar, S, [0.0, 0.6, 2.5]),
+        slot(Radar, S, [0.0, 0.0, 5.6]),
         slot(Radiator, S, [-1.2, 0.0, -2.5]),
         slot(Radiator, S, [1.2, 0.0, -2.5]),
         slot(JumpDrive, S, [0.0, 0.0, 0.0]),

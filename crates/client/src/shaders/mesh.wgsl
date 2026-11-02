@@ -118,6 +118,9 @@ const WINDOWS: u32 = 5u;
 const METAL: u32 = 6u;
 const BEACON: u32 = 7u;
 const LAMP: u32 = 8u;
+const OCHRE: u32 = 9u;
+const HAZARD: u32 = 10u;
+const GUNMETAL: u32 = 11u;
 
 // Sovietwave ambient: a cool teal sky above, a dusky violet below.
 fn ambient_light(n: vec3<f32>) -> vec3<f32> {
@@ -185,9 +188,34 @@ fn built(i: VOut, n: vec3<f32>, mu: f32, fw: vec3<f32>) -> vec3<f32> {
     } else if (paint == LAMP) {
         base = vec3<f32>(0.9, 0.85, 0.75);
         emissive = vec3<f32>(1.0, 0.86, 0.62) * 5.0;
+    } else if (paint == OCHRE) {
+        // Worn tractor mustard.
+        base = vec3<f32>(0.44, 0.32, 0.12) * i.shade;
+        spec = 0.08;
+    } else if (paint == HAZARD) {
+        // Diagonal stripes, a fixed width in object units.
+        let stripe = step(0.5, fract((i.obj.x + i.obj.y + i.obj.z) * 1.6));
+        base = mix(vec3<f32>(0.035, 0.03, 0.03), vec3<f32>(0.75, 0.55, 0.08), stripe) * i.shade;
+        spec = 0.1;
+    } else if (paint == GUNMETAL) {
+        // Deep teal-grey military enamel.
+        base = vec3<f32>(0.15, 0.19, 0.2) * i.shade;
+        spec = 0.18;
+        gloss = 24.0;
     }
-    if (scale > 0.0 && (paint == HULL || paint == RED)) {
+    let enamel = paint == HULL || paint == RED || paint == OCHRE || paint == GUNMETAL;
+    if (scale > 0.0 && enamel) {
         base = base * (1.0 - 0.3 * seams(p, fw));
+        // Wear, faded out before it aliases: grime streaked along the
+        // ship's length, faded and chipped paint.
+        let near = 1.0 - smoothstep(0.15, 0.6, max(fw.x, max(fw.y, fw.z)));
+        let streak = fbm(p * vec3<f32>(2.5, 2.5, 0.35) + vec3<f32>(11.0));
+        let grime = smoothstep(0.38, 0.72, streak) * near;
+        let blotch = fbm(p * 0.8 + vec3<f32>(5.0));
+        let chips = step(0.86, noise(p * 14.0)) * smoothstep(0.55, 0.7, blotch) * near;
+        let faded = mix(base, vec3<f32>(dot(base, vec3<f32>(0.33))), 0.4 * blotch) * (0.92 + 0.16 * blotch);
+        base = mix(faded * (1.0 - 0.45 * grime), vec3<f32>(0.12, 0.11, 0.1), chips * 0.7);
+        spec = spec * (1.0 - 0.5 * grime);
     }
 
     let light_color = mix(vec3<f32>(1.0), g.star_color.rgb, 0.4);

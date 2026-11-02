@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::f32::consts::TAU;
 
 use bytemuck::{Pod, Zeroable};
-use glam::{Mat4, Quat, Vec3};
+use glam::{Mat4, Quat, Vec2, Vec3};
 use retrox_gen::Rng;
 use retrox_sim::economy::FacilityKind;
 
@@ -56,6 +56,12 @@ pub enum Paint {
     Beacon = 7,
     /// A steady work lamp.
     Lamp = 8,
+    /// Mustard-ochre work enamel.
+    Ochre = 9,
+    /// Black-and-yellow hazard stripes.
+    Hazard = 10,
+    /// Deep teal-grey military enamel.
+    Gunmetal = 11,
 }
 
 #[derive(Clone, Default)]
@@ -312,7 +318,7 @@ pub fn torus(minor: f32, segments: u32, sides: u32) -> Mesh {
     m
 }
 
-fn tri(m: &mut Mesh, a: Vec3, b: Vec3, c: Vec3) {
+pub(crate) fn tri(m: &mut Mesh, a: Vec3, b: Vec3, c: Vec3) {
     let n = (b - a).cross(c - a).normalize_or_zero();
     for p in [a, b, c] {
         m.indices.push(m.vertices.len() as u32);
@@ -325,19 +331,19 @@ fn tri(m: &mut Mesh, a: Vec3, b: Vec3, c: Vec3) {
     }
 }
 
-fn quad(m: &mut Mesh, a: Vec3, b: Vec3, c: Vec3, d: Vec3) {
+pub(crate) fn quad(m: &mut Mesh, a: Vec3, b: Vec3, c: Vec3, d: Vec3) {
     tri(m, a, b, c);
     tri(m, a, c, d);
 }
 
 /// Transform for a cylinder from `from` to `to` with the given radius.
-fn strut(from: Vec3, to: Vec3, radius: f32) -> Mat4 {
+pub(crate) fn strut(from: Vec3, to: Vec3, radius: f32) -> Mat4 {
     let dir = to - from;
     let rot = Quat::from_rotation_arc(Vec3::Y, dir.normalize_or(Vec3::Y));
     Mat4::from_scale_rotation_translation(Vec3::new(radius, dir.length(), radius), rot, from)
 }
 
-fn boxed(center: Vec3, size: Vec3) -> Mat4 {
+pub(crate) fn boxed(center: Vec3, size: Vec3) -> Mat4 {
     Mat4::from_scale_rotation_translation(size, Quat::IDENTITY, center)
 }
 
@@ -395,7 +401,7 @@ pub fn lathe(profile: &[(f32, f32)], segments: u32, a0: f32, a1: f32) -> Mesh {
 /// along Z at y = 0, the span runs up +Y, thickness is along X. `root` and
 /// `tip` are (leading edge z, trailing edge z); `y` is the span range to
 /// build, as fractions of `span` (so a fin can be painted in bands).
-fn fin(root: (f32, f32), tip: (f32, f32), span: f32, thick: f32, y: (f32, f32)) -> Mesh {
+pub(crate) fn fin(root: (f32, f32), tip: (f32, f32), span: f32, thick: f32, y: (f32, f32)) -> Mesh {
     let section = |f: f32| -> [Vec3; 4] {
         let le = root.0 + (tip.0 - root.0) * f;
         let te = root.1 + (tip.1 - root.1) * f;
@@ -420,279 +426,74 @@ fn fin(root: (f32, f32), tip: (f32, f32), span: f32, thick: f32, y: (f32, f32)) 
     m
 }
 
-/// Where the courier's main engine bell ends, in model units (+Z is aft).
-const COURIER_NOZZLE_Z: f32 = 12.2;
-/// The courier model's length, nose probe to bell exit, in model units.
-const COURIER_MODEL_LEN: f32 = 25.1;
-
-/// Radius of the starter's fuselage at `z` (nose at -12, toward -Z).
-fn starter_radius(z: f32) -> f32 {
-    if z < -5.0 {
-        // A blunt ogive nose.
-        let t = ((z + 12.0) / 7.0).clamp(0.0, 1.0);
-        0.3 + 1.9 * (1.0 - (1.0 - t).powi(2)).powf(0.75)
-    } else {
-        // A long, very slightly tapering cabin.
-        let t = ((z + 5.0) / 9.0).clamp(0.0, 1.0);
-        2.2 - 0.18 * t * t
-    }
-}
-
-fn starter_profile(z0: f32, z1: f32, steps: u32, inflate: f32) -> Vec<(f32, f32)> {
-    (0..=steps)
-        .map(|i| {
-            let z = z0 + (z1 - z0) * i as f32 / steps as f32;
-            (z, starter_radius(z) + inflate)
-        })
-        .collect()
-}
-
-/// The courier, everyone's first ship, hand-built rather than generated:
-/// a cream enamel rocket of the old optimistic school, nose toward -Z, with
-/// a red nose and cheatline, a wraparound windscreen, lit portholes, three
-/// swept radiator fins, a gold-foil service collar and a clustered engine.
-/// Scaled so it is `length` metres from nose to bell exit.
-fn courier(length: f32) -> (Mesh, ShipShape) {
-    const SEGS: u32 = 36;
-    let (cyl, ball) = (cylinder(16), icosphere(2));
+/// A closed solid swept through cross-sections along Z, flat-shaded.
+/// Every section has the same number of points (wound counter-clockwise
+/// seen from -Z). `paint(segment, edge)` paints each side face; the end
+/// caps get `caps`.
+pub(crate) fn loft(
+    sections: &[(f32, Vec<Vec2>)],
+    paint: impl Fn(usize, usize) -> Paint,
+    caps: Paint,
+) -> Mesh {
     let mut m = Mesh::default();
-    let id = Mat4::IDENTITY;
-
-    // Fuselage: red nose cap, cream body.
-    let mut nose = starter_profile(-12.0, -9.6, 8, 0.0);
-    nose.insert(0, (-12.0, 0.0));
-    m.paint(&lathe(&nose, SEGS, 0.0, TAU), id, 1.0, Paint::Red);
-    m.add(
-        &lathe(&starter_profile(-9.6, 4.0, 40, 0.0), SEGS, 0.0, TAU),
-        id,
-        1.0,
-    );
-    // Panel seams: thin dark rings.
-    for z in [-9.6, -5.0, 2.6] {
-        m.paint(
-            &lathe(
-                &starter_profile(z - 0.04, z + 0.04, 1, 0.012),
-                SEGS,
-                0.0,
-                TAU,
-            ),
-            id,
-            1.0,
-            Paint::Metal,
-        );
-    }
-
-    // Wraparound windscreen across the top of the nose: a row of panes
-    // set into a dark frame.
-    let up = TAU / 4.0;
-    m.paint(
-        &lathe(
-            &starter_profile(-8.85, -7.75, 6, 0.015),
-            SEGS,
-            up - 0.98,
-            up + 0.98,
-        ),
-        id,
-        1.0,
-        Paint::Metal,
-    );
-    for k in 0..5 {
-        let a = up + (k as f32 - 2.0) * 0.38;
-        m.paint(
-            &lathe(
-                &starter_profile(-8.75, -7.85, 6, 0.03),
-                4,
-                a - 0.16,
-                a + 0.16,
-            ),
-            id,
-            1.0,
-            Paint::Glass,
-        );
-    }
-
-    // Red cheatline down each flank, with a thin cream pinstripe below.
-    for side in [0.0, TAU / 2.0] {
-        m.paint(
-            &lathe(
-                &starter_profile(-9.6, 3.4, 30, 0.01),
-                3,
-                side - 0.11,
-                side + 0.07,
-            ),
-            id,
-            1.0,
-            Paint::Red,
-        );
-        m.paint(
-            &lathe(
-                &starter_profile(-9.0, 3.4, 30, 0.01),
-                2,
-                side - 0.17,
-                side - 0.14,
-            ),
-            id,
-            1.0,
-            Paint::Red,
-        );
-    }
-
-    // Round portholes above the cheatline, glowing warm.
-    for side in [-1.0f32, 1.0] {
-        for k in 0..5 {
-            let z = -3.6 + k as f32 * 1.35;
-            let a: f32 = 0.38;
-            let r = starter_radius(z);
-            let n = Vec3::new(side * a.cos(), a.sin(), 0.0);
-            let rot = Quat::from_rotation_arc(Vec3::Y, n);
-            m.paint(
-                &cyl,
-                Mat4::from_translation(Vec3::new(0.0, 0.0, z))
-                    * Mat4::from_scale_rotation_translation(
-                        Vec3::new(0.36, 0.06, 0.36),
-                        rot,
-                        n * (r - 0.02),
-                    ),
-                1.0,
-                Paint::Metal,
+    let at = |(z, pts): &(f32, Vec<Vec2>), k: usize| {
+        let p = pts[k % pts.len()];
+        Vec3::new(p.x, p.y, *z)
+    };
+    let painted = |m: &mut Mesh, from: usize, p: Paint| {
+        for v in &mut m.vertices[from..] {
+            v.paint = p as u32 as f32;
+        }
+    };
+    for (s, pair) in sections.windows(2).enumerate() {
+        let n = pair[0].1.len();
+        for e in 0..n {
+            let from = m.vertices.len();
+            quad(
+                &mut m,
+                at(&pair[0], e),
+                at(&pair[1], e),
+                at(&pair[1], e + 1),
+                at(&pair[0], e + 1),
             );
-            m.paint(
-                &cyl,
-                Mat4::from_translation(Vec3::new(0.0, 0.0, z))
-                    * Mat4::from_scale_rotation_translation(
-                        Vec3::new(0.27, 0.09, 0.27),
-                        rot,
-                        n * (r - 0.02),
-                    ),
-                1.0,
-                Paint::Glass,
-            );
+            painted(&mut m, from, paint(s, e));
         }
     }
-
-    // Docking probe on the nose.
-    m.paint(
-        &cyl,
-        strut(Vec3::new(0.0, 0.0, -11.9), Vec3::new(0.0, 0.0, -12.9), 0.12),
-        1.0,
-        Paint::Metal,
-    );
-    m.paint(
-        &ball,
-        Mat4::from_scale_rotation_translation(
-            Vec3::splat(0.2),
-            Quat::IDENTITY,
-            Vec3::new(0.0, 0.0, -12.95),
-        ),
-        1.0,
-        Paint::Metal,
-    );
-
-    // Service collar in gold thermal blanket, between two dark rings.
-    let collar = [(3.6, 2.08), (3.8, 2.32), (6.4, 2.32), (6.6, 2.1)];
-    m.paint(&lathe(&collar, SEGS, 0.0, TAU), id, 1.0, Paint::Foil);
-    for z in [3.7f32, 6.5] {
-        m.paint(
-            &lathe(&[(z - 0.1, 2.36), (z + 0.1, 2.36)], SEGS, 0.0, TAU),
-            id,
-            1.0,
-            Paint::Metal,
-        );
+    for (end, flip) in [(&sections[0], false), (&sections[sections.len() - 1], true)] {
+        let n = end.1.len();
+        let centre = (0..n).map(|k| at(end, k)).sum::<Vec3>() / n as f32;
+        let from = m.vertices.len();
+        for k in 0..n {
+            let (a, b) = (at(end, k), at(end, k + 1));
+            if flip {
+                tri(&mut m, centre, a, b);
+            } else {
+                tri(&mut m, centre, b, a);
+            }
+        }
+        painted(&mut m, from, caps);
     }
-    // Thrust structure tapering to the engine, in dark metal.
-    let tail = [
-        (6.6, 2.1),
-        (6.6, 2.1),
-        (7.6, 1.9),
-        (8.8, 1.25),
-        (8.8, 1.25),
-        (8.8, 0.0),
-    ];
-    m.paint(&lathe(&tail, SEGS, 0.0, TAU), id, 0.9, Paint::Metal);
+    m
+}
 
-    // Main bell, flaring, with a cream throat ring; four verniers around it.
-    let bell: Vec<(f32, f32)> = (0..=10)
-        .map(|i| {
-            let t = i as f32 / 10.0;
-            (8.6 + (COURIER_NOZZLE_Z - 8.6) * t, 0.6 + 1.0 * t.powf(1.6))
-        })
-        .collect();
-    m.paint(&lathe(&bell, SEGS, 0.0, TAU), id, 1.0, Paint::Metal);
-    m.add(&lathe(&[(8.7, 0.78), (9.2, 0.78)], SEGS, 0.0, TAU), id, 0.9);
-    let vernier: Vec<(f32, f32)> = bell
-        .iter()
-        .map(|&(z, r)| (z * 0.4 + 4.9, r * 0.32))
-        .collect();
-    let mut verniers = Vec::new();
-    for k in 0..4 {
-        let a = (k as f32 + 0.5) * TAU / 4.0;
-        let at = Vec3::new(a.cos(), a.sin(), 0.0) * 1.45;
-        verniers.push(at);
-        m.paint(
-            &lathe(&vernier, 16, 0.0, TAU),
-            Mat4::from_translation(at),
-            1.0,
-            Paint::Metal,
-        );
-    }
-
-    // Three swept radiator fins: dorsal, and two ventral at ±120°, red-tipped.
-    for k in 0..3 {
-        let a = k as f32 * TAU / 3.0;
-        let rot = Mat4::from_rotation_z(a);
-        let root_z = 0.4;
-        let at = Mat4::from_translation(Vec3::new(0.0, starter_radius(root_z) - 0.25, 0.0));
-        let (root, tip, span, thick) = ((root_z, 7.2), (6.0, 8.8), 3.4, 0.22);
-        m.add(&fin(root, tip, span, thick, (0.0, 0.7)), rot * at, 1.0);
-        m.paint(
-            &fin(root, tip, span, thick, (0.7, 1.0)),
-            rot * at,
-            1.0,
-            Paint::Red,
-        );
-        // A beacon on each tip.
-        m.paint(
-            &ball,
-            rot * at
-                * Mat4::from_scale_rotation_translation(
-                    Vec3::splat(0.16),
-                    Quat::IDENTITY,
-                    Vec3::new(0.0, span + 0.05, tip.0 + 0.5),
-                ),
-            1.0,
-            Paint::Beacon,
-        );
-    }
-
-    // A whip antenna behind the windscreen.
-    m.paint(
-        &cyl,
-        strut(Vec3::new(0.0, 2.1, -5.6), Vec3::new(0.0, 3.4, -4.4), 0.04),
-        1.0,
-        Paint::Metal,
-    );
-    m.paint(
-        &ball,
-        Mat4::from_scale_rotation_translation(
-            Vec3::splat(0.09),
-            Quat::IDENTITY,
-            Vec3::new(0.0, 3.4, -4.4),
-        ),
-        1.0,
-        Paint::Red,
-    );
-
-    // Centre it and scale it to the hull's length.
-    let k = length / COURIER_MODEL_LEN;
-    let fit = Mat4::from_scale(Vec3::splat(k))
-        * Mat4::from_translation(Vec3::Z * (COURIER_MODEL_LEN / 2.0 - COURIER_NOZZLE_Z));
-    let mut out = Mesh::default();
-    out.add(&m, fit, 1.0);
-    let mut nozzles = vec![(fit.transform_point3(Vec3::Z * COURIER_NOZZLE_Z), 1.6 * k)];
-    for &at in &verniers {
-        nozzles.push((fit.transform_point3(at + Vec3::Z * 9.78), 0.5 * k));
-    }
-    (out, ShipShape { nozzles })
+/// A `w` × `h` rectangle with its corners cut by `c`, centred at height
+/// `y`: eight points, starting at the left end of the top edge, so edge 0
+/// is the top, 2 the right side, 4 the bottom and 6 the left side.
+pub(crate) fn chamfer_rect(w: f32, h: f32, c: f32, y: f32) -> Vec<Vec2> {
+    let (x, t) = (w / 2.0, h / 2.0);
+    [
+        (-x + c, t),
+        (x - c, t),
+        (x, t - c),
+        (x, -t + c),
+        (x - c, -t),
+        (-x + c, -t),
+        (-x, -t + c),
+        (-x, t - c),
+    ]
+    .into_iter()
+    .map(|(px, py)| Vec2::new(px, py + y))
+    .collect()
 }
 
 /// A station from the module kit, sized to roughly unit radius (scale by
@@ -868,8 +669,8 @@ pub struct ShipShape {
 /// rings, radar masts.
 pub fn ship(fit: &retrox_sim::ship::Loadout) -> (Mesh, ShipShape) {
     use retrox_sim::ship::{Position, Size, SlotKind};
-    if fit.hull().id == "courier" {
-        return courier(fit.stats().length_m as f32);
+    if let Some(built) = crate::hulls::authored(fit) {
+        return built;
     }
     let (cyl, cube, ball) = (cylinder(14), cube(), icosphere(1).flat());
     let ring = torus(0.06, 32, 6);
