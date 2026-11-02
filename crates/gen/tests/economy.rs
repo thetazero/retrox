@@ -1,5 +1,5 @@
 use retrox_gen::{GalaxyConfig, generate};
-use retrox_sim::economy::{self, Good};
+use retrox_sim::economy::{self, FacilityKind, Good};
 use retrox_sim::haul;
 use retrox_sim::{GalaxyState, tick};
 
@@ -106,4 +106,23 @@ fn money_is_conserved() {
         (after - before).abs() <= 1e-6 * before.abs(),
         "{before} -> {after}"
     );
+}
+
+#[test]
+fn shipyards_grow_the_fleet() {
+    let mut state = small();
+    let start = economy::summarize(&state).ships;
+    assert!(
+        state.settlements.values().any(|s| s
+            .economy
+            .facilities
+            .iter()
+            .any(|f| f.kind == FacilityKind::Shipyard)),
+        "no shipyards"
+    );
+    for _ in 0..360 * 2 {
+        tick(&mut state);
+    }
+    let end = economy::summarize(&state).ships;
+    assert!(end > start, "fleet didn't grow: {start} -> {end}");
 }

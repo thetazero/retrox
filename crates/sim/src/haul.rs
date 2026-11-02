@@ -36,6 +36,8 @@ pub struct ShipClass {
     /// The hull's id in the ship content.
     pub hull: String,
     pub cargo_t: f64,
+    /// Empty mass, which is also how much hull a shipyard must build.
+    pub mass_t: f64,
     /// m/s², with a full hold.
     pub accel_laden: f64,
     /// Light-years per day along a hyperlane, with a full hold.
@@ -96,6 +98,18 @@ const UPKEEP_PER_CARGO_T_DAY: f64 = 0.02;
 const MAX_SPEND_SHARE: f64 = 0.5;
 /// A company spends at most this share of its credits on one cargo.
 const MAX_STAKE_SHARE: f64 = 0.9;
+/// A company buys another ship when it holds this many times the hull's
+/// price.
+const BUY_SHIP_AT_PRICES: f64 = 4.0;
+/// Daily chance that a settlement able to fund one founds a new company.
+const FOUND_COMPANY_CHANCE: f64 = 0.01;
+/// A new company starts with enough to fill its hold this many times, at
+/// this much per tonne.
+const FOUNDING_HOLDS: f64 = 2.0;
+const FOUNDING_CREDITS_PER_T: f64 = 20.0;
+/// A settlement founds companies only from treasury above this many times
+/// the cost of founding one.
+const FOUNDING_WEALTH: f64 = 3.0;
 /// Chance a ship is lost on any one trip.
 const LOSS_PER_SHIP_TRIP: f64 = 0.001;
 
@@ -391,6 +405,26 @@ pub fn movement(state: &mut GalaxyState) {
         }
         company.fleets.retain(|f| f.ships > 0);
     }
+    // A company with no ships left winds up; its money goes home.
+    let gone: Vec<CompanyId> = state
+        .companies
+        .iter()
+        .filter(|(_, c)| c.fleets.is_empty())
+        .map(|(k, _)| k)
+        .collect();
+    for key in gone {
+        let company = state.companies.remove(key).expect("listed above");
+        match state.settlements.get_mut(company.home) {
+            Some(home) => home.economy.treasury += company.credits,
+            None => {
+                // Keep money conserved even if home is gone: hand it to
+                // any faction.
+                if let Some(f) = state.factions.values_mut().next() {
+                    f.treasury += company.credits;
+                }
+            }
+        }
+    }
 }
 
 /// Trade phase: docked fleets sell what they carry, then choose and start
@@ -410,6 +444,7 @@ pub fn trade(state: &mut GalaxyState) {
                 continue;
             }
             sell(state, &ctx, key, n, here);
+            buy_ship(state, key, n, here);
             if state.companies[key].fleets[n].idle_until > now {
                 continue;
             }
@@ -430,6 +465,7 @@ pub fn trade(state: &mut GalaxyState) {
         }
         pay_upkeep(state, key);
     }
+    found_companies(state);
 
     crate::economy::update_all_prices(state);
 }
@@ -513,6 +549,82 @@ fn depart(
         to: plan.to,
         arrive: GalaxyTime::from_days(state.time.days() + days),
     };
+}
+
+/// A prosperous company docked at a shipyard adds a ship to its fleet.
+fn buy_ship(state: &mut GalaxyState, key: CompanyId, n: usize, here: SettlementId) {
+    let fleet = &state.companies[key].fleets[n];
+    if fleet.cargo.is_some() {
+        return;
+    }
+    let mass = state.ship_classes[fleet.class].mass_t;
+    let price = mass * crate::economy::HULL_PRICE_PER_T;
+    if state.companies[key].credits < price * BUY_SHIP_AT_PRICES
+        || state.settlements[here].economy.hull_t < mass
+    {
+        return;
+    }
+    let yard = &mut state.settlements[here].economy;
+    yard.hull_t -= mass;
+    yard.treasury += price;
+    let company = &mut state.companies[key];
+    company.credits -= price;
+    company.fleets[n].ships += 1;
+}
+
+/// Settlements with hull to sell and money to spare found new companies,
+/// with one ship of the biggest class they can build.
+fn found_companies(state: &mut GalaxyState) {
+    let now = state.time;
+    let ids: Vec<SettlementId> = state.settlements.keys().collect();
+    for (i, id) in ids.into_iter().enumerate() {
+        let economy = &state.settlements[id].economy;
+        if economy.hull_t <= 0.0
+            || roll(state.seed ^ 0xC0DE, now.days(), i as u64) >= FOUND_COMPANY_CHANCE
+        {
+            continue;
+        }
+        let cost = |c: &ShipClass| {
+            c.mass_t * crate::economy::HULL_PRICE_PER_T
+                + c.cargo_t * FOUNDING_HOLDS * FOUNDING_CREDITS_PER_T
+        };
+        let Some((class, founding)) = state
+            .ship_classes
+            .iter()
+            .filter(|(_, c)| {
+                c.mass_t <= economy.hull_t && cost(c) * FOUNDING_WEALTH <= economy.treasury
+            })
+            .max_by(|a, b| a.1.cargo_t.total_cmp(&b.1.cargo_t))
+            .map(|(id, c)| (id, cost(c)))
+        else {
+            continue;
+        };
+        let mass = state.ship_classes[class].mass_t;
+        let base = state.settlements[id]
+            .name
+            .split(' ')
+            .next()
+            .unwrap_or("Free")
+            .to_owned();
+        let economy = &mut state.settlements[id].economy;
+        economy.hull_t -= mass;
+        economy.treasury -= founding;
+        let hull_price = mass * crate::economy::HULL_PRICE_PER_T;
+        // The hull is bought from this same yard, so its price stays here.
+        economy.treasury += hull_price;
+        state.companies.insert(Company {
+            name: format!("{base} Haulers {}", now.year()),
+            home: id,
+            credits: founding - hull_price,
+            fleets: vec![Fleet {
+                class,
+                ships: 1,
+                at: Location::Docked(id),
+                cargo: None,
+                idle_until: now,
+            }],
+        });
+    }
 }
 
 /// Crews are paid at home, while the company can afford it.

@@ -21,6 +21,7 @@ pub fn classes(state: &mut GalaxyState) -> Vec<ShipClassId> {
         ids.push(state.ship_classes.push(ShipClass {
             hull: hull.id.to_owned(),
             cargo_t: stats.cargo_t,
+            mass_t: stats.mass_t,
             accel_laden: laden.acceleration(),
             jump_laden: laden.jump_speed(),
             drive_tier: stats.drive_tier,

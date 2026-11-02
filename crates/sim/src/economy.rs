@@ -107,16 +107,20 @@ pub enum FacilityKind {
     Hydroponics,
     FuelPlant,
     Factory,
+    /// Builds ship hulls: its output goes to [`LocalEconomy::hull_t`], not
+    /// the market.
+    Shipyard,
 }
 
 impl FacilityKind {
-    pub const ALL: [FacilityKind; 6] = [
+    pub const ALL: [FacilityKind; 7] = [
         FacilityKind::Mine,
         FacilityKind::IceHarvester,
         FacilityKind::Refinery,
         FacilityKind::Hydroponics,
         FacilityKind::FuelPlant,
         FacilityKind::Factory,
+        FacilityKind::Shipyard,
     ];
 
     pub const fn recipe(self) -> &'static Recipe {
@@ -146,6 +150,11 @@ impl FacilityKind {
                 inputs: &[(Metal, 1.0), (Fuel, 0.5)],
                 outputs: &[(Components, 1.0)],
             },
+            // One tonne of hull per run; see `HULL_T_PER_RUN`.
+            FacilityKind::Shipyard => &Recipe {
+                inputs: &[(Metal, 1.0), (Components, 0.3), (Fuel, 0.1)],
+                outputs: &[],
+            },
         }
     }
 }
@@ -163,6 +172,13 @@ pub const PER_CAPITA_DEMAND: [(Good, f64); 3] = [
     (Good::Fuel, 0.3),
     (Good::Components, 0.05),
 ];
+
+/// Tonnes of hull a shipyard builds per run of its recipe.
+pub const HULL_T_PER_RUN: f64 = 1.0;
+/// Shipyards stop once they hold this many days of their own output.
+pub const HULL_STORAGE_DAYS: f64 = 120.0;
+/// What a tonne of finished hull sells for, in credits.
+pub const HULL_PRICE_PER_T: f64 = 60.0;
 
 /// Markets aim to hold this many days of their own demand.
 pub const TARGET_DAYS: f64 = 30.0;
@@ -216,6 +232,8 @@ pub struct LocalEconomy {
     pub population: f64,
     pub facilities: Vec<Facility>,
     pub market: Market,
+    /// Finished ship hull ready for sale, in tonnes. Built by shipyards.
+    pub hull_t: f64,
     /// The settlement's money, in credits. Trade only moves money; nothing
     /// creates or destroys it yet.
     pub treasury: f64,
@@ -258,6 +276,10 @@ impl LocalEconomy {
                     rate = 0.0;
                 }
             }
+            let shipyard = facility.kind == FacilityKind::Shipyard;
+            if shipyard && self.hull_t >= facility.scale * HULL_T_PER_RUN * HULL_STORAGE_DAYS {
+                rate = 0.0;
+            }
             let rate = rate.clamp(0.0, 1.0);
             for &(good, amount) in recipe.inputs {
                 let need = amount * facility.scale;
@@ -266,6 +288,9 @@ impl LocalEconomy {
             }
             for &(good, amount) in recipe.outputs {
                 market.stock[good] += amount * facility.scale * rate;
+            }
+            if shipyard {
+                self.hull_t += facility.scale * HULL_T_PER_RUN * rate;
             }
         }
 
