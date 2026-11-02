@@ -980,6 +980,14 @@ somewhere, live somewhere, and fly for real near the player.
 - **Collect:** a tractor pulls loose chunks into the hold (as the market
   goods ore and ice) when you fly close; when the hold is full, they stay
   floating. Sell at any market.
+- **Rock is solid where it's drawn** (#155): the ship stops against a
+  rock's lumpy, squashed surface, not a sphere of its nominal size, and
+  loose ore comes to rest on rock (2 m off it), never inside. Ore the
+  tractor has hold of comes straight in, through anything. A calved
+  boulder and its ore come off the face the laser hit. (The sphere held a
+  courier up to a few hundred metres off a squashed quarry's face, so the
+  ore it shed sat out of the tractor's 120 m reach: "all the ore is within
+  the node".)
 - **Getting there** (#122): fast travel to a field flies in among its
   rocks and stops 400 m off one, nose-on to it and inside the light
   laser's 500 m reach: arrive, [G], fire. The rock is the whole one

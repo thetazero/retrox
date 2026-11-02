@@ -57,6 +57,8 @@ pub const QUARRY_RADIUS: f64 = 60.0;
 const MIN_ROCK: f64 = 5.0;
 /// Galaxy days until a worked rock is whole again.
 pub const REGROW_DAYS: f64 = 120.0;
+/// How far above rock loose ore comes to rest, metres.
+const NUGGET_CLEARANCE: f64 = 2.0;
 /// Seconds before loose ore drifts off for good.
 const NUGGET_LIFETIME: f64 = 900.0;
 /// Cutting is this many times faster on a vein.
@@ -362,6 +364,61 @@ impl LiveRock {
     pub fn yield_t(&self) -> f64 {
         fracture_yield(self.radius, &self.lode)
     }
+}
+
+/// A rock as something to bump into: where it is, how it's turned, and
+/// its lumpy shape, so things stop at the surface you see rather than at
+/// a sphere of its nominal radius (#155). A squashed quarry can sit a
+/// third of that radius in, and a bulge can stand well past it.
+#[derive(Clone, Copy, Debug)]
+pub struct Solid {
+    pub pos: DVec3,
+    pub radius: f64,
+    pub rot: DQuat,
+    pub seed: u64,
+    /// One of the field's own rocks rather than a broken-off piece.
+    pub base: bool,
+}
+
+impl Solid {
+    /// How far from the centre the surface is, toward `p`, metres. The
+    /// rock is star-shaped about its centre, so a point nearer than this
+    /// along the same line is inside it.
+    pub fn surface_toward(&self, p: DVec3) -> f64 {
+        surface_along(self.seed, self.rot, self.radius, p - self.pos)
+    }
+
+    /// Nothing of the rock reaches past this, metres.
+    pub fn bound(&self) -> f64 {
+        self.radius * 1.75
+    }
+
+    /// If `p` is within `margin` of the surface or inside, how to move it
+    /// out: the outward direction (from the centre) and how far.
+    pub fn push_out(&self, p: DVec3, margin: f64) -> Option<(DVec3, f64)> {
+        let to = p - self.pos;
+        let d2 = to.length_squared();
+        let bound = self.bound() + margin;
+        if d2 > bound * bound {
+            return None;
+        }
+        let d = d2.sqrt();
+        let n = if d > 1e-6 { to / d } else { DVec3::Y };
+        let want = self.surface_toward(p) + margin;
+        (d < want).then_some((n, want - d))
+    }
+}
+
+/// Distance from a rock's centre to its surface along `dir` (world axes,
+/// any length), metres.
+pub fn surface_along(seed: u64, rot: DQuat, radius: f64, dir: DVec3) -> f64 {
+    let shape = shape(seed);
+    let q = (rot.inverse() * dir.normalize_or(DVec3::Y)).as_vec3();
+    // The point t·q is inside while |t·q / squash| < bulge of that
+    // direction, so the surface is at t = bulge / |q / squash|.
+    let u = q / shape.squash;
+    let len = u.length().max(1e-6);
+    f64::from(shape.bulge(u / len) / len) * radius
 }
 
 /// Laser work to fracture a rock of this radius.
@@ -705,7 +762,12 @@ impl Mining {
             }
         }
 
-        self.drift(id, dt, ship, &mut out);
+        let solids: Vec<Solid> = if self.fields.get(&id).is_some_and(|s| !s.nuggets.is_empty()) {
+            self.solids(id, rocks, clock_s).collect()
+        } else {
+            Vec::new()
+        };
+        self.drift(id, dt, ship, &solids, &mut out);
         out
     }
 
@@ -764,10 +826,14 @@ impl Mining {
             };
             *state.calved.entry(i).or_insert(0) += 1;
             state.touched.insert(i, day);
+            // Off the surface you see, not off a sphere of the quarry's
+            // nominal radius: a squashed quarry's face can be far inside
+            // that, and its ore must come out where the ship can reach.
+            let surface = surface_along(rock.seed, rock.rot, rock.radius, normal);
             let r = rng.range(8.0, 16.0);
-            let pos = aim.point + normal * (r * 1.1);
+            let pos = rock.pos + normal * (surface + r * 1.1);
             children.push((pos, normal * rng.range(1.0, 3.0), r));
-            aim.point + normal * 2.0
+            rock.pos + normal * (surface + 3.0)
         } else {
             match rock.id {
                 RockId::Base(i) => {
@@ -873,7 +939,7 @@ impl Mining {
     }
 
     /// Fragments and loose ore drift; the tractor pulls ore in.
-    fn drift(&mut self, id: FieldId, dt: f64, ship: Miner, out: &mut Outcome) {
+    fn drift(&mut self, id: FieldId, dt: f64, ship: Miner, solids: &[Solid], out: &mut Outcome) {
         let Some(state) = self.fields.get_mut(&id) else {
             return;
         };
@@ -889,7 +955,8 @@ impl Mining {
             n.age += dt;
             let to = ship.centre - n.pos;
             let d = to.length();
-            if d < TRACTOR_RANGE && free > 1e-6 {
+            let pulled = d < TRACTOR_RANGE && free > 1e-6;
+            if pulled {
                 // Pull in, faster as it closes, matching the ship.
                 let want = to / d.max(1e-6) * (25.0 + (TRACTOR_RANGE - d) * 0.6);
                 n.vel += (want - n.vel) * (1.0 - (-4.0 * dt).exp());
@@ -900,6 +967,20 @@ impl Mining {
                 n.vel *= (-0.4 * dt).exp();
             }
             n.pos += n.vel * dt;
+            if !pulled {
+                // Loose ore rests on rock, never in it, so the tractor
+                // can always get at it from outside (#155). (Ore being
+                // pulled in goes straight to the hold, through anything.)
+                for s in solids {
+                    if let Some((out_dir, depth)) = s.push_out(n.pos, NUGGET_CLEARANCE) {
+                        n.pos += out_dir * depth;
+                        let into = n.vel.dot(out_dir);
+                        if into < 0.0 {
+                            n.vel -= out_dir * into;
+                        }
+                    }
+                }
+            }
             if (ship.centre - n.pos).length() < ship.reach && free > 1e-6 {
                 let take = n.tonnes.min(free);
                 free -= take;
@@ -946,6 +1027,39 @@ impl Mining {
         if let Some(state) = self.fields.get_mut(&id) {
             state.nuggets.clear();
         }
+    }
+
+    /// Every rock standing in a field, as of the galaxy clock, with its
+    /// true shape: for the ship and loose ore to bump into.
+    pub fn solids<'a>(
+        &'a self,
+        id: FieldId,
+        rocks: &'a [Rock],
+        clock_s: f64,
+    ) -> impl Iterator<Item = Solid> + 'a {
+        let state = self.fields.get(&id);
+        let base = rocks.iter().enumerate().filter_map(move |(i, rock)| {
+            if state.is_some_and(|s| s.broken.contains_key(&i)) {
+                return None;
+            }
+            Some(Solid {
+                pos: rock_offset(rock),
+                radius: rock.radius_m,
+                rot: spin(DVec3::from_array(rock.spin_axis), rock.spin_rate, clock_s),
+                seed: rock.seed,
+                base: true,
+            })
+        });
+        let frags = state.into_iter().flat_map(move |s| {
+            s.frags.iter().map(move |f| Solid {
+                pos: f.pos,
+                radius: f.radius,
+                rot: spin(f.spin_axis, f.spin_rate, clock_s),
+                seed: f.seed,
+                base: false,
+            })
+        });
+        base.chain(frags)
     }
 
     /// Positions and radii of the fragments, for collisions.
@@ -1179,6 +1293,108 @@ mod tests {
                 .worked_out
         );
         assert_eq!(boulders as u32, quarry_capacity(100.0));
+    }
+
+    /// #155: a calved quarry's ore lands where a ship parked against the
+    /// rock, as close as it can get, pulls it all into the hold; and none
+    /// of it rests inside rock. Every rock shape, from every side.
+    #[test]
+    fn a_quarry_s_ore_is_in_reach_of_a_ship_against_it() {
+        let f = field();
+        let dirs = [
+            DVec3::X,
+            DVec3::NEG_X,
+            DVec3::Y,
+            DVec3::NEG_Y,
+            DVec3::Z,
+            DVec3::NEG_Z,
+        ];
+        for mesh in 0..ROCK_MESHES as u64 {
+            for dir in dirs {
+                let mut rocks = [rock(300.0)];
+                rocks[0].seed = mesh;
+                let mut m = Mining::default();
+                let solid = m.solids(fid(), &rocks, 0.0).next().unwrap();
+                // Where the ship's collision stops it (pilot.rs).
+                let centre = dir * (solid.surface_toward(dir) + 8.0);
+                let mut ship = Miner {
+                    nose: centre - dir * 6.0,
+                    forward: -dir,
+                    centre,
+                    reach: 10.0,
+                    free_t: 100.0,
+                    firing: true,
+                };
+                let mut clock = 0.0;
+                let mut shed = 0.0;
+                let mut collected = 0.0;
+                for _ in 0..30 * 600 {
+                    clock += 1.0 / 30.0;
+                    let o = m.update(1.0 / 30.0, fid(), &f, &rocks, clock, &courier(), ship);
+                    for msg in &o.messages {
+                        if let Some(rest) = msg.strip_prefix("Calved a boulder · ") {
+                            shed = rest.split(' ').next().unwrap().parse::<f64>().unwrap();
+                            ship.firing = false;
+                        }
+                    }
+                    collected += o.collected.iter().map(|(_, t)| t).sum::<f64>();
+                    if shed > 0.0 {
+                        let state = m.field(fid()).unwrap();
+                        let solids: Vec<Solid> = m.solids(fid(), &rocks, clock).collect();
+                        // Ore the tractor has hold of comes straight in,
+                        // through anything; the rest must lie on rock.
+                        let loose = state
+                            .nuggets
+                            .iter()
+                            .filter(|n| (n.pos - ship.centre).length() >= TRACTOR_RANGE);
+                        for n in loose {
+                            for s in &solids {
+                                assert!(
+                                    (n.pos - s.pos).length() >= s.surface_toward(n.pos),
+                                    "mesh {mesh} from {dir}: ore inside rock at {:?}",
+                                    n.pos
+                                );
+                            }
+                        }
+                        if state.nuggets.is_empty() {
+                            break;
+                        }
+                    }
+                }
+                assert!(shed > 0.0, "mesh {mesh} from {dir}: never calved");
+                // The banner rounds to a tenth of a tonne.
+                assert!(
+                    (collected - shed).abs() < 0.06,
+                    "mesh {mesh} from {dir}: shed {shed} t, hold got {collected} t"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rock_surfaces_are_where_the_laser_finds_them() {
+        // The collision surface and the laser's agree, for every shape.
+        let m = Mining::default();
+        for mesh in 0..ROCK_MESHES as u64 {
+            let mut rocks = [rock(40.0)];
+            rocks[0].seed = mesh;
+            let solid = m.solids(fid(), &rocks, 0.0).next().unwrap();
+            for dir in [
+                DVec3::X,
+                DVec3::NEG_Y,
+                DVec3::new(0.3, -0.5, 0.8).normalize(),
+            ] {
+                let aim = m
+                    .cast(fid(), &field(), &rocks, 0.0, dir * 300.0, -dir, 600.0)
+                    .unwrap();
+                let laser = aim.point.length();
+                let surface = solid.surface_toward(dir);
+                assert!(
+                    (laser - surface).abs() < 0.5,
+                    "mesh {mesh}: {laser} vs {surface}"
+                );
+            }
+        }
     }
 
     #[test]
