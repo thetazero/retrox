@@ -356,6 +356,9 @@ pub struct World {
     pub combat: Combat,
     /// How hard the ship's engines burned this frame, 0..1.
     pub burn: f64,
+    /// After fast travel, the attitude autopilot turning the ship to face
+    /// where that leg went, until it's there or the pilot takes the stick.
+    pub turn_over: Option<Leg>,
     /// Seconds since a gang pulled us out of fast travel, and which,
     /// while that's news.
     pub interdicted: Option<(f64, String)>,
@@ -464,6 +467,7 @@ impl World {
             traffic: Traffic::default(),
             combat: Combat::new(player.ship.fit.clone(), player.ship.damage.clone()),
             burn: 0.0,
+            turn_over: None,
             interdicted: None,
             complaints: Default::default(),
             convoy_seen: None,
@@ -1115,6 +1119,9 @@ impl World {
             }
         }
 
+        if self.mode != Mode::Normal {
+            self.turn_over = None;
+        }
         match self.mode {
             Mode::Normal if self.combat.lost.is_some() => {
                 // What's left drifts on.

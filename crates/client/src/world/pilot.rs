@@ -20,9 +20,8 @@ pub const STRAFE_SPEED: f64 = 80.0;
 const TURN_RATES: DVec3 = DVec3::new(1.3, 0.9, 2.2);
 /// The ship's main drive under autopilot, m/s²: about a day per AU.
 const DRIVE_ACCEL: f64 = ACCEL;
-/// Real seconds before the autopilot hands back that the ship turns from
-/// braking tail-first to face where it's going (DESIGN §7.1.2).
-const TURN_OVER_S: f64 = 1.5;
+/// How hard the attitude autopilot turns per radian off target, 1/s.
+const ATTITUDE_GAIN: f64 = 2.5;
 
 /// Forward speed for a throttle setting: linear up to [`COMBAT_SPEED`] at
 /// 0.5, then exponential up to [`CRUISE_SPEED`] at 1.0.
@@ -53,6 +52,21 @@ pub fn steer(rot: &mut DQuat, spin: &mut DVec3, stick: DVec3, turn: f64, dt: f64
     // Local axes: x = pitch, y = yaw (negated: + yaw turns right), z = roll.
     let delta = DQuat::from_scaled_axis(DVec3::new(s.x, -s.y, -s.z) * dt);
     *rot = (*rot * delta).normalize();
+}
+
+/// The stick the attitude autopilot holds this frame to bring the nose of
+/// a ship at `rot` round to `face`, as a pilot would: rates in proportion
+/// to how far off it is, never more than full stick. Fed through
+/// [`steer`], the ship turns at its own hull's rates.
+pub fn attitude_stick(rot: DQuat, face: DVec3, turn: f64) -> DVec3 {
+    let mut err = rot.inverse() * look_rotation(face);
+    if err.w < 0.0 {
+        err = -err;
+    }
+    // In ship axes; `steer` turns by (pitch, -yaw, -roll).
+    let e = err.to_scaled_axis();
+    let rates = DVec3::new(e.x, -e.y, -e.z) * ATTITUDE_GAIN;
+    (rates / (TURN_RATES * turn)).clamp(DVec3::splat(-1.0), DVec3::splat(1.0))
 }
 
 /// Flight assist for one frame: thrust the velocity toward `local` (the
@@ -170,6 +184,7 @@ impl World {
         let real = (2.0 + (distance / 1e7).max(1.0).log10() * 1.2).min(7.0);
         self.ship.spin = DVec3::ZERO;
         self.ship.throttle = 0.0;
+        self.turn_over = None;
         self.mode = Mode::FastTravel(FastTravel {
             leg,
             ship,
@@ -194,19 +209,12 @@ impl World {
         let pos = DVec3::from_array(trip.ship.pos);
         let vel = DVec3::from_array(trip.ship.vel);
         // Face the way the drive is pushing: out along the route, then
-        // flipped round to brake. In the last moments of the stop (and
-        // at the very start, before it's moving) it turns to face where
-        // it's going, so the place is the first thing the pilot sees.
-        let t = self.t_days();
-        let goal = self.fast_travel_goal(leg, pos, t);
+        // flipped round to brake. Turning over to face the place comes
+        // after, at the ship's own rates ([`World::arrive_fast_travel`]).
+        let goal = self.fast_travel_goal(leg, pos, self.t_days());
         let thrust = DVec3::from_array(flight::autopilot(&trip.ship, &goal, accel, 1.0));
-        let closing = (vel - DVec3::from_array(goal.vel)).length();
-        let stop_in = closing / (accel * trip.warp.max(1e-9));
-        let k = 1.0 - (-4.0 * dt).exp();
-        if stop_in < TURN_OVER_S {
-            let face = self.arrival_facing(leg, pos, t);
-            self.ship.rot = self.ship.rot.slerp(look_rotation(face), k).normalize();
-        } else if thrust.length() > accel * 0.1 {
+        if thrust.length() > accel * 0.1 {
+            let k = 1.0 - (-4.0 * dt).exp();
             self.ship.rot = self.ship.rot.slerp(look_rotation(thrust), k).normalize();
         }
         self.ship.frame = Place::Star;
@@ -237,10 +245,9 @@ impl World {
     }
 
     pub(super) fn arrive_fast_travel(&mut self, leg: Leg) {
-        // Finish the turn: hand back looking at where we came to.
-        let face = self.arrival_facing(leg, self.ship_position(), self.t_days());
-        self.ship.rot = look_rotation(face);
-        self.ship.spin = DVec3::ZERO;
+        // The ship comes to rest tail-first, braking; its attitude
+        // autopilot then turns it round to face the place (DESIGN §7.1.2).
+        self.turn_over = Some(leg);
         // At rest relative to the target, within a few m/s: carry on from
         // exactly there.
         self.enter_frame(leg.frame());
@@ -260,8 +267,20 @@ impl World {
         });
     }
 
-    pub(super) fn steer(&mut self, dt: f64, c: Controls) {
+    pub(super) fn steer(&mut self, dt: f64, mut c: Controls) {
         let turn = self.handling().1;
+        if let Some(leg) = self.turn_over {
+            let face = self.arrival_facing(leg, self.ship_position(), self.t_days());
+            let off = (self.ship.rot * DVec3::NEG_Z).angle_between(face);
+            if c.stick != DVec3::ZERO
+                || (off < 0.2_f64.to_radians() && self.ship.spin.length() < 0.02)
+            {
+                // The pilot has the stick, or we're there.
+                self.turn_over = None;
+            } else {
+                c.stick = attitude_stick(self.ship.rot, face, turn);
+            }
+        }
         steer(&mut self.ship.rot, &mut self.ship.spin, c.stick, turn, dt);
         self.ship.throttle = (self.ship.throttle + c.throttle_delta * dt * 0.4).clamp(-0.3, 1.0);
     }
