@@ -142,7 +142,7 @@ pub fn cruise_days(au: f64, accel: f64) -> f64 {
 }
 
 /// Shortest lane distance from `origin` to every system within `max_ly`.
-fn reach(state: &GalaxyState, origin: SystemId, max_ly: f64) -> Vec<(SystemId, f64)> {
+pub fn reach(state: &GalaxyState, origin: SystemId, max_ly: f64) -> Vec<(SystemId, f64)> {
     let mut best: HashMap<SystemId, f64> = HashMap::from([(origin, 0.0)]);
     let mut heap = BinaryHeap::from([Reverse((0.0f64.to_bits(), origin))]);
     let mut out = Vec::new();
