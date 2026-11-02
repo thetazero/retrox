@@ -204,6 +204,10 @@ pub struct Project {
     /// Scale added when finished.
     pub scale: f64,
     pub needs: GoodMap<f64>,
+    /// When it was started. A project that can't get its materials is
+    /// eventually cut short; see [`crate::construction`].
+    #[serde(default)]
+    pub started: crate::GalaxyTime,
 }
 
 /// Daily consumption of `good` per unit of population.

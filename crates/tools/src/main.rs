@@ -8,6 +8,7 @@ use retrox_gen::{GalaxyConfig, generate};
 use retrox_sim::{GalaxyTime, PIPELINE, tick_profiled};
 
 mod bench;
+mod health;
 mod map;
 mod ship;
 
@@ -270,6 +271,7 @@ fn simulate(seed: u64, years: u64, csv: Option<&str>) -> std::io::Result<()> {
     }
     println!("history: {} events", state.history.events().len());
     print_economy(&state);
+    health::print(&state);
     Ok(())
 }
 

@@ -184,6 +184,7 @@ fn choose(state: &GalaxyState, id: SettlementId) -> Option<Project> {
         kind,
         scale,
         needs: materials(scale),
+        started: state.time,
     })
 }
 

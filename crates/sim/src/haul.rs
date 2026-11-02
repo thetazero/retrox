@@ -308,7 +308,7 @@ const FOUNDING_WEALTH: f64 = 3.0;
 /// Chance a ship is lost on any one trip through the lanes.
 const LOSS_PER_SHIP_JUMP: f64 = 0.001;
 /// Rough distance of a station from what it orbits, for travel estimates.
-const STATION_ORBIT_AU: f64 = 0.001;
+pub(crate) const STATION_ORBIT_AU: f64 = 0.001;
 
 /// How far a settlement is from its star, in AU: its body's orbit (or its
 /// planet's, for a moon). Sizes, not positions: good enough for coarse
@@ -332,23 +332,53 @@ pub(crate) fn radius_au(state: &GalaxyState, id: SettlementId) -> f64 {
 }
 
 /// One-way days from `from` to `to` for `class`, given the lane distance
-/// between their systems, including handling.
+/// between their systems and the lanes crossed, including handling: the
+/// burn out to a jump point, each lane, each crossing of a system on the
+/// way, the burn in. In-system distances are typical ones, since where
+/// things are along their orbits changes; see [`crate::bubble`].
 fn leg_days(
     state: &GalaxyState,
     class: &ShipClass,
     from: SettlementId,
     to: SettlementId,
     lane_ly: f64,
+    jumps: u32,
 ) -> f64 {
-    let cruise = |au: f64| crate::bubble::cruise_days(au, class.accel_laden);
-    let (ra, rb) = (radius_au(state, from), radius_au(state, to));
+    use crate::bubble::{STAGE_ROUNDING_DAYS, crossing_days, jump_point_days, local_days};
     let travel = if state.settlements[from].system == state.settlements[to].system {
-        cruise((ra - rb).abs().max(STATION_ORBIT_AU))
+        local_days(state, class, from, to)
     } else {
-        let jp = crate::bubble::JUMP_POINT_AU;
-        cruise((ra - jp).abs()) + lane_ly / class.jump_laden + cruise((rb - jp).abs())
+        let lanes = f64::from(jumps.max(1));
+        let crossings = lanes - 1.0;
+        let stages = 2.0 + lanes + crossings;
+        jump_point_days(state, class, from)
+            + lane_ly / class.jump_laden
+            + crossings * crossing_days(class)
+            + jump_point_days(state, class, to)
+            // Lanes take whole days, and every change of stretch waits
+            // for the next.
+            + lanes * 0.5
+            + (stages - 1.0) * STAGE_ROUNDING_DAYS
     };
     travel + HANDLING_DAYS
+}
+
+/// Planning estimate of a one-way trip for ships of `class`, in days,
+/// including handling; `None` if it's further than any trip a trader
+/// would make.
+pub fn trip_days(
+    state: &GalaxyState,
+    class: ShipClassId,
+    from: SettlementId,
+    to: SettlementId,
+) -> Option<f64> {
+    let c = &state.ship_classes[class];
+    let target = state.settlements.get(to)?.system;
+    let origin = state.settlements.get(from)?.system;
+    let &(_, ly, jumps) = reach(state, origin, MAX_TRIP_DAYS * c.jump_laden)
+        .iter()
+        .find(|r| r.0 == target)?;
+    Some(leg_days(state, c, from, to, ly, jumps))
 }
 
 /// Lane distances already worked out, by origin and range. The lane
@@ -357,8 +387,9 @@ fn leg_days(
 #[derive(Default)]
 pub struct ReachCache(RwLock<HashMap<(SystemId, u64), Reached>>);
 
-/// Systems within range, with their lane distance, nearest first.
-pub type Reached = Arc<[(SystemId, f64)]>;
+/// Systems within range, with their lane distance and the lanes crossed
+/// to get there, nearest first.
+pub type Reached = Arc<[(SystemId, f64, u32)]>;
 
 impl ReachCache {
     pub fn clear(&self) {
@@ -401,7 +432,7 @@ pub fn reach(state: &GalaxyState, origin: SystemId, max_ly: f64) -> Reached {
     found
 }
 
-fn search(state: &GalaxyState, origin: SystemId, max_ly: f64) -> Vec<(SystemId, f64)> {
+fn search(state: &GalaxyState, origin: SystemId, max_ly: f64) -> Vec<(SystemId, f64, u32)> {
     let mut out = Vec::new();
     routes::search(
         state,
@@ -411,7 +442,7 @@ fn search(state: &GalaxyState, origin: SystemId, max_ly: f64) -> Vec<(SystemId, 
             if step.cost > max_ly {
                 return Visit::Stop;
             }
-            out.push((step.system, step.cost));
+            out.push((step.system, step.cost, step.jumps));
             Visit::Expand
         },
     );
@@ -689,7 +720,8 @@ fn choose_route(
     let mut best: Option<(f64, Route)> = None;
     let mut fallback: Option<(f64, SettlementId, u32, bool)> = None;
     let mut considered = 0;
-    for &(system, ly) in reach(state, origin.system, MAX_TRIP_DAYS * class.jump_laden).iter() {
+    for &(system, ly, lanes) in reach(state, origin.system, MAX_TRIP_DAYS * class.jump_laden).iter()
+    {
         let Some(listing) = board.systems.get(&system) else {
             continue;
         };
@@ -719,7 +751,7 @@ fn choose_route(
             if bound <= MIN_PROFIT_PER_DAY || best.as_ref().is_some_and(|(b, _)| bound <= *b) {
                 continue;
             }
-            let leg = leg_days(state, class, here, to, ly);
+            let leg = leg_days(state, class, here, to, ly, lanes);
             if leg > MAX_TRIP_DAYS {
                 continue;
             }
@@ -750,7 +782,7 @@ fn choose_route(
                 .as_ref()
                 .is_none_or(|(b, ..)| capacity.min(surplus) * margin / (2.0 * shortest) > *b)
         {
-            let leg = leg_days(state, class, here, to, ly);
+            let leg = leg_days(state, class, here, to, ly, lanes);
             let per_day = (capacity.min(surplus) * margin - leg * fuel) / (2.0 * leg);
             if leg <= MAX_TRIP_DAYS
                 && per_day > MIN_PROFIT_PER_DAY

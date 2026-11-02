@@ -215,3 +215,93 @@ fn the_bubble_is_deterministic_and_saves() {
     assert_eq!(plain, run(None));
     assert_eq!(plain, run(Some(25)));
 }
+
+/// Coarse trip times are what flying the trip for real takes: on average,
+/// across in-system hops and trips through the lanes.
+#[test]
+fn coarse_trip_times_match_real_flights() {
+    let mut state = warm(60);
+    // The bubble visits each faction's capital in turn.
+    let mut capitals: Vec<_> = state
+        .factions
+        .values()
+        .filter_map(|f| state.settlements.get(f.capital))
+        .map(|s| (s.economy.population, s.system))
+        .collect();
+    capitals.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let capitals: Vec<SystemId> = capitals.into_iter().map(|c| c.1).take(6).collect();
+    // Flights launched from a port in the bubble: their estimate, and the
+    // day they set out.
+    let mut watching: std::collections::BTreeMap<_, (u64, f64, bool)> = Default::default();
+    let (mut local, mut through) = ((0.0, 0.0, 0), (0.0, 0.0, 0));
+    for day in 0..360 {
+        if day % 60 == 0 {
+            let centre = capitals[day / 60 % capitals.len()];
+            bubble::set_centre(&mut state, Some(centre));
+        }
+        let today = state.time.days();
+        tick(&mut state);
+        for (&key, flight) in &state.bubble.flights {
+            if flight.depart.days() == today && !watching.contains_key(&key) {
+                let class = state.companies[key.0]
+                    .fleets
+                    .iter()
+                    .find(|f| f.id == key.1)
+                    .expect("fleet")
+                    .class;
+                let Some(estimate) = haul::trip_days(&state, class, flight.from, flight.to) else {
+                    continue;
+                };
+                let lanes = !flight.path.is_empty();
+                watching.insert(key, (today, estimate, lanes));
+            }
+        }
+        let done: Vec<_> = watching
+            .iter()
+            .filter_map(|(&key, &(day, estimate, lanes))| {
+                let fleet = state
+                    .companies
+                    .get(key.0)?
+                    .fleets
+                    .iter()
+                    .find(|f| f.id == key.1)?;
+                let flight = state.bubble.flights.get(&key);
+                let arrived = match (fleet.at, flight) {
+                    // Docked and sent on again: a new trip.
+                    (Location::Flying { .. }, Some(f)) => f.depart.days() > day,
+                    (Location::Docked(_), _) => true,
+                    _ => return Some((key, None)),
+                };
+                arrived.then(|| (key, Some((state.time.days() - day, estimate, lanes))))
+            })
+            .collect();
+        for (key, trip) in done {
+            watching.remove(&key);
+            if let Some((days, estimate, lanes)) = trip {
+                let sum = if lanes { &mut through } else { &mut local };
+                sum.0 += days as f64;
+                sum.1 += estimate;
+                sum.2 += 1;
+            }
+        }
+    }
+    // Before #72, trips through the lanes took about 1.4 times their
+    // estimate. In-system trips are rare here; check them when there are
+    // enough.
+    assert!(
+        through.2 >= 20,
+        "only {} trips through the lanes",
+        through.2
+    );
+    for (what, (actual, estimate, n)) in [("in-system", local), ("through lanes", through)] {
+        let ratio = actual / estimate;
+        eprintln!("{what}: {n} trips, flown/estimated {ratio:.2}");
+        if n < 5 {
+            continue;
+        }
+        assert!(
+            (0.8..1.25).contains(&ratio),
+            "{what} trips take {ratio:.2} times their estimate"
+        );
+    }
+}
