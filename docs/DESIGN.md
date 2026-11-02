@@ -621,11 +621,14 @@ and the last thing the drive does is brake, so the place you travelled
 to was always directly behind you.
 
 - **The ship turns over at the end of every trip** to face where it was
-  going: the autopilot still brakes the same way (orientation doesn't
-  change the flight), but once the stop is under 1.5 real seconds away
-  the ship swings round, and it finishes the turn as it hands back. The
-  place is the first thing you see. A climb out of a well ends facing the
-  way it's headed next; an intercept ends facing the convoy.
+  going. The autopilot brakes tail-first to a stop as before, then its
+  attitude hold turns the ship round with the ship's own controls: the
+  stick a pilot would hold, through the same turning as hand flight, at
+  the hull's own rates. A nimble ship swings round in a couple of
+  seconds, a heavy one takes longer; no rotation is set by a timer.
+  Touching the stick hands the turn to the pilot. A climb out of a well
+  ends facing the way it's headed next; an intercept ends facing the
+  convoy.
 - **Fast travel to a station stops in docking range**: 1.2 station sizes
   + 200 m from it, inside the [F] dock prompt's reach (1.5 sizes + 400 m)
   and at rest. Arrive, [F] to dock, like [L] at a city planet. It used to
