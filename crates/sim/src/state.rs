@@ -121,14 +121,18 @@ impl GalaxyState {
     /// has a city on it (#112). A city and the port above it are one
     /// settled place, for anything that counts places (pirate gangs).
     pub fn is_port(&self, settlement: &Settlement) -> bool {
-        let crate::Site::Space(orbit) = settlement.site else {
-            return false;
-        };
-        let crate::Orbiting::Body(body) = orbit.parent else {
-            return false;
-        };
         self.settlements_in(settlement.system)
-            .any(|(_, s)| matches!(s.site, crate::Site::Region(r) if self.regions[r].body == body))
+            .any(|(_, s)| self.port_over(settlement, s))
+    }
+
+    /// Whether `port` is a station orbiting the body that `city` is on.
+    pub fn port_over(&self, port: &Settlement, city: &Settlement) -> bool {
+        match (port.site, city.site) {
+            (crate::Site::Space(orbit), crate::Site::Region(r)) => {
+                orbit.parent == crate::Orbiting::Body(self.regions[r].body)
+            }
+            _ => false,
+        }
     }
 
     /// Settled places: settlements, not counting highports.

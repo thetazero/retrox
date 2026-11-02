@@ -24,11 +24,6 @@ const PORT_SHARE: f64 = 0.08;
 /// Orbit radius range, in planet radii.
 const ORBIT_RADII: (f64, f64) = (2.6, 3.2);
 
-/// Whether a settlement is a station above a body that has a city on it.
-pub fn is_port(state: &GalaxyState, settlement: &Settlement) -> bool {
-    state.is_port(settlement)
-}
-
 /// Put a port above every city planet that has nothing in orbit yet: one
 /// per planet, owned by its biggest city.
 pub fn found(rng: &mut Rng, state: &mut GalaxyState) {

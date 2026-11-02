@@ -19,7 +19,6 @@ mod rng;
 mod stars;
 
 pub use fields::{Rock, rocks};
-pub use highports::is_port;
 pub use rng::Rng;
 
 use retrox_sim::{GalaxyState, StarSystem};

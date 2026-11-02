@@ -219,7 +219,7 @@ fn settlement_bits(id: SettlementId) -> u64 {
 }
 
 /// The fields in a system.
-pub fn fields_in(state: &GalaxyState, system: SystemId) -> Vec<FieldId> {
+fn fields_in(state: &GalaxyState, system: SystemId) -> Vec<FieldId> {
     state
         .fields
         .iter()
@@ -229,7 +229,7 @@ pub fn fields_in(state: &GalaxyState, system: SystemId) -> Vec<FieldId> {
 }
 
 /// The gang that lairs in `system`, if any.
-pub fn gang_in(state: &GalaxyState, system: SystemId) -> Option<GangId> {
+fn gang_in(state: &GalaxyState, system: SystemId) -> Option<GangId> {
     state
         .pirates
         .gangs
@@ -636,13 +636,7 @@ fn port_run(state: &GalaxyState, from: SettlementId, to: SettlementId) -> bool {
     let (Some(a), Some(b)) = (state.settlements.get(from), state.settlements.get(to)) else {
         return false;
     };
-    let over = |port: &crate::Settlement, city: &crate::Settlement| match (port.site, city.site) {
-        (crate::Site::Space(orbit), crate::Site::Region(r)) => {
-            orbit.parent == crate::Orbiting::Body(state.regions[r].body)
-        }
-        _ => false,
-    };
-    over(a, b) || over(b, a)
+    state.port_over(a, b) || state.port_over(b, a)
 }
 
 /// `gang` robs fleet `n` of `key`, bound for `to`: takes cargo, and now and
@@ -679,20 +673,7 @@ fn rob(
     let mut alive = true;
     if rng.chance(SHIP_TAKEN) {
         robbery.ships_lost = 1;
-        let fleet = &mut state.companies[key].fleets[n];
-        if fleet.ships > 1 {
-            let share = f64::from(fleet.ships - 1) / f64::from(fleet.ships);
-            fleet.ships -= 1;
-            if let Some(c) = fleet.cargo.as_mut() {
-                let gone = c.amount * (1.0 - share);
-                c.amount -= gone;
-                let good = c.good;
-                state.traffic.add(to, good, -gone);
-            }
-        } else {
-            haul::lose_fleet(state, key, n, to);
-            alive = false;
-        }
+        alive = haul::lose_one_ship(state, key, n, to).1;
     }
     let faction = state
         .companies
