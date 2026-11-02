@@ -5,7 +5,9 @@ use glam::{DQuat, DVec3};
 use retrox_sim::flight::{self, Goal, Kinematics};
 use retrox_sim::ship::ShipStats;
 
-use super::{Controls, FastTravel, Mode, Place, REFERENCE, SECONDS_PER_DAY, World, rock_offset};
+use super::{
+    Controls, FastTravel, Leg, Mode, REFERENCE, SECONDS_PER_DAY, World, rock_offset,
+};
 
 /// Top of the fine-control range, m/s (throttle 0.5).
 pub const COMBAT_SPEED: f64 = 500.0;
@@ -81,12 +83,24 @@ pub fn handling(s: &ShipStats) -> (f64, f64) {
 }
 
 impl World {
-    /// Where the autopilot brings the ship to rest for `place` at galaxy
-    /// day `t`: on the arrival sphere, on the ship's side of it.
-    pub(super) fn fast_travel_goal(&self, place: Place, ship: DVec3, t: f64) -> Goal {
+    /// Where the autopilot brings the ship to rest for `leg` at galaxy
+    /// day `t`. Going to a place: on its arrival sphere, on the ship's side
+    /// of it. Climbing: just past the well's edge, facing where the ship is
+    /// headed next (or straight up from where it is).
+    pub(super) fn fast_travel_goal(&self, leg: Leg, ship: DVec3, t: f64) -> Goal {
+        let place = leg.frame();
         let centre = self.position_at(place, t);
-        let side = (ship - centre).normalize_or(DVec3::Z);
-        let pos = centre + side * self.arrival_distance(place);
+        let up = (ship - centre).normalize_or(DVec3::Z);
+        let (side, distance) = match leg {
+            Leg::To(_) => (up, self.arrival_distance(place)),
+            Leg::Climb { well, toward } => {
+                let side = toward.map_or(up, |next| {
+                    (self.position_at(next, t) - centre).normalize_or(up)
+                });
+                (side, self.well_radius(well) * 1.05)
+            }
+        };
+        let pos = centre + side * distance;
         Goal {
             pos: pos.to_array(),
             vel: self.velocity_at(place, t).to_array(),
@@ -109,7 +123,7 @@ impl World {
         }
     }
 
-    pub(super) fn start_fast_travel(&mut self, target: Place) {
+    pub(super) fn start_fast_travel(&mut self, leg: Leg) {
         let t = self.t_days();
         let pos = self.ship_position();
         let ship = Kinematics {
@@ -120,18 +134,19 @@ impl World {
         // Time it by flying it once ahead: a ship already moving fast (say,
         // just dropped out of another trip) must brake and come back, which
         // can take far longer than the distance alone suggests.
-        let distance = (self.position(target) - pos).length();
+        let goal = self.fast_travel_goal(leg, pos, t);
+        let distance = (DVec3::from_array(goal.pos) - pos).length();
         let accel = self.drive_accel();
         let mut rehearsal = ship;
         let estimate = flight::fly(&mut rehearsal, accel, 1e10, |s, k| {
-            self.fast_travel_goal(target, DVec3::from_array(k.pos), t + s / SECONDS_PER_DAY)
+            self.fast_travel_goal(leg, DVec3::from_array(k.pos), t + s / SECONDS_PER_DAY)
         })
         .unwrap_or_else(|| flight::trip_seconds(distance, accel));
         let real = (2.0 + (distance / 1e7).max(1.0).log10() * 1.2).min(7.0);
         self.ship.spin = DVec3::ZERO;
         self.ship.throttle = 0.0;
         self.mode = Mode::FastTravel(FastTravel {
-            target,
+            leg,
             ship,
             depart_s: self.clock_s,
             warp: estimate / real,
@@ -143,11 +158,11 @@ impl World {
     pub(super) fn fast_travel(&mut self, mut trip: FastTravel, dt: f64) {
         trip.elapsed += dt as f32;
         let t0 = self.t_days();
-        let target = trip.target;
+        let leg = trip.leg;
         let accel = self.drive_accel();
         let arrived = flight::fly(&mut trip.ship, accel, dt * trip.warp, |t, ship| {
             let pos = DVec3::from_array(ship.pos);
-            self.fast_travel_goal(target, pos, t0 + t / SECONDS_PER_DAY)
+            self.fast_travel_goal(leg, pos, t0 + t / SECONDS_PER_DAY)
         });
         // Galaxy time passes by exactly as long as the ship flew.
         self.advance_clock(arrived.unwrap_or(dt * trip.warp));
@@ -155,7 +170,7 @@ impl World {
         let vel = DVec3::from_array(trip.ship.vel);
         // Face the way the drive is pushing: out along the route, then
         // flipped round to brake.
-        let goal = self.fast_travel_goal(target, pos, self.t_days());
+        let goal = self.fast_travel_goal(leg, pos, self.t_days());
         let thrust = DVec3::from_array(flight::autopilot(&trip.ship, &goal, accel, 1.0));
         if thrust.length() > accel * 0.1 {
             let k = 1.0 - (-4.0 * dt).exp();
@@ -165,7 +180,7 @@ impl World {
         self.ship.rel = pos;
         self.ship.vel = vel;
         match arrived {
-            Some(_) => self.arrive_fast_travel(target),
+            Some(_) => self.arrive_fast_travel(leg),
             None => self.mode = Mode::FastTravel(trip),
         }
     }
@@ -188,13 +203,16 @@ impl World {
         self.say(format!("Dropped out of fast travel at {speed:.0} km/s"));
     }
 
-    pub(super) fn arrive_fast_travel(&mut self, target: Place) {
+    pub(super) fn arrive_fast_travel(&mut self, leg: Leg) {
         // At rest relative to the target, within a few m/s: carry on from
         // exactly there.
-        self.enter_frame(target);
+        self.enter_frame(leg.frame());
         self.mode = Mode::Normal;
-        let name = self.name(target);
-        self.say(format!("Arrived at {name}"));
+        let name = self.name(leg.frame());
+        self.say(match leg {
+            Leg::To(_) => format!("Arrived at {name}"),
+            Leg::Climb { .. } => format!("Clear of the gravity well of {name}"),
+        });
     }
 
     pub(super) fn steer(&mut self, dt: f64, c: Controls) {

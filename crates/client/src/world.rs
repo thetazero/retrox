@@ -10,10 +10,13 @@
 //!    control up to [`COMBAT_SPEED`]; the upper half ramps up to
 //!    [`CRUISE_SPEED`] for crossing gravity wells. One flight model.
 //! 2. *Fast travel*: the sim's [`flight`] autopilot flies the ship to a
-//!    nav target while time runs faster, only from outside every gravity
-//!    well. Same physics as every other ship, so the trip takes as long as
-//!    the flight does. You arrive at the edge of the target's well (or near
-//!    a station or field); press J again to drop out anywhere.
+//!    nav target while time runs faster. Same physics as every other ship,
+//!    so the trip takes as long as the flight does. You arrive at the edge
+//!    of the target's well, low over a planet with a city on it, or near a
+//!    station or field; press J again to drop out anywhere. Inside a
+//!    gravity well the autopilot only flies within it: down to what's in
+//!    it, or up and out to its edge (a *climb*), where the ship stops
+//!    (DESIGN §7.1.1).
 //! 3. *Hyperlane travel*: to a neighbouring system, also only from outside
 //!    gravity wells. Days pass.
 //!
@@ -59,6 +62,11 @@ const SOLAR_RADIUS_M: f64 = 6.957e8;
 
 /// Gravity wells extend this many radii from the centre of a star or body.
 pub const WELL_RADII: f64 = 4.0;
+/// A city can be landed at from within this many radii of its planet.
+pub const LANDING_RADII: f64 = 2.0;
+/// Fast travel to a planet with a city on it stops this many radii out:
+/// low enough to land straight away.
+pub const APPROACH_RADII: f64 = 1.6;
 pub use pilot::{COMBAT_SPEED, STRAFE_SPEED, assist, handling, look_rotation, steer};
 
 /// Real seconds the hyperlane sequence plays for.
@@ -148,9 +156,28 @@ pub enum Mode {
     },
 }
 
+/// Where a fast-travel leg goes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Leg {
+    /// To a place, stopping at its [`World::arrival_distance`].
+    To(Place),
+    /// Up and out of a gravity well, stopping just past its edge: on the
+    /// side facing `toward` if that's somewhere outside, else straight up.
+    Climb { well: Place, toward: Option<Place> },
+}
+
+impl Leg {
+    /// The place the ship comes to rest by, and carries on in the frame of.
+    pub fn frame(self) -> Place {
+        match self {
+            Leg::To(place) | Leg::Climb { well: place, .. } => place,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FastTravel {
-    pub target: Place,
+    pub leg: Leg,
     /// The ship in the star's frame, flown by the autopilot.
     pub ship: Kinematics,
     /// Galaxy clock at departure.
@@ -254,6 +281,9 @@ pub struct Prompts {
     /// The gravity well the ship is in, if any.
     pub well: Option<Place>,
     pub fast_travel: Option<Place>,
+    /// The well [J] would climb out of, when there's nowhere in it to
+    /// fast travel to.
+    pub climb: Option<Place>,
 }
 
 pub struct World {
@@ -526,9 +556,15 @@ impl World {
         }
     }
 
+    /// Whether a body has a city to land at.
+    pub fn has_city(&self, body: BodyId) -> bool {
+        self.view.cities.iter().any(|&(_, b)| b == body)
+    }
+
     /// Where fast travel to `place` stops, measured from its centre.
     pub fn arrival_distance(&self, place: Place) -> f64 {
         match place {
+            Place::Body(b) if self.has_city(b) => self.place_radius(place) * APPROACH_RADII,
             Place::Star | Place::Body(_) => self.well_radius(place) * 1.05,
             Place::Field(_) => self.place_radius(place) + 10e3,
             Place::Station(_) => 20e3,
@@ -543,6 +579,13 @@ impl World {
             .filter(|p| matches!(p, Place::Star | Place::Body(_)))
             .filter(|p| (self.position(*p) - pos).length() < self.well_radius(*p))
             .min_by(|a, b| self.well_radius(*a).total_cmp(&self.well_radius(*b)))
+    }
+
+    /// Whether fast travel to `place` would stop inside `well`: the
+    /// autopilot may fly there without climbing out first.
+    pub fn arrives_within(&self, place: Place, well: Place) -> bool {
+        let from_centre = (self.position(place) - self.position(well)).length();
+        from_centre + self.arrival_distance(place) < self.well_radius(well)
     }
 
     pub fn distance_to(&self, place: Place) -> f64 {
@@ -562,15 +605,23 @@ impl World {
             }
         }
         for &(city, body) in &self.view.cities {
-            if self.distance_to(Place::Body(body)) < self.place_radius(Place::Body(body)) * 2.0 {
+            let reach = self.place_radius(Place::Body(body)) * LANDING_RADII;
+            if self.distance_to(Place::Body(body)) < reach {
                 p.land = Some((city, body));
             }
         }
         p.well = self.current_well();
-        if p.well.is_none() && self.hostiles_near() == 0 {
-            p.fast_travel = self
-                .target
-                .filter(|&t| self.distance_to(t) > self.arrival_distance(t) * 1.2);
+        if self.hostiles_near() == 0 {
+            // Inside a well the autopilot only flies within it (DESIGN
+            // §7.1.1): down to what's in it, or else up and out.
+            let well = p.well;
+            p.fast_travel = self.target.filter(|&t| {
+                self.distance_to(t) > self.arrival_distance(t) * 1.2
+                    && well.is_none_or(|well| self.arrives_within(t, well))
+            });
+            if p.fast_travel.is_none() {
+                p.climb = well;
+            }
         }
         p
     }
@@ -604,16 +655,14 @@ impl World {
                 };
                 self.target = Some(next);
             }
-            Action::FastTravel => match (self.mode, prompts.fast_travel, prompts.well) {
+            Action::FastTravel => match (self.mode, prompts.fast_travel, prompts.climb) {
                 (Mode::Normal, _, _) if self.hostiles_near() > 0 => {
                     self.say("Can't fast travel: hostiles within 20 km");
                 }
-                (Mode::Normal, Some(target), _) => self.start_fast_travel(target),
+                (Mode::Normal, Some(target), _) => self.start_fast_travel(Leg::To(target)),
                 (Mode::Normal, None, Some(well)) => {
-                    let name = self.name(well);
-                    self.say(format!(
-                        "Can't fast travel inside the gravity well of {name}"
-                    ));
+                    let toward = self.target.filter(|&t| t != well);
+                    self.start_fast_travel(Leg::Climb { well, toward });
                 }
                 (Mode::Normal, None, None) => self.say("Select a target to fast travel"),
                 (Mode::FastTravel(trip), _, _) => self.drop_out(trip),

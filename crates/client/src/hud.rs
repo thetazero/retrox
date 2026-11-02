@@ -15,7 +15,7 @@ pub(crate) mod guide;
 mod map;
 mod mining;
 
-use crate::world::{AU, Action, COMBAT_SPEED, Mode, Place, SECONDS_PER_DAY, World};
+use crate::world::{AU, Action, COMBAT_SPEED, Leg, Mode, Place, SECONDS_PER_DAY, World};
 
 /// Enamel cream: body text and rules.
 pub(crate) const CREAM: Color32 = Color32::from_rgb(234, 222, 196);
@@ -322,14 +322,11 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
         ));
     }
     if w.mode == Mode::Normal && w.combat.lost.is_none() {
-        match (prompts.fast_travel, prompts.well, w.target) {
-            (Some(t), _, _) => lines.push((Some("J"), format!("fast travel to {}", w.name(t)))),
-            (None, Some(well), Some(_)) => lines.push((
-                None,
-                format!(
-                    "fast travel and jumps: leave the gravity well of {} first",
-                    w.name(well)
-                ),
+        match (prompts.fast_travel, prompts.climb) {
+            (Some(t), _) => lines.push((Some("J"), format!("fast travel to {}", w.name(t)))),
+            (None, Some(well)) => lines.push((
+                Some("J"),
+                format!("climb out of the gravity well of {}", w.name(well)),
             )),
             _ => {}
         }
@@ -474,15 +471,24 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
             }
             let days = (w.clock_s - trip.depart_s) / SECONDS_PER_DAY;
             let km_s = w.ship.vel.length() / 1000.0;
-            let au = w.distance_to(trip.target) / AU;
+            let (title, detail) = match trip.leg {
+                Leg::To(place) => {
+                    let au = w.distance_to(place) / AU;
+                    ("Fast travel", format!("{} · {au:.2} AU", w.name(place)))
+                }
+                Leg::Climb { well, .. } => {
+                    let out = (w.well_radius(well) - w.distance_to(well)).max(0.0) / 1000.0;
+                    (
+                        "Climbing out",
+                        format!("gravity well of {} · {out:.0} km to the edge", w.name(well)),
+                    )
+                }
+            };
             title_card(
                 &painter,
                 c + Vec2::new(0.0, -screen.height() * 0.3),
-                "Fast travel",
-                &format!(
-                    "{} · {au:.2} AU · {km_s:.0} km/s · {days:.1} d · J drop out",
-                    w.name(trip.target)
-                ),
+                title,
+                &format!("{detail} · {km_s:.0} km/s · {days:.1} d · J drop out"),
                 CREAM,
             );
         }
