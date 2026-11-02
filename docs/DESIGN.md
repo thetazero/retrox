@@ -389,6 +389,26 @@ rather than space bugs.
 - An **activity**, not a timer: fracture asteroids, cut into them, collect
   chunks, manage heat/hold.
 - First thing a new player does; must feel good on its own.
+- **Gear:** a *mining laser* is a module for a weapon slot (the starting
+  courier has one in its chin mount). Its cut rate and reach come from the
+  module; its heat is a gauge of its own, shed by the ship's radiators.
+  Run it to the top and it locks out while it vents.
+- **Prospect:** a ping reads every rock nearby: ore or ice, a grade (A–D),
+  volatile or not, and its *veins* glow on the surface. Rocks you cut are
+  read too.
+- **Cut:** the laser cuts four times as fast on a vein and runs cooler
+  there, and a rock fractured through a vein yields half as much again.
+  Rocks spin, so veins turn away; the skill is chasing them.
+- **Fracture:** rocks up to ~60 m split into smaller rocks and shed ore
+  chunks; the smallest crumble. Bigger rocks are **quarries**: each
+  fracture calves a boulder off where the laser hit, until the quarry is
+  worked out. **Volatile** rocks are richer but burst when they fracture,
+  scattering ore and shoving the ship.
+- **Collect:** a tractor pulls loose chunks into the hold (as the market
+  goods ore and ice) when you fly close; when the hold is full, they stay
+  floating. Sell at any market.
+- Fields remember: broken and worked rocks stay that way for ~120 galaxy
+  days, then the field is whole again.
 
 ### 7.4 Ships
 
@@ -419,6 +439,39 @@ rather than space bugs.
 
 - Own multiple ships, hire faceless NPC captains, assign automated trade
   routes. Stations later.
+
+### 7.5.1 Freight contracts
+
+Hour-to-hour work for the Trader path (§2), drawn from the economy, never
+from a random generator (pillar 5).
+
+- **Where they come from.** A settlement's dispatch board pairs a good it
+  can spare with a settlement within 5 jumps that is short of it,
+  counting what traders already have on the way. A consignee posts
+  once it holds less than 75% of its target, and the origin releases
+  stock only down to 75% of its own target, so goods always flow from
+  fuller markets to emptier ones. Lots are sized to the player's hold.
+  A board holds 8 contracts at most, 2 per destination, best pay per day
+  first. Boards change daily as markets do; some days a port has nothing.
+- **Who pays, and what.** The consignee buys the goods at the origin's
+  price and pays the fee from its own treasury: the price gap between
+  the two markets, its faction's delivery premium if planned (the same
+  premium NPC haulers earn), and freight for the expected trip (a rate
+  per tonne-day plus the crew's wage), scaled up by how short it is. It
+  only commits what it can afford.
+- **Deposit.** Taking a contract costs a deposit of the cargo's value,
+  returned on delivery. Contract cargo rides in the hold but can't be
+  sold.
+- **Deadlines** allow 1.5× the expected trip (jumps plus ~3 days per
+  system). Each day late takes 10% off the fee. Ten days late, or
+  abandoned, the contract fails: the consignee keeps the deposit and its
+  fee, and the goods are the player's to sell. No reputation cost yet;
+  that comes with faction reputation (milestone 5).
+- **Delivery** happens on docking or landing at the consignee. Waiting
+  while docked stops on the day a contract falls due (§3).
+- **The client starts 30 days after generation**, so markets have
+  drifted off their generated targets and the first board has work on
+  it. Prehistory (§4.2) will replace this warm-up.
 
 ### 7.6 Planets
 
@@ -452,6 +505,21 @@ Inspiration, not imitation — fictional throughout.
   film grain, period film-stock color grading.
 - **Audio:** analog-synth score, radio static and crackle on comms, heavy
   mechanical sounds for docking, switches, and hull stress.
+
+### 8.1 Ship models and liveries
+
+Decided while hand-building every hull (PR #86):
+
+- **No reused models** (the user's ruling): every hull has its own design.
+  Large hulls are not scaled-up medium ones, and each framed hull has its
+  own version of every section type. Only module parts (gun barrels, radar
+  dishes, engine bells, radiator panels) are shared between hulls.
+- **Liveries by role:** courier cream and red; trader and hauler worn
+  mustard with hazard stripes; interceptor, gunship and frigate gunmetal
+  or olive with red accents; blockade runner matte dark; express freighter
+  a cream airliner livery with a cheatline; bulk freighter oxide red;
+  racer cream and sky blue.
+- Stencilled seven-segment hull numbers, and weathering on enamel paint.
 
 ## 9. Technical architecture
 
@@ -540,7 +608,6 @@ retrox/
 - Exact target pace (galaxy months per play-hour) — tune after milestone 3.
 - Capital-ship combat design in detail.
 - Nature of the aliens and the semi-scripted anomalies/discoveries.
-- Mining activity mechanics in detail.
 - Faction count and size at generation; agent budget in the bubble.
 - Gamepad support / control scheme.
 - Does the player's character age over a ~30-year save? (Probably ignored.)

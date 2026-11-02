@@ -9,9 +9,8 @@ use crate::render::{Instance, MeshId, SkyVertex, Surface};
 
 /// The star's light: a warm G.
 pub const STAR: [f32; 3] = [1.0, 0.9, 0.74];
-/// Direction to the galactic core, and how far out we are.
-pub const CORE: Vec3 = Vec3::new(-0.62, 0.2, -0.76);
-pub const CORE_OUT: f32 = 0.55;
+/// Direction to the made-up galaxy's core.
+const CORE: Vec3 = Vec3::new(-0.62, 0.2, -0.76);
 
 /// Where the light comes from: behind the planet, up and to the left, so
 /// the world is a crescent with the dawn on its upper-left limb.
@@ -115,9 +114,11 @@ pub fn sky() -> Vec<SkyVertex> {
         .cross(Vec3::new(0.0, 1.0, 0.25))
         .cross(core)
         .normalize();
-    let mut stars = Vec::with_capacity(5000);
-    for i in 0..5000 {
-        let in_band = i % 3 != 0;
+    let mut stars = Vec::with_capacity(30_000);
+    for i in 0..30_000 {
+        // The band is the many faint stars adding up (the renderer draws
+        // no glow of its own).
+        let in_band = i % 8 != 0;
         let dir = loop {
             let v = Vec3::new(rand() * 2.0 - 1.0, rand() * 2.0 - 1.0, rand() * 2.0 - 1.0);
             if v.length_squared() <= 1.0 && v.length_squared() > 1e-4 {
@@ -133,7 +134,7 @@ pub fn sky() -> Vec<SkyVertex> {
         };
         let toward_core = dir.dot(core).max(0.0);
         let brightness = if in_band {
-            0.15 + rand().powi(3) * 0.9 + toward_core * 0.25
+            0.08 + rand().powi(4) * 0.6 + toward_core.powi(2) * 0.35
         } else {
             0.2 + rand().powi(6) * 4.0
         };

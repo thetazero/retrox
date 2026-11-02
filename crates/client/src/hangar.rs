@@ -53,6 +53,9 @@ pub struct Player {
     pub stored: Vec<StoredShip>,
     /// Goods in the hold of the ship being flown, tonnes.
     pub cargo: GoodMap<f64>,
+    /// Freight contracts taken and not yet delivered. Their goods ride in
+    /// the hold too, but aren't the player's to sell.
+    pub contracts: Vec<crate::contracts::Contract>,
     /// Ships bought so far, for naming.
     bought: u32,
 }
@@ -68,13 +71,19 @@ impl Player {
             },
             stored: Vec::new(),
             cargo: GoodMap::default(),
+            contracts: Vec::new(),
             bought: 1,
         }
     }
 
-    /// Tonnes in the hold.
+    /// Tonnes in the hold, the player's own goods and contract cargo.
     pub fn cargo_t(&self) -> f64 {
-        self.cargo.0.iter().sum()
+        self.cargo.0.iter().sum::<f64>() + self.contract_t()
+    }
+
+    /// Tonnes in the hold under contract.
+    pub fn contract_t(&self) -> f64 {
+        self.contracts.iter().map(|c| c.offer.amount).sum()
     }
 }
 

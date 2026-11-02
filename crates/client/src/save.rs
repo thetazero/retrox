@@ -26,6 +26,7 @@ use retrox_sim::{BodyId, GalaxyState, SettlementId, SystemId};
 use serde::{Deserialize, Serialize};
 
 use crate::hangar::Player;
+use crate::mining::Mining;
 use crate::world::{Mode, Place, Ship, World};
 
 /// Bump whenever a change to the client's or the sim's saved state would
@@ -104,7 +105,7 @@ enum SavedMode {
 }
 
 /// The player's side of a save.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct PlayerState {
     system: SystemId,
     /// Galaxy seconds, exactly (floats round-trip; see the workspace's
@@ -116,6 +117,9 @@ struct PlayerState {
     course: Option<SystemId>,
     cockpit: bool,
     player: Player,
+    /// What the mining laser has done to every field, and the haul.
+    #[serde(default)]
+    mining: Mining,
     played_s: f64,
 }
 
@@ -205,6 +209,7 @@ pub fn snapshot(
         course: world.course,
         cockpit: world.cockpit,
         player: world.player.clone(),
+        mining: world.mining.clone(),
         played_s,
     };
     let err = |e: serde_json::Error| format!("couldn't write the save: {e}");
@@ -275,6 +280,7 @@ pub fn decode(bytes: &[u8]) -> Result<Loaded, String> {
     world.target = state.target;
     world.course = state.course;
     world.cockpit = state.cockpit;
+    world.mining = state.mining;
     Ok(Loaded {
         header,
         world,
@@ -418,6 +424,35 @@ pub fn played(seconds: f64) -> String {
     }
 }
 
+/// A map saved as a list of pairs (JSON map keys must be strings), sorted
+/// by key so the same state always saves the same.
+pub mod pairs {
+    use std::collections::HashMap;
+    use std::hash::Hash;
+
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<K, V, S>(map: &HashMap<K, V>, s: S) -> Result<S::Ok, S::Error>
+    where
+        K: Serialize + Ord,
+        V: Serialize,
+        S: Serializer,
+    {
+        let mut pairs: Vec<(&K, &V)> = map.iter().collect();
+        pairs.sort_by(|a, b| a.0.cmp(b.0));
+        s.collect_seq(pairs)
+    }
+
+    pub fn deserialize<'de, K, V, D>(d: D) -> Result<HashMap<K, V>, D::Error>
+    where
+        K: Deserialize<'de> + Eq + Hash,
+        V: Deserialize<'de>,
+        D: Deserializer<'de>,
+    {
+        Ok(Vec::<(K, V)>::deserialize(d)?.into_iter().collect())
+    }
+}
+
 /// A ship's fit as the ids of its hull, sections and modules, so saves
 /// don't depend on the order of anything in `retrox-content`.
 pub mod loadout {
@@ -522,6 +557,11 @@ mod tests {
     /// state: cargo, a refitted ship, a ship in storage, money spent.
     fn game_in_progress() -> World {
         let mut world = World::new(3);
+        // A hauler, with room for a contract's freight and some ore.
+        world.player.ship.fit = retrox_content::ships::stock("hauler").unwrap();
+        // A contract off the capital's board, before moving on.
+        world.act(Action::AcceptContract(0));
+        assert_eq!(world.player.contracts.len(), 1, "took a contract");
         world.start_at_station();
         world.act(Action::Wait(5));
         let here = world.docked_at().expect("docked");
@@ -591,6 +631,33 @@ mod tests {
             w.act(Action::Wait(30));
         }
         assert_same(&world, &replay);
+    }
+
+    #[test]
+    fn mining_survives_a_save() {
+        let mut world = World::new(3);
+        assert!(world.start_at_field(), "seed 3 has a field to start in");
+        world.act(Action::Scan);
+        for _ in 0..600 {
+            world.update(
+                1.0 / 30.0,
+                Controls {
+                    fire: true,
+                    ..Controls::default()
+                },
+            );
+        }
+        let snap = snapshot(&world, &GameId::new(3), Kind::Save, 0.0).unwrap();
+        let loaded = decode(&snap.encode()).unwrap().world;
+        let field = world.field_rocks.as_ref().expect("in a field").0;
+        assert_eq!(loaded.field_rocks.as_ref().map(|f| f.0), Some(field));
+        let json = |w: &World| serde_json::to_string(&w.mining).unwrap();
+        assert!(
+            world.mining.field(field).is_some(),
+            "the laser did something"
+        );
+        assert_eq!(json(&world), json(&loaded));
+        assert_eq!(world.mining.haul, loaded.mining.haul);
     }
 
     #[test]
