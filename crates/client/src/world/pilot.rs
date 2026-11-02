@@ -6,7 +6,7 @@ use retrox_sim::flight::{self, Goal, Kinematics};
 use retrox_sim::ship::ShipStats;
 
 use super::{
-    Controls, FastTravel, Leg, Mode, REFERENCE, SECONDS_PER_DAY, World, rock_offset,
+    Controls, FastTravel, Leg, Mode, Place, REFERENCE, SECONDS_PER_DAY, World, rock_offset,
 };
 
 /// Top of the fine-control range, m/s (throttle 0.5).
