@@ -38,9 +38,10 @@ pub struct GalaxyState {
     pub calendar: crate::haul::Calendar,
     /// Cargo on its way to each market.
     pub traffic: crate::haul::Traffic,
-    /// Each system's best buyers and sellers, rebuilt in place every trade
-    /// phase; see [`crate::haul`].
-    #[serde(skip)]
+    /// What traders choose routes from: each system's best buyers and
+    /// sellers today, and its monthly trade lists; see
+    /// [`crate::haul::Board`].
+    #[serde(default)]
     pub(crate) board: crate::haul::Board,
     /// Remembered lane distances; see [`crate::haul::ReachCache`].
     #[serde(skip)]
