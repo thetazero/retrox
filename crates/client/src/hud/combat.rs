@@ -7,7 +7,6 @@ use glam::DVec3;
 
 use super::{
     ALARM, AMBER, CREAM_DIM, HudInput, INK, VFD, VFD_DIM, brackets, distance, mono, project,
-    title_card,
 };
 use crate::combat::Tactic;
 use crate::world::{Mode, World};
@@ -86,19 +85,9 @@ pub fn draw(ctx: &egui::Context, h: &HudInput) {
     let painter = ctx.layer_painter(egui::LayerId::background());
     let c = &w.combat;
 
-    if let Some(t) = c.lost {
-        // The ship is gone.
-        let k = ((t - 0.8) / 1.5).clamp(0.0, 1.0) as f32;
-        painter.rect_filled(screen, 0.0, Color32::from_black_alpha((150.0 * k) as u8));
-        if t > 1.2 {
-            title_card(
-                &painter,
-                screen.center() - Vec2::new(0.0, 40.0),
-                "Ship lost",
-                "Enter: restore the last checkpoint · Esc: menu",
-                ALARM,
-            );
-        }
+    if c.lost.is_some() {
+        // The ship is gone: the card over the wreck is drawn with the
+        // restore (see `crate::lost`).
         return;
     }
 

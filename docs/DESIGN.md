@@ -467,6 +467,32 @@ rather than space bugs.
 - Supercruise for in-system travel; hyperlane jumps between systems.
 - Interdiction can pull ships out of supercruise (piracy, patrols).
 
+#### 7.1.1 Gravity wells and planet stops (#95)
+
+A planet city stop used to cost about five real minutes of plain flying:
+in from the well's edge to landing range, and back out again, at the
+150 km/s cruise cap. Wells now cost **galaxy time and a stop**, not real
+minutes (pillar 4):
+
+- **Fast travel to a planet with a city stops low over it**, at 1.6
+  radii, inside the 2-radii landing range: arrive, [L] to land. Planets
+  without a city still stop just past their well's edge.
+- **Inside a gravity well the autopilot only flies within it**: down to
+  anything whose arrival point is in the same well (the planet's city, a
+  station in orbit), or else **up and out**: [J] climbs the ship to just
+  past the well's edge and stops it there, on the side facing the
+  selected target. A second [J] goes on. A climb is fast travel in every
+  other way: the shared autopilot flying the real flight model under
+  sped-up time, interceptable, droppable with [J], refused with hostiles
+  near.
+- **Jumps still need open space**, and a trip that leaves a well always
+  breaks at its edge. That stop, the galaxy time the climb takes, and the
+  fact that every launch starts inside one are what make wells matter.
+- Flying out by hand still works, for anyone who wants to.
+
+A planet stop now takes about as long as a station stop: a few seconds
+of autopilot each way plus the landing sequence.
+
 ### 7.2 Combat
 
 - Small/medium ships: direct dogfighting.
@@ -527,7 +553,7 @@ rather than space bugs.
   lasers, an electric fizz on the shield, a metal clang and hull creak
   when shots get through, and the volatile-rock blast for ships going up.
 - **Losing the ship** shows a "ship lost" card and restores the last
-  checkpoint (§7.7); everything else about death is its own issue.
+  checkpoint (§7.7.1).
 
 ### 7.3 Mining
 
@@ -601,7 +627,7 @@ from a random generator (pillar 5).
 - **Who pays, and what.** The consignee buys the goods at the origin's
   price and pays the fee from its own treasury: freight for the expected
   trip (a rate per tonne-day plus the crew's wage, both the galaxy's own
-  hauler upkeep), scaled up by how short it is. The price gap and a
+  hauler upkeep): a wage, not a profit. The price gap and a
   planned faction's delivery premium go to traders, not to a captain
   carrying someone else's goods (§7.8). It only commits what it can
   afford.
@@ -623,6 +649,8 @@ from a random generator (pillar 5).
 
 - No seamless landing. Planets have **predefined landing points**; landing
   plays an animation and opens the location's UI.
+- Fast travel brings the ship into landing range of a planet's city, and
+  [J] climbs back out after launch (§7.1.1).
 
 ### 7.7 Death
 
@@ -630,6 +658,40 @@ from a random generator (pillar 5).
   autosave). Because the game is deterministic, the same future plays out
   again unless you act differently — what you learned before dying is
   yours to use.
+
+#### 7.7.1 Losing the ship, as built (#78)
+
+- **The same future, really.** A checkpoint is written on docking or
+  landing, and a ship at rest in a dock or city is exactly what a loaded
+  checkpoint has: cool, shields up, guns ready, nothing in flight. So
+  nothing left over from before the dock (gun cooldowns, heat, an earlier
+  fight's dice) changes what comes after it. Each fight's own dice (shot
+  scatter, wreckage) are also reseeded from the band when it comes out,
+  so a fight is decided by the field, the date and what the player does
+  from then on. A test plays a lost fight from a checkpoint twice, frame
+  by frame, and they match to the bit; flying differently changes it.
+- **The moment.** The instruments die with the ship: the HUD goes, and
+  the camera draws back and round from the fireball in its last roll,
+  the view darkening at the edges. After 1.6 s a red constructivist band
+  slams across the view, **SHIP LOST** in display type with the ship's
+  name plate riveted beside it, over a panel of readouts: when and where
+  it was destroyed (alarm red), the last checkpoint's date and place
+  (teal), and how much time going back costs (amber, "1 d 04 h
+  earlier"). A falling two-note synth tone, like a station signing off,
+  plays under it.
+- **The choice is the player's.** No automatic restore: Enter or the red
+  key restores; Esc opens the pause menu (whose Load page has every save
+  and checkpoint). Without a checkpoint the key reads *title screen*.
+- **The rewind.** Restoring rolls the tape back rather than cutting: film
+  runs backwards through the gate (frame lines, sprocket holes,
+  scratches, grain, an unsteady projector lamp) behind a reel-to-reel
+  transport plate whose drum counter rolls the galaxy date and hour back
+  to the checkpoint's, with a tape-rewind whine ending in the brake's
+  clunk. It lasts at least 2.8 s and the checkpoint loads behind it.
+  Then the black lifts off the dock with **CHECKPOINT RESTORED** and the
+  place and date.
+- Saves' headers carry the exact galaxy clock (for the counter); older
+  headers without it still load.
 
 ### 7.8 Earnings and progression
 
@@ -649,16 +711,18 @@ the sim's own numbers:
 - **A new pilot owns the courier and 2 000 cr.** That covers a first
   contract's deposit or a hold of cargo, not another ship. (It was
   25 000 cr, which bought any medium ship on day one.)
-- **A contract pays carriage.** Its fee is freight for the trip at the
-  galaxy's own hauler upkeep: 0.02 cr per tonne-day plus a crew's 2 cr a
-  day, scaled up by how short the consignee is (§7.5.1). The price gap
+- **A contract pays carriage.** Its fee is the hauler's keep for the
+  trip at the galaxy's own upkeep rates: 0.02 cr per tonne-day plus a
+  crew's 2 cr a day (§7.5.1). How short the consignee is decides whether
+  it posts and how the board is ordered, not the pay. The price gap
   between the two markets, and a planned faction's delivery premium,
   belong to whoever buys the goods and carries them at their own risk:
   a trader, or an NPC hauler. So each career earns from its own thing:
   contracts from hauling, trading from price gaps, mining from what it
-  digs. Contracts used to pay the gap and the premium too, at 3 cr/t-day
-  and 30 cr/day (50–150× NPC upkeep), so a courier on contracts made
-  35–78k cr/h while mining made 1–3k, and nobody would mine.
+  digs. Contracts used to pay the gap, the premium and a shortage
+  markup too, at 3 cr/t-day and 30 cr/day (50–150× NPC upkeep), so a
+  courier on contracts made 35–78k cr/h while mining made 1–3k, and
+  nobody would mine.
 - **Mining is unchanged:** ore sells at its market price. A faster laser
   or a longer tractor barely moves it (+0–15% in the bench). In a courier
   the 12 t hold forces ~25 station trips an hour, and gluts at the local
@@ -677,13 +741,13 @@ somewhat less, contracts most of all (the bot reads a board instantly).
 | Career, ship | cr per hour (seeds 1–4) |
 |---|---|
 | Mining, courier (12 t, light laser) | 1 950 · 2 990 · 970 · 1 670 |
-| Freight contracts, courier | 4 940 · 3 540 · 5 350 · 3 730 |
-| Trading, courier | 10 060 · 1 570 · 6 580 · −1 010 |
+| Freight contracts, courier | 2 840 · 3 920 · 2 340 · 2 530 |
+| Trading, courier | 16 510 · 4 360 · 8 920 · −980 |
 | Mining, gunship refit (180 t, 2 lasers) | 1 520 · 8 080 · 1 120 · 1 720 |
-| Freight contracts, hauler (360 t) | 13 100 · 12 900 · 10 850 · 11 300 |
-| Trading, hauler | 23 400 · 6 920 · 15 070 · 5 290 |
+| Freight contracts, hauler (360 t) | 8 900 · 7 180 · 7 620 · 8 210 |
+| Trading, hauler | 27 280 · 9 870 · 17 110 · 7 470 |
 
-In a courier, contracts earn about 2.3× mining on average (1.2× to 5.5×
+In a courier, contracts earn about 1.5× mining on average (1.3× to 2.4×
 by seed). Mining needs no capital and never meets a bare board. Trading
 pays best and swings most. Planned economies hold one price everywhere,
 so the money is in market space and across the border (§5.4). A trader
@@ -694,15 +758,11 @@ out, which a player has to learn.
 6 180, light trader 6 590, heavy fighter 10 150; blockade runner 38 800,
 hauler 41 200, gunship 50 500; express freighter 243 000, bulk freighter
 302 000, frigate 413 000. From the courier and 2 000 cr, the light
-trader (twice the hold) is 1–2 hours of contracts or 2–4 of mining away;
-a medium ship is ~10 hours of contracts or ~20 of mining. A medium
-freighter on contracts takes ~20 hours to buy a large ship, which leaves
-fleets and capital ships (§7.5) the rest of the ~100-hour arc (§2).
-
-**Still open:** a planet city costs ~5 minutes of plain flying per visit
-(down from the fast-travel stop at the well's edge, and back out). That
-taxes every career that sells at a city, so a miner sets up by a station.
-It's a flight issue, not an earnings one.
+trader (twice the hold) is about 2 hours of contracts or 2–4 of mining
+away; a medium ship is ~15–20 hours of either, less for a good trader. A
+medium freighter on contracts takes ~30 hours to buy a large ship (a
+trader, half that), which leaves fleets and capital ships (§7.5) the
+rest of the ~100-hour arc (§2).
 
 ## 8. Art direction & audio
 

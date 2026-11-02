@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::world::{Mode, Place, Screen, World};
+use crate::world::{Leg, Mode, Place, Screen, World};
 
 /// What the player has done at least once, for the first-steps notes.
 /// Kept with the player in saves.
@@ -171,11 +171,15 @@ pub fn hint(w: &World) -> Option<String> {
         });
     }
     match w.mode {
-        Mode::FastTravel(_) => {
-            return Some(
-                "Fast travel flies you there for real while time runs fast. [J] drops out early."
+        Mode::FastTravel(trip) => {
+            return Some(match trip.leg {
+                Leg::To(_) => "Fast travel flies you there for real while time runs fast. [J] \
+                               drops out early."
                     .into(),
-            );
+                Leg::Climb { .. } => "Climbing out of the gravity well: the autopilot stops at \
+                                      its edge, where you can jump or fast travel on."
+                    .into(),
+            });
         }
         Mode::Normal => {}
         _ => return None,
@@ -215,8 +219,7 @@ pub fn hint(w: &World) -> Option<String> {
                      {there} to plot a course."
                 ),
                 (true, Some(well)) => format!(
-                    "Leave the gravity well of {well} to jump: throttle up with [W] and fly \
-                     away from it."
+                    "Jumps need open space: [J] to climb out of the gravity well of {well}."
                 ),
                 (true, None) => "Clear to jump: press JUMP on the ▶ lane in HYPERLANES.".to_owned(),
             });
@@ -244,8 +247,8 @@ pub fn hint(w: &World) -> Option<String> {
     }
     if let Some(well) = well {
         return Some(format!(
-            "Fast travel works outside gravity wells: throttle up with [W] and fly away from \
-             {well}."
+            "{name} is outside the gravity well of {well}: [J] to climb out, then [J] again \
+             to fast travel."
         ));
     }
     Some(match target {

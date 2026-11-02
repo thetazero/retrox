@@ -51,15 +51,22 @@ fn can_leave_a_planets_well_after_launch() {
 }
 
 #[test]
-fn fast_travel_reaches_every_place_and_cannot_start_in_a_well() {
+fn fast_travel_reaches_every_place_and_only_climbs_out_of_a_well() {
     let mut world = World::new(1);
     world.act(Action::Launch);
+    let well = world.current_well().expect("launched into a well");
     world.target = Some(Place::Star);
     world.act(Action::FastTravel);
+    let Mode::FastTravel(trip) = world.mode else {
+        panic!("[J] in a well climbs out");
+    };
     assert_eq!(
-        world.mode,
-        Mode::Normal,
-        "fast travel must not start inside a well"
+        trip.leg,
+        Leg::Climb {
+            well,
+            toward: Some(Place::Star)
+        },
+        "fast travel out of a well stops at its edge"
     );
 
     for target in world.nav_places().into_iter().filter(|p| *p != Place::Star) {
@@ -516,4 +523,115 @@ fn docking_repairs_the_hull_for_a_price() {
     world.update(0.02, Controls::default());
     assert_eq!(world.player.ship.damage.total(), 0.0);
     assert!(world.player.credits < credits);
+}
+
+/// Real seconds until `done`, flying with hands off; panics past `limit`.
+fn real_seconds_until(world: &mut World, limit: f64, done: impl Fn(&World) -> bool) -> f64 {
+    let dt = 1.0 / 60.0;
+    let mut t = 0.0;
+    while !done(world) {
+        assert!(t < limit, "still not there after {limit} s");
+        world.update(dt, Controls::default());
+        t += dt;
+    }
+    t
+}
+
+#[test]
+fn a_planet_city_stop_takes_seconds_not_minutes() {
+    // #95: flying in from the well's edge and back out at cruise speed
+    // took about five real minutes a visit.
+    let mut world = World::new(1);
+    let Mode::Landed { body, .. } = world.mode else {
+        panic!("starts landed");
+    };
+    let planet = Place::Body(body);
+
+    // Launch, and climb out under the autopilot: a few seconds, and
+    // then we're free to fast travel.
+    world.act(Action::Launch);
+    assert_eq!(world.prompts().climb, Some(planet));
+    world.act(Action::FastTravel);
+    let out = real_seconds_until(&mut world, 15.0, |w| w.mode == Mode::Normal);
+    assert_eq!(
+        world.current_well(),
+        None,
+        "clear of the well after the climb"
+    );
+    assert!(
+        world.distance_to(planet) < world.well_radius(planet) * 1.1,
+        "stops at the edge, not beyond"
+    );
+    let clear = (world.ship.vel.length(), world.ship.frame);
+    assert!(clear.0 <= retrox_sim::flight::ARRIVE_SPEED + 1.0);
+    assert_eq!(clear.1, planet);
+
+    // Back in from open space: fast travel stops low enough to land.
+    open_space(&mut world);
+    world.target = Some(planet);
+    world.act(Action::FastTravel);
+    let back = real_seconds_until(&mut world, 15.0, |w| w.mode == Mode::Normal);
+    assert!(world.prompts().land.is_some(), "can land on arrival");
+    assert!(
+        out + back < 20.0,
+        "a planet stop took {out:.1} s out and {back:.1} s in"
+    );
+}
+
+#[test]
+fn fast_travel_flies_down_a_well_to_what_is_in_it() {
+    // Undocked from a station in a planet's well, the city below is a
+    // fast-travel hop, not a climb out and back.
+    let mut world = World::new(1);
+    let found = world.view.cities.iter().find_map(|&(_, body)| {
+        let planet = Place::Body(body);
+        world
+            .view
+            .stations
+            .iter()
+            .map(|&s| Place::Station(s))
+            .find(|&s| world.arrives_within(s, planet))
+            .map(|s| (s, planet))
+    });
+    let Some((station, planet)) = found else {
+        // This seed has no station inside a city planet's well; the
+        // rule is covered by the climb test either way.
+        return;
+    };
+    world.mode = Mode::Normal;
+    world.ship.frame = station;
+    world.ship.rel = DVec3::X * 30e3;
+    world.ship.vel = DVec3::ZERO;
+    world.target = Some(planet);
+    assert_eq!(world.prompts().fast_travel, Some(planet));
+    world.act(Action::FastTravel);
+    real_seconds_until(&mut world, 15.0, |w| w.mode == Mode::Normal);
+    assert!(world.prompts().land.is_some());
+}
+
+#[test]
+fn climbing_out_is_a_real_flight_toward_the_next_target() {
+    let mut world = World::new(1);
+    let Mode::Landed { body, .. } = world.mode else {
+        panic!("starts landed");
+    };
+    let planet = Place::Body(body);
+    world.act(Action::Launch);
+    world.target = Some(Place::Star);
+    world.act(Action::FastTravel);
+    let dt = 1.0 / 60.0;
+    while matches!(world.mode, Mode::FastTravel(_)) {
+        let (pos, vel, clock) = (world.ship_position(), world.ship.vel, world.clock_s);
+        world.update(dt, Controls::default());
+        let moved = (world.ship_position() - pos).length();
+        let reach = vel.length().max(world.ship.vel.length()) * (world.clock_s - clock);
+        if matches!(world.mode, Mode::FastTravel(_)) {
+            assert!(moved <= reach * 1.01 + 1.0, "jumped {moved:.3e} m");
+        }
+    }
+    // Out on the star's side of the planet, ready for the next leg.
+    let out = (world.ship_position() - world.position(planet)).normalize();
+    let sunward = (-world.position(planet)).normalize();
+    assert!(out.dot(sunward) > 0.95, "came out facing the star");
+    assert_eq!(world.prompts().fast_travel, Some(Place::Star));
 }

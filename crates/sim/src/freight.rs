@@ -11,10 +11,11 @@
 //! contract on the board is one the galaxy needs carried, and taking one
 //! moves the goods from where they pile up to where they're missing.
 //!
-//! The fee is carriage (DESIGN §7.8): freight for the trip, a rate per
-//! tonne-day plus the crew's wage, both growing with how short the
-//! consignee is. The price gap between the two markets, and a planned
-//! faction's delivery premium, belong to whoever buys the goods and
+//! The fee is carriage (DESIGN §7.8): the hauler's keep for the trip, a
+//! rate per tonne-day plus the crew's wage. How short the consignee is
+//! decides whether it posts at all, and orders the board, not the pay.
+//! The price gap between the two markets, and a planned faction's
+//! delivery premium, belong to whoever buys the goods and
 //! carries them at their own risk: a trader (or an NPC hauler), not a
 //! captain paid to move someone else's cargo.
 //!
@@ -51,8 +52,7 @@ const MIN_SHORTAGE: f64 = 0.25;
 /// The settlement whose board it is releases stock down to this share of
 /// its target, so it never ends up shorter than the consignee started.
 const RELEASE_TO: f64 = 1.0 - MIN_SHORTAGE;
-/// Freight, in credits per tonne per day of the trip, at the smallest
-/// shortage; it doubles for an empty market. It is what the galaxy's own
+/// Freight, in credits per tonne per day of the trip. It is what the galaxy's own
 /// haulers spend keeping a tonne of hold in service (DESIGN §7.8): the
 /// galaxy's haulers move goods for that, so a consignee won't pay a captain
 /// much more.
@@ -163,7 +163,7 @@ pub fn board(
                 let trip_days = days + SYSTEM_DAYS * f64::from(jumps + 1);
                 let price = |n: f64| {
                     let value = buy(n) * n;
-                    let fee = (n * FREIGHT_RATE + WAGE) * trip_days * (1.0 + shortage);
+                    let fee = (n * FREIGHT_RATE + WAGE) * trip_days;
                     (value, fee)
                 };
                 // The consignee only commits what it can afford.
