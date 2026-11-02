@@ -4,7 +4,7 @@
 
 use retrox_content::ships::{HULLS, stock};
 use retrox_sim::haul::{Company, Fleet, Location, ShipClass, ShipClassId};
-use retrox_sim::{GalaxyState, GalaxyTime, SettlementId};
+use retrox_sim::{GalaxyState, SettlementId};
 
 use crate::names;
 use crate::rng::Rng;
@@ -71,20 +71,26 @@ pub fn seed(rng: &mut Rng, state: &mut GalaxyState, classes: &[ShipClassId]) {
             } else {
                 names::word(&mut r)
             };
-            state.companies.insert(Company {
-                name: format!("{base} {}", r.pick(SUFFIXES)),
-                home,
-                // Enough to fill the holds a couple of times over.
-                credits: capacity * 40.0,
-                fleets: vec![Fleet {
-                    class,
-                    ships,
-                    at: Location::Docked(home),
-                    cargo: None,
-                    idle_until: GalaxyTime::ZERO,
-                    idle: false,
-                }],
-            });
+            retrox_sim::haul::add_company(
+                state,
+                Company {
+                    name: format!("{base} {}", r.pick(SUFFIXES)),
+                    home,
+                    // Enough to fill the holds a couple of times over.
+                    credits: capacity * 40.0,
+                    fleets: vec![Fleet {
+                        id: 0,
+                        class,
+                        ships,
+                        at: Location::Docked(home),
+                        cargo: None,
+                        route: None,
+                        review_due: false,
+                        idle: false,
+                    }],
+                    next_fleet: 0,
+                },
+            );
         }
     }
 }

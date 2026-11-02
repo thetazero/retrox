@@ -6,6 +6,7 @@
 
 pub mod arena;
 pub mod bodies;
+pub mod bubble;
 pub mod colonize;
 pub mod construction;
 pub mod demography;

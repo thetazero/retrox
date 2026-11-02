@@ -5,9 +5,9 @@
 //! to build and stock a ship, may launch one. The ship carries a few
 //! thousand people, food and money to a free site within reach: an
 //! unsettled region of a habitable world, a habitable undivided body, or
-//! a rich one for a mining outpost. It flies there for real, like any
-//! other ship (see [`crate::haul::step_trip`]); on arrival the colonists
-//! found a settlement of their faction.
+//! a rich one for a mining outpost. Its arrival is an event on a day set at
+//! launch, like a trader's (DESIGN §5.1.1); on arrival the colonists found
+//! a settlement of their faction.
 
 use std::collections::HashSet;
 
@@ -16,11 +16,9 @@ use slotmap::new_key_type;
 
 use crate::bodies::{BodyId, BodyKind, RegionId};
 use crate::economy::{Facility, FacilityKind, Good, GoodMap, LocalEconomy};
-use crate::flight::Kinematics;
-use crate::haul::{Leg, Stage};
 use crate::ledger::{self, Account};
 use crate::settlement::{Settlement, SettlementId, Site};
-use crate::{FactionId, GalaxyState, HistoryKind, Rng, SystemId};
+use crate::{FactionId, GalaxyState, GalaxyTime, HistoryKind, Rng, SystemId};
 
 new_key_type! {
     pub struct ColonyShipId;
@@ -36,9 +34,7 @@ pub struct ColonyShip {
     pub population: f64,
     pub cargo: GoodMap<f64>,
     pub credits: f64,
-    /// Hyperlane time to the destination system, zero inside one.
-    pub jump_days: f64,
-    pub stage: Stage,
+    pub arrive: GalaxyTime,
 }
 
 /// Emigration starts at this share of capacity and peaks at `CROWDED`.
@@ -61,8 +57,6 @@ const ENDOWMENT_DAYS: f64 = 60.0;
 /// Colony ships go no further than this, and travel at this speed.
 const MAX_DAYS: f64 = 60.0;
 const JUMP_LY_PER_DAY: f64 = 1.3;
-/// Colony ships are heavy and slow: m/s² under autopilot.
-const ACCEL: f64 = 1.0;
 /// Rough in-system time at each end, for choosing a destination.
 const IN_SYSTEM_DAYS: f64 = 4.0;
 /// Undivided bodies at least this habitable can take a colony.
@@ -193,11 +187,6 @@ pub fn launch(state: &mut GalaxyState) {
             .sum();
         let endowment = demand_value * ENDOWMENT_DAYS;
         let owner = settlement.owner;
-        let jump_days = if system == origin {
-            0.0
-        } else {
-            days - 2.0 * IN_SYSTEM_DAYS
-        };
         // The colonists' own settlement builds and stocks the ship.
         ledger::consume(state, id, Good::Metal, SHIP_METAL);
         ledger::consume(state, id, Good::Components, SHIP_COMPONENTS);
@@ -207,7 +196,6 @@ pub fn launch(state: &mut GalaxyState) {
         let economy = &mut state.settlements[id].economy;
         economy.population -= COLONISTS;
         economy.refresh_demand();
-        let port = crate::haul::settlement_goal(state, id, day as f64);
         let ship = state.colony_ships.insert(ColonyShip {
             owner,
             from: id,
@@ -217,14 +205,7 @@ pub fn launch(state: &mut GalaxyState) {
             population: COLONISTS,
             cargo,
             credits: 0.0,
-            jump_days,
-            stage: Stage::Flying {
-                system: origin,
-                ship: Kinematics {
-                    pos: port.pos,
-                    vel: port.vel,
-                },
-            },
+            arrive: GalaxyTime::from_days(day + days.ceil().max(1.0) as u64),
         });
         // Up to half of what the settlement can spend goes with them.
         let stake = endowment.min(ledger::spendable(state, Account::Settlement(id)) * 0.5);
@@ -232,23 +213,16 @@ pub fn launch(state: &mut GalaxyState) {
     }
 }
 
-/// Movement phase: colony ships fly a day of their trip; those that
-/// arrive found their settlement.
+/// Movement phase: colony ships that arrive today found their
+/// settlement.
 pub fn arrive(state: &mut GalaxyState) {
     let now = state.time;
-    let keys: Vec<ColonyShipId> = state.colony_ships.keys().collect();
-    let mut arrived = Vec::new();
-    for key in keys {
-        let ship = &state.colony_ships[key];
-        let (system, site) = (ship.system, ship.site);
-        let leg = crate::haul::step_trip(state, ship.stage, system, ship.jump_days, ACCEL, |t| {
-            crate::haul::site_goal(state, system, site, t)
-        });
-        match leg {
-            Leg::Underway(stage) => state.colony_ships[key].stage = stage,
-            Leg::Arrived => arrived.push(key),
-        }
-    }
+    let arrived: Vec<ColonyShipId> = state
+        .colony_ships
+        .iter()
+        .filter(|(_, c)| c.arrive <= now)
+        .map(|(k, _)| k)
+        .collect();
     if arrived.is_empty() {
         return;
     }
