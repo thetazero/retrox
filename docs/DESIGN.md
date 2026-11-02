@@ -867,10 +867,6 @@ Inspiration, not imitation — fictional throughout.
   console, not as a full-screen canvas: the console frame is what makes it
   read as a physical instrument, and the round glass keeps the eye on the
   focus. The view is 3D.
-- **What matters stands out; the rest fades back** (#192): where you are,
-  your course, your contracts' destinations and what's in reach read at a
-  glance, and the rest of the galaxy stays visible but recedes. A system
-  can be found by typing its name.
 - **Names fit the zoom** (#193): zoomed out, the chart names large
   structures, not a scatter of single systems; single systems are named
   only when close enough to tell apart. Labels never overlap.
@@ -881,7 +877,7 @@ Inspiration, not imitation — fictional throughout.
 - **Drum counters** (cream on black) repeat the chart drive's settings.
   Mechanical readouts belong to instruments set by hand; live ship data
   stays on teal VFD.
-- The galactic plane carries **range rings and bearing spokes** round the
+- The chart's plane carries **range rings and bearing spokes** round the
   focus in faint phosphor teal.
 - Moving the chart's focus **slews** it with easing, as a motor-driven
   chart would, with a SLEW lamp lit while it runs.
@@ -889,26 +885,16 @@ Inspiration, not imitation — fictional throughout.
   clear, jump ready), so why a jump is unavailable reads at a glance.
 - Systems keep their faction colours: the chart is information first.
 - **What matters is lit, the rest is faint** (#192). At full strength:
-  where you are, the systems and lanes one jump away (what's in reach),
-  the course in amber, contracts' destinations (an amber diamond and a
-  CONTRACT tag, with a dashed amber way there when they aren't the
-  course), the shipyards in their panel, and what a search finds. Every
-  other system is a small faint dot and the rest of the lane web a faint
-  red mesh: still there to read, never competing. Only a few of the
-  faint systems near the middle are named. Pointing at any system lights
-  it and dashes the way there in cream.
-- The chart **plots on the plane level with its focus**, not on the
-  galactic plane: rings, spokes and height lines are drawn there, so
-  height lines stay short wherever the chart looks. Height lines are
-  drawn only for the systems that matter.
-- The chart **opens at a range that takes in what matters** (what's in
-  reach, the course, the contracts), not at a fixed range.
-- **FIND SYSTEM** under the chart drive: [/] or a click, then type part
-  of a name (case and accents ignored); matches light up on the chart
-  and list with their jumps; a click or [ENTER] plots a course and slews
-  the chart there, opening the range out to keep the ship in view. With
-  the box empty it lists the contracts' destinations. While a text field
-  has the keyboard, no game key acts.
+  where you are, what's one jump away, the course, contracts'
+  destinations (with the way there), shipyards, search hits, and
+  whatever the pointer is on. Everything else stays readable but faint,
+  and never competes. Later map work keeps this split rather than adding
+  full-strength layers.
+- The chart **plots on the plane level with its focus**, so height lines
+  stay short, and **opens at a range that takes in what matters**.
+- **FIND SYSTEM** finds a system by typing part of its name and plots a
+  course to it; empty, it lists the contracts' destinations. While a
+  text field has the keyboard, no game key acts.
 
 ### 8.3 Help for new pilots
 
