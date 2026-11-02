@@ -539,6 +539,8 @@ mod tests {
     fn people_eat_before_industry() {
         let mut e = economy(vec![Facility::new(FacilityKind::Factory, 20.0)]);
         e.market.stock[Good::Fuel] = 3.0;
+        // Room in its store, so the factory wants to run.
+        e.market.stock[Good::Components] = 10.0;
         e.produce();
         // The 3 fuel there is what 10 people need: the factory gets none.
         let short = e.market.shortfall[Good::Fuel];
