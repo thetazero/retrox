@@ -4,9 +4,11 @@
 use glam::DVec3;
 use retrox_gen::rocks;
 
-use super::{Mode, Place, World};
+use retrox_sim::routes::{self, Visit};
+use retrox_sim::{FieldId, SystemId};
+
+use super::{Mode, Place, World, routing::jump_days};
 use crate::mining::{self, RockId};
-use retrox_sim::FieldId;
 
 /// Fast travel into a field stops this far off a rock's surface: inside
 /// the light mining laser's reach, so the first cut is a press away.
@@ -159,5 +161,59 @@ impl World {
         if let Some(n) = found {
             self.say(format!("Prospector: {} read", crate::hud::count(n, "rock")));
         }
+    }
+}
+
+/// Where to go mining from here (issue #165): what the hints name.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MiningSpot {
+    /// A field in this system, the nearest to the ship.
+    Here(FieldId),
+    /// The nearest system with fields, along the hyperlanes.
+    Away { system: SystemId, jumps: u32 },
+}
+
+/// How far out [`World::mining_spot`] looks for a system with fields.
+const SPOT_MAX_JUMPS: u32 = 12;
+
+impl World {
+    /// The field to send a new miner to: the nearest in this system, or
+    /// else the nearest system that has any. Like shipyards (#161), where
+    /// the belts are is public knowledge.
+    pub fn mining_spot(&self) -> Option<MiningSpot> {
+        let ship = self.ship_position();
+        if let Some(f) = self.view.fields.iter().copied().min_by(|&a, &b| {
+            let d = |f| (self.position(Place::Field(f)) - ship).length();
+            d(a).total_cmp(&d(b))
+        }) {
+            return Some(MiningSpot::Here(f));
+        }
+        let with_fields: std::collections::HashSet<SystemId> = self
+            .galaxy
+            .fields
+            .iter()
+            .map(|(_, f)| self.galaxy.bodies[f.belt].system)
+            .collect();
+        let has_fields = |s: SystemId| with_fields.contains(&s);
+        let mut found = None;
+        routes::search(
+            &self.galaxy,
+            self.system,
+            |lane| jump_days(lane.length_ly),
+            |step| {
+                if step.system != self.system && has_fields(step.system) {
+                    found = Some(MiningSpot::Away {
+                        system: step.system,
+                        jumps: step.jumps,
+                    });
+                    Visit::Stop
+                } else if step.jumps >= SPOT_MAX_JUMPS {
+                    Visit::Leaf
+                } else {
+                    Visit::Expand
+                }
+            },
+        );
+        found
     }
 }

@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::world::{Leg, Mode, Place, Screen, World};
+use crate::world::{Leg, MiningSpot, Mode, Place, Screen, World};
 
 /// What the player has done at least once, for the first-steps notes.
 /// Kept with the player in saves.
@@ -121,23 +121,32 @@ pub const WORK_KEYS: &[KeyRow] = &[
     (&["ESC"], "menu, or back"),
 ];
 
-/// A run of text with keys in it: `[J]` is drawn as a keycap.
+/// A run of text with keys and places in it: `[J]` is drawn as a keycap,
+/// `{Belt B}` as a link that picks that place in NAVIGATION (#165).
 pub enum Seg<'a> {
     Text(&'a str),
     Key(&'a str),
+    Place(&'a str),
 }
 
 pub fn segments(text: &str) -> Vec<Seg<'_>> {
     let mut out = Vec::new();
     let mut rest = text;
-    while let Some(open) = rest.find('[') {
-        let Some(close) = rest[open..].find(']').map(|c| open + c) else {
+    while let Some(open) = rest.find(['[', '{']) {
+        let key = rest[open..].starts_with('[');
+        let shut = if key { ']' } else { '}' };
+        let Some(close) = rest[open..].find(shut).map(|c| open + c) else {
             break;
         };
         if open > 0 {
             out.push(Seg::Text(&rest[..open]));
         }
-        out.push(Seg::Key(&rest[open + 1..close]));
+        let inner = &rest[open + 1..close];
+        out.push(if key {
+            Seg::Key(inner)
+        } else {
+            Seg::Place(inner)
+        });
         rest = &rest[close + 1..];
     }
     if !rest.is_empty() {
@@ -174,6 +183,30 @@ fn nearest_job(w: &World) -> Option<&retrox_sim::freight::Offer> {
         .min_by_key(|o| o.jumps)
 }
 
+/// Where to mine, as a hint's second thought (issue #165): the nearest
+/// field here by its NAVIGATION name, or the nearest system with fields.
+fn go_mining(w: &World) -> String {
+    match w.mining_spot() {
+        Some(MiningSpot::Here(f)) => format!(
+            "Or LAUNCH and go mining at {{{}}}, the nearest asteroid field (∴).",
+            w.short_name(Place::Field(f))
+        ),
+        Some(MiningSpot::Away { system, jumps }) if w.course == Some(system) => format!(
+            "Or go mining: your course is set for {} ({}), where the nearest asteroid fields \
+             are. LAUNCH, then jump.",
+            w.galaxy.systems[system].name,
+            crate::hud::jumps_text(jumps)
+        ),
+        Some(MiningSpot::Away { system, jumps }) => format!(
+            "Or go mining: there are no asteroid fields here. The nearest are in {{{}}} \
+             ({}): click it to plot a course, or find it on the galaxy map [M].",
+            w.galaxy.systems[system].name,
+            crate::hud::jumps_text(jumps)
+        ),
+        None => "Or buy cheap and sell dear on TRADE.".into(),
+    }
+}
+
 /// What to do next, from where things stand: one or two sentences, keys
 /// in brackets. `None` while there's nothing to say (a jump under way).
 pub fn hint(w: &World) -> Option<String> {
@@ -183,7 +216,7 @@ pub fn hint(w: &World) -> Option<String> {
     });
     let carrying = w.player.cargo_t() > 0.0;
     if w.docked_at().is_some() {
-        return Some(match w.screen {
+        let text: String = match w.screen {
             Screen::Contracts if first.is_none() => {
                 let pick = "Pick a job and press ACCEPT: the goods load into your hold, and \
                             you're paid when they arrive.";
@@ -207,9 +240,10 @@ pub fn hint(w: &World) -> Option<String> {
                 "Refits change what your ship carries and how well it mines. [ESC] back.".into()
             }
             Screen::Hub => match &first {
-                None if !carrying => "Open CONTRACTS and take a hauling job: the surest first \
-                     money. Or LAUNCH and go mining."
-                    .into(),
+                None if !carrying => format!(
+                    "Open CONTRACTS and take a hauling job: the surest first money. {}",
+                    go_mining(w)
+                ),
                 None => "LAUNCH, and sell your cargo where it's short.".into(),
                 Some((_, name, system)) if *system != w.system && w.course != Some(*system) => {
                     format!(
@@ -222,6 +256,12 @@ pub fn hint(w: &World) -> Option<String> {
                     format!("LAUNCH, and take your cargo to {}.", where_name(w, *to))
                 }
             },
+        };
+        // The way out is named as its button is: a station's is UNDOCK.
+        return Some(if matches!(w.mode, Mode::Docked(_)) {
+            text.replace("LAUNCH", "UNDOCK")
+        } else {
+            text
         });
     }
     match w.mode {
@@ -267,18 +307,23 @@ pub fn hint(w: &World) -> Option<String> {
         );
     }
     let well = prompts.well.map(|p| w.name(p));
+    // On a plotted course: out of the well, then onto the lane.
+    let jump = || match &well {
+        Some(well) => {
+            format!("Jumps need open space: [J] to climb out of the gravity well of {well}.")
+        }
+        None => "Clear to jump: press JUMP on the ▶ lane in HYPERLANES.".to_owned(),
+    };
     if let Some((to, name, system)) = &first {
         if *system != w.system {
             let there = &w.galaxy.systems[*system].name;
-            return Some(match (w.course == Some(*system), &well) {
-                (false, _) => format!(
+            return Some(if w.course == Some(*system) {
+                jump()
+            } else {
+                format!(
                     "Your cargo is for {name}, in {there}. Open the galaxy map [M] and click \
                      {there} to plot a course."
-                ),
-                (true, Some(well)) => format!(
-                    "Jumps need open space: [J] to climb out of the gravity well of {well}."
-                ),
-                (true, None) => "Clear to jump: press JUMP on the ▶ lane in HYPERLANES.".to_owned(),
+                )
             });
         }
         // Picked means its row in NAVIGATION: for a city, the planet
@@ -296,11 +341,31 @@ pub fn hint(w: &World) -> Option<String> {
             ));
         }
     }
+    // Bound for the nearest fields (#165), with nothing else to do.
+    if first.is_none()
+        && !carrying
+        && let Some(MiningSpot::Away { system, .. }) = w.mining_spot()
+        && w.course == Some(system)
+    {
+        return Some(format!(
+            "Off to mine in {}. {}",
+            w.galaxy.systems[system].name,
+            jump()
+        ));
+    }
     let Some(target) = w.target else {
         return Some(if first.is_none() && !carrying {
-            "Pick where to go: [T] cycles targets, or click a name in NAVIGATION. Asteroid \
-             fields (∴) can be mined."
-                .into()
+            match w.mining_spot() {
+                Some(MiningSpot::Here(f)) => format!(
+                    "Pick where to go: [T] cycles targets, or click a name in NAVIGATION. \
+                     Asteroid fields (∴) can be mined; the nearest is {{{}}}.",
+                    w.short_name(Place::Field(f))
+                ),
+                _ => format!(
+                    "Pick where to go: [T] cycles targets, or click a name in NAVIGATION. {}",
+                    go_mining(w)
+                ),
+            }
         } else {
             "Pick where to go: [T] cycles targets, or click a name in NAVIGATION.".into()
         });
@@ -332,17 +397,25 @@ mod tests {
 
     #[test]
     fn keys_in_brackets_become_keycaps() {
-        let s = segments("press [J] to go, [ESC] to stop");
+        let s = segments("press [J] to go, [ESC] to stop at {Belt B}");
         let shape: Vec<String> = s
             .iter()
             .map(|s| match s {
                 Seg::Text(t) => format!("t:{t}"),
                 Seg::Key(k) => format!("k:{k}"),
+                Seg::Place(p) => format!("p:{p}"),
             })
             .collect();
         assert_eq!(
             shape,
-            ["t:press ", "k:J", "t: to go, ", "k:ESC", "t: to stop"]
+            [
+                "t:press ",
+                "k:J",
+                "t: to go, ",
+                "k:ESC",
+                "t: to stop at ",
+                "p:Belt B"
+            ]
         );
     }
 
@@ -353,6 +426,39 @@ mod tests {
         assert!(!w.player.progress.launched);
         let hint = hint(&w).expect("landed: a hint");
         assert!(hint.contains("CONTRACTS"), "{hint}");
+    }
+
+    /// Issue #165: the hint names a field to mine, as a link, and from a
+    /// system without fields names the nearest system that has some.
+    #[test]
+    fn the_mining_hint_names_somewhere_to_mine() {
+        let mut w = World::new(1);
+        let Some(MiningSpot::Here(f)) = w.mining_spot() else {
+            panic!("a fresh game starts in a system with a field");
+        };
+        let hint = hint(&w).expect("landed: a hint");
+        let link = format!("{{{}}}", w.short_name(Place::Field(f)));
+        assert!(hint.contains(&link), "{hint}");
+
+        // Seed 1's first station is in a system with no fields.
+        w.start_at_station();
+        assert!(w.view.fields.is_empty());
+        let Some(MiningSpot::Away { system, jumps }) = w.mining_spot() else {
+            panic!("fields somewhere near");
+        };
+        assert!(jumps >= 1);
+        let name = w.galaxy.systems[system].name.clone();
+        let hint = super::hint(&w).expect("docked: a hint");
+        assert!(hint.contains(&format!("{{{name}}}")), "{hint}");
+        assert!(
+            !hint.contains("LAUNCH"),
+            "a station's button says UNDOCK: {hint}"
+        );
+
+        // With the course plotted, the hint says so.
+        w.act(crate::world::Action::PlotCourse(Some(system)));
+        let hint = super::hint(&w).expect("docked: a hint");
+        assert!(hint.contains("course is set"), "{hint}");
     }
 
     #[test]

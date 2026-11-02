@@ -418,6 +418,21 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
     // Navigation lists.
     if w.mode == Mode::Normal {
         let open_space = prompts.well.is_none();
+        // An egui area lays out within the size it had last frame, so
+        // after a jump NAVIGATION would stay as short as the last
+        // system's list (#165). A new system measures it afresh.
+        let nav_id = egui::Id::unique("navigation");
+        let seen = egui::Id::unique("navigation-system");
+        if ctx.data(|d| d.get_temp::<usize>(seen)) != Some(w.system.index()) {
+            ctx.data_mut(|d| d.insert_temp(seen, w.system.index()));
+            if let Some(mut state) = egui::AreaState::load(ctx, nav_id) {
+                state.size = None;
+                ctx.memory_mut(|m| {
+                    m.areas_mut()
+                        .set_state(egui::LayerId::new(egui::Order::Middle, nav_id), state)
+                });
+            }
+        }
         panel(
             ctx,
             Panel {
@@ -443,8 +458,15 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
                 collapsible: Some(true),
             },
             |ui| {
+                // The bar always shows, solid, so a list longer than the
+                // panel reads as one (#165): the fields come last. Each
+                // system gets its own area, so the list isn't kept at the
+                // height (and scroll) of the system before a jump.
+                ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
                 egui::ScrollArea::vertical()
+                    .id_salt(("navigation", w.system))
                     .max_height(screen.height() * 0.55)
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
                     .show(ui, |ui| nav_list(ui, w, &mut actions));
             },
         );
@@ -561,7 +583,7 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
 
     // Help for new pilots.
     if h.notes {
-        guide::notes(ctx, w);
+        guide::notes(ctx, w, &mut actions);
     }
     guide::key_strip(ctx, w, h.captured);
     if h.controls_card {
@@ -632,6 +654,20 @@ fn nav_list(ui: &mut egui::Ui, w: &World, actions: &mut Vec<Action>) {
         }
         let selected = selected_row == Some((place, city));
         let (rect, response, look) = crate::widgets::list_row(ui, 25.0, selected, true, AMBER);
+        // A row picked from elsewhere ([T], a hint's link) scrolls into
+        // view once, so the list shows what was picked.
+        if selected {
+            let id = egui::Id::unique("nav-scrolled");
+            let row = (place, city);
+            if ui
+                .ctx()
+                .data(|d| d.get_temp::<(Place, Option<SettlementId>)>(id))
+                != Some(row)
+            {
+                response.scroll_to_me(None);
+                ui.ctx().data_mut(|d| d.insert_temp(id, row));
+            }
+        }
         if response.clicked() {
             actions.push(match city {
                 Some(c) => Action::TargetCity(c),

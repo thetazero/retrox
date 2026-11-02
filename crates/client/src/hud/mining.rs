@@ -11,9 +11,21 @@ use super::{
 use crate::mining::{self, LiveRock};
 use crate::world::{Mode, Place, World};
 
-/// Rocks are tagged this close, nearest first, up to [`MAX_LABELS`].
+/// Rocks are tagged this close, nearest first, up to [`MAX_LABELS`] of
+/// them besides quarries.
 const LABEL_RANGE: f64 = 1500.0;
 const MAX_LABELS: usize = 14;
+
+/// How far off a read rock is tagged: a quarry as far as the prospector
+/// reads (#165), since it's the landmark a miner looks for; any other
+/// rock only close by.
+fn label_range(rock: &LiveRock) -> f64 {
+    if rock.radius > mining::QUARRY_RADIUS {
+        mining::SCAN_RANGE
+    } else {
+        LABEL_RANGE
+    }
+}
 
 fn good_color(good: Good) -> Color32 {
     match good {
@@ -104,11 +116,17 @@ pub fn draw(ctx: &egui::Context, h: &HudInput) {
             .live_rocks(*field, f, rocks, w.clock_s)
             .filter(|r| r.scanned && !r.worked_out && Some(r.id) != aimed)
             .map(|r| ((centre + r.pos - ship).length() - r.radius, r))
-            .filter(|(d, _)| *d < LABEL_RANGE)
+            .filter(|(d, r)| *d < label_range(r))
             .collect();
         near.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // The nearest few, and every quarry in range on top of them.
+        let mut small = 0;
+        near.retain(|(_, r)| {
+            small += usize::from(r.radius <= mining::QUARRY_RADIUS);
+            r.radius > mining::QUARRY_RADIUS || small <= MAX_LABELS
+        });
         let mut taken: Vec<Rect> = Vec::new();
-        for (gap, rock) in near.into_iter().take(MAX_LABELS) {
+        for (gap, rock) in near {
             let pos = centre + rock.pos;
             let Some(p) = to_screen(pos) else {
                 continue;
@@ -129,6 +147,9 @@ pub fn draw(ctx: &egui::Context, h: &HudInput) {
                 rock.lode.good.name().to_uppercase(),
                 rock.lode.grade_letter()
             );
+            if rock.radius > mining::QUARRY_RADIUS {
+                text.push_str(" · QUARRY");
+            }
             if rock.lode.volatile {
                 text.push_str(" · VOLATILE");
             }
