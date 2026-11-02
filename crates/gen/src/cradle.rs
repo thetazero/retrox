@@ -89,6 +89,7 @@ pub fn found(rng: &mut Rng, state: &mut GalaxyState, config: &GalaxyConfig) -> V
             founded: GalaxyTime::ZERO,
             treasury: 0.0,
             population: 0.0,
+            parent: None,
         });
         state
             .history
@@ -103,6 +104,7 @@ pub fn found(rng: &mut Rng, state: &mut GalaxyState, config: &GalaxyConfig) -> V
                 population: rng.range(NATION_POPULATION.0, NATION_POPULATION.1),
                 ..LocalEconomy::default()
             },
+            stability: 1.0,
         });
         state.factions[faction].capital = capital;
         state.history.record(

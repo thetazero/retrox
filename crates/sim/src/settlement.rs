@@ -24,6 +24,9 @@ pub struct Settlement {
     pub name: String,
     pub founded: GalaxyTime,
     pub economy: LocalEconomy,
+    /// How loyal the settlement is to its faction, 0..1; see
+    /// [`crate::politics`]. Low for long enough, it may break away.
+    pub stability: f64,
 }
 
 /// Where a settlement is.

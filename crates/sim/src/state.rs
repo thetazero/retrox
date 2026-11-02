@@ -316,6 +316,8 @@ pub struct Faction {
     pub treasury: f64,
     /// Total population of its settlements, refreshed daily.
     pub population: f64,
+    /// The faction it broke away from, if any.
+    pub parent: Option<FactionId>,
 }
 
 /// How a faction runs its economy (§5.4).

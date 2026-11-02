@@ -104,6 +104,7 @@ pub fn found(rng: &mut Rng, state: &mut GalaxyState, territory: &Territory, popu
             founded: GalaxyTime::ZERO,
             treasury: 0.0,
             population: 0.0,
+            parent: None,
         });
         state.history.record(
             GalaxyTime::ZERO,
@@ -133,6 +134,7 @@ pub fn found(rng: &mut Rng, state: &mut GalaxyState, territory: &Territory, popu
                 population,
                 ..LocalEconomy::default()
             },
+            stability: 1.0,
         });
         let faction = &mut state.factions[owner];
         // An independent's only settlement is its capital.
@@ -257,6 +259,7 @@ fn independent(
         founded: GalaxyTime::ZERO,
         treasury: 0.0,
         population: 0.0,
+        parent: None,
     });
     state.history.record(
         GalaxyTime::ZERO,

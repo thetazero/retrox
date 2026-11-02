@@ -43,4 +43,11 @@ pub enum HistoryKind {
     },
     /// A settlement started going badly hungry.
     Famine { settlement: SettlementId },
+    /// Settlements of `parent` broke away and founded `child`, led by a
+    /// figure remembered by name.
+    Secession {
+        parent: FactionId,
+        child: FactionId,
+        leader: String,
+    },
 }
