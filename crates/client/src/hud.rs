@@ -8,38 +8,37 @@ use egui::{
     Align2, Color32, FontFamily, FontId, Margin, Pos2, Rect, RichText, Sense, Stroke, Vec2,
 };
 use glam::{DVec3, Mat4, Vec4};
-use retrox_sim::economy::Good;
-use retrox_sim::{BodyKind, EconomyModel, SettlementId};
+use retrox_sim::{BodyKind, EconomyModel};
 
 mod map;
 
 use crate::world::{AU, Action, COMBAT_SPEED, Mode, Place, SECONDS_PER_DAY, World};
 
 /// Enamel cream: body text and rules.
-const CREAM: Color32 = Color32::from_rgb(234, 222, 196);
-const CREAM_DIM: Color32 = Color32::from_rgb(160, 146, 122);
-const RULE: Color32 = Color32::from_rgb(110, 98, 84);
+pub(crate) const CREAM: Color32 = Color32::from_rgb(234, 222, 196);
+pub(crate) const CREAM_DIM: Color32 = Color32::from_rgb(160, 146, 122);
+pub(crate) const RULE: Color32 = Color32::from_rgb(110, 98, 84);
 /// Signal red: title bands and primary buttons.
-const RED: Color32 = Color32::from_rgb(196, 44, 34);
-const RED_DARK: Color32 = Color32::from_rgb(118, 26, 22);
-const RED_HOT: Color32 = Color32::from_rgb(232, 70, 52);
+pub(crate) const RED: Color32 = Color32::from_rgb(196, 44, 34);
+pub(crate) const RED_DARK: Color32 = Color32::from_rgb(118, 26, 22);
+pub(crate) const RED_HOT: Color32 = Color32::from_rgb(232, 70, 52);
 /// Warnings and alarms.
-const ALARM: Color32 = Color32::from_rgb(255, 88, 64);
+pub(crate) const ALARM: Color32 = Color32::from_rgb(255, 88, 64);
 /// Amber: targets and selection.
-const AMBER: Color32 = Color32::from_rgb(255, 178, 76);
+pub(crate) const AMBER: Color32 = Color32::from_rgb(255, 178, 76);
 /// Vacuum-fluorescent teal: live instrument readouts.
-const VFD: Color32 = Color32::from_rgb(110, 240, 214);
-const VFD_DIM: Color32 = Color32::from_rgb(22, 58, 56);
-const PANEL: Color32 = Color32::from_rgba_premultiplied(12, 10, 18, 222);
-const INK: Color32 = Color32::from_rgb(20, 16, 24);
+pub(crate) const VFD: Color32 = Color32::from_rgb(110, 240, 214);
+pub(crate) const VFD_DIM: Color32 = Color32::from_rgb(22, 58, 56);
+pub(crate) const PANEL: Color32 = Color32::from_rgba_premultiplied(11, 9, 16, 242);
+pub(crate) const INK: Color32 = Color32::from_rgb(20, 16, 24);
 
 const DISPLAY: &str = "display";
 
-fn display(size: f32) -> FontId {
+pub(crate) fn display(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name(DISPLAY.into()))
 }
 
-fn mono(size: f32) -> FontId {
+pub(crate) fn mono(size: f32) -> FontId {
     FontId::monospace(size)
 }
 
@@ -254,7 +253,11 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
                     };
                     ui.label(RichText::new(owner).color(CREAM_DIM));
                     ui.add_space(4.0);
-                    glow_label(ui, &w.date().to_string(), mono(20.0), VFD);
+                    ui.horizontal(|ui| {
+                        glow_label(ui, &w.date().to_string(), mono(20.0), VFD);
+                        ui.add_space(10.0);
+                        glow_label(ui, &credits(w.player.credits), mono(20.0), AMBER);
+                    });
                 });
             let r = frame.response.rect;
             ui.painter().rect_filled(
@@ -441,7 +444,7 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
     }
 
     match w.mode {
-        Mode::Docked(s) => settlement_screen(ctx, w, s, "Station", Action::Undock, &mut actions),
+        Mode::Docked(s) => crate::station_ui::draw(ctx, w, s, &mut actions),
         Mode::Landed { city, timer, .. } => {
             if timer > 0.0 {
                 // Descent: fade to black and back.
@@ -460,7 +463,7 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
                     CREAM,
                 );
             } else {
-                settlement_screen(ctx, w, city, "Surface", Action::Launch, &mut actions);
+                crate::station_ui::draw(ctx, w, city, &mut actions);
             }
         }
         Mode::Jumping { to, timer } => {
@@ -608,106 +611,7 @@ fn flight_panel(ui: &mut egui::Ui, w: &World) {
     );
 }
 
-/// A settlement's screen: its owner, population and market, plus waiting
-/// and leaving. Used both docked at a station and landed at a city.
-fn settlement_screen(
-    ctx: &egui::Context,
-    w: &World,
-    id: SettlementId,
-    title: &str,
-    leave: Action,
-    actions: &mut Vec<Action>,
-) {
-    let Some(settlement) = w.galaxy.settlements.get(id) else {
-        return;
-    };
-    let market = &settlement.economy.market;
-    panel(
-        ctx,
-        Panel {
-            id: "settlement",
-            title,
-            anchor: Align2::LEFT_CENTER,
-            offset: [24.0, 0.0],
-            width: 440.0,
-            collapsible: None,
-        },
-        |ui| {
-            ui.spacing_mut().item_spacing.y = 2.0;
-            ui.label(
-                RichText::new(settlement.name.to_uppercase())
-                    .font(display(38.0))
-                    .color(CREAM),
-            );
-            let faction = &w.galaxy.factions[settlement.owner];
-            ui.label(
-                RichText::new(format!(
-                    "{} · {} economy",
-                    faction.name,
-                    economy_name(faction.economy)
-                ))
-                .color(CREAM_DIM),
-            );
-            ui.label(
-                RichText::new(format!("population {:.1}k", settlement.economy.population))
-                    .color(CREAM_DIM),
-            );
-            ui.add_space(10.0);
-            section(ui, "Market");
-            ui.spacing_mut().item_spacing.y = 4.0;
-            egui::Grid::new("market")
-                .striped(true)
-                .num_columns(4)
-                .spacing([18.0, 5.0])
-                .min_col_width(60.0)
-                .show(ui, |ui| {
-                    for head in ["GOOD", "STOCK", "PRICE", ""] {
-                        ui.label(RichText::new(head).size(11.0).color(CREAM_DIM));
-                    }
-                    ui.end_row();
-                    for good in Good::ALL {
-                        ui.label(good.name());
-                        ui.label(RichText::new(format!("{:.0}", market.stock[good])).color(VFD));
-                        ui.label(RichText::new(format!("{:.2} cr", market.price[good])).color(VFD));
-                        let fill = market.fill(good);
-                        if market.shortfall[good] > 0.01 {
-                            tag(ui, "SHORTAGE", ALARM);
-                        } else if fill > 2.5 {
-                            tag(ui, "SURPLUS", VFD);
-                        } else {
-                            ui.label("");
-                        }
-                        ui.end_row();
-                    }
-                });
-            ui.add_space(12.0);
-            ui.horizontal(|ui| {
-                let label = if leave == Action::Launch {
-                    "LAUNCH"
-                } else {
-                    "UNDOCK"
-                };
-                let primary =
-                    egui::Button::new(RichText::new(label).font(display(22.0)).color(CREAM))
-                        .fill(RED)
-                        .min_size(Vec2::new(110.0, 30.0));
-                if ui.add(primary).clicked() {
-                    actions.push(leave);
-                }
-                ui.add_space(8.0);
-                ui.label(RichText::new("WAIT").color(CREAM_DIM));
-                for (days, text) in [(1, "1 D"), (7, "7 D"), (30, "30 D")] {
-                    let button = egui::Button::new(text).min_size(Vec2::new(0.0, 30.0));
-                    if ui.add(button).clicked() {
-                        actions.push(Action::Wait(days));
-                    }
-                }
-            });
-        },
-    );
-}
-
-fn economy_name(model: EconomyModel) -> &'static str {
+pub(crate) fn economy_name(model: EconomyModel) -> &'static str {
     match model {
         EconomyModel::Planned => "planned",
         EconomyModel::Market => "market",
@@ -716,17 +620,17 @@ fn economy_name(model: EconomyModel) -> &'static str {
 
 /// A HUD panel: a red title band (click to fold, if `collapsible`) over a
 /// dark body, framed by cream rules with corner brackets.
-struct Panel<'a> {
-    id: &'a str,
-    title: &'a str,
-    anchor: Align2,
-    offset: [f32; 2],
-    width: f32,
+pub(crate) struct Panel<'a> {
+    pub id: &'a str,
+    pub title: &'a str,
+    pub anchor: Align2,
+    pub offset: [f32; 2],
+    pub width: f32,
     /// `Some(open by default)` to let the title band fold the panel.
-    collapsible: Option<bool>,
+    pub collapsible: Option<bool>,
 }
 
-fn panel(ctx: &egui::Context, p: Panel, add: impl FnOnce(&mut egui::Ui)) {
+pub(crate) fn panel(ctx: &egui::Context, p: Panel, add: impl FnOnce(&mut egui::Ui)) {
     let id = egui::Id::unique(p.id);
     let mut open = p
         .collapsible
@@ -828,7 +732,7 @@ fn title_band(painter: &egui::Painter, rect: Rect, title: &str, fold: Option<boo
 }
 
 /// A sub-heading with a rule running to the right edge.
-fn section(ui: &mut egui::Ui, title: &str) {
+pub(crate) fn section(ui: &mut egui::Ui, title: &str) {
     let galley = ui
         .painter()
         .layout_no_wrap(title.to_uppercase(), display(20.0), CREAM_DIM);
@@ -849,7 +753,7 @@ fn section(ui: &mut egui::Ui, title: &str) {
 }
 
 /// Corner brackets around `rect`.
-fn brackets(painter: &egui::Painter, rect: Rect, len: f32, color: Color32) {
+pub(crate) fn brackets(painter: &egui::Painter, rect: Rect, len: f32, color: Color32) {
     let stroke = Stroke::new(1.5, color);
     for (corner, dx, dy) in [
         (rect.left_top(), 1.0, 1.0),
@@ -863,7 +767,7 @@ fn brackets(painter: &egui::Painter, rect: Rect, len: f32, color: Color32) {
 }
 
 /// Text with a soft glow, like a vacuum-fluorescent display.
-fn glow_label(ui: &mut egui::Ui, text: &str, font: FontId, color: Color32) {
+pub(crate) fn glow_label(ui: &mut egui::Ui, text: &str, font: FontId, color: Color32) {
     let galley = ui.painter().layout_no_wrap(text.to_owned(), font, color);
     let (rect, _) = ui.allocate_exact_size(galley.size(), Sense::hover());
     let glow = color.gamma_multiply(0.12);
@@ -885,7 +789,7 @@ fn glow_label(ui: &mut egui::Ui, text: &str, font: FontId, color: Color32) {
 }
 
 /// An indicator lamp: lit (filled) or dark (outlined).
-fn lamp(ui: &mut egui::Ui, text: &str, lit: bool, color: Color32) {
+pub(crate) fn lamp(ui: &mut egui::Ui, text: &str, lit: bool, color: Color32) {
     let galley = ui
         .painter()
         .layout_no_wrap(text.to_owned(), mono(13.0), color);
@@ -912,7 +816,7 @@ fn lamp(ui: &mut egui::Ui, text: &str, lit: bool, color: Color32) {
 }
 
 /// A small coloured tag, outlined.
-fn tag(ui: &mut egui::Ui, text: &str, color: Color32) {
+pub(crate) fn tag(ui: &mut egui::Ui, text: &str, color: Color32) {
     let galley = ui
         .painter()
         .layout_no_wrap(text.to_owned(), mono(11.0), color);
@@ -940,7 +844,7 @@ fn keycap(ui: &mut egui::Ui, key: &str) {
 
 /// A segmented VFD bar for a value in -1..=1 (negative lights from the left
 /// too, in the reverse colour), with quarter ticks underneath.
-fn segment_bar(ui: &mut egui::Ui, value: f32, width: f32, color: Color32) {
+pub(crate) fn segment_bar(ui: &mut egui::Ui, value: f32, width: f32, color: Color32) {
     let height = 12.0;
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height + 6.0), Sense::hover());
     let painter = ui.painter();
@@ -1029,6 +933,20 @@ fn edge_arrow(painter: &egui::Painter, view_proj: Mat4, rel: glam::Vec3, screen:
         AMBER,
         Stroke::NONE,
     ));
+}
+
+/// Credits with thin-space thousands separators.
+pub fn credits(cr: f64) -> String {
+    let n = cr.round() as i64;
+    let digits = n.unsigned_abs().to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push('\u{2009}');
+        }
+        out.push(c);
+    }
+    format!("{}{out} cr", if n < 0 { "-" } else { "" })
 }
 
 pub fn distance(m: f64) -> String {
