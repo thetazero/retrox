@@ -27,6 +27,7 @@ mod settings;
 mod station_ui;
 mod title;
 mod trade;
+mod traffic;
 mod world;
 
 use std::collections::HashSet;
@@ -61,6 +62,8 @@ struct Flags {
     station: bool,
     /// Start in an asteroid field, facing a rock, prospected.
     field: bool,
+    /// Start in space alongside a trader fleet.
+    traffic: bool,
     /// Hold the mining laser's trigger down (for screenshots).
     fire: bool,
     /// Start on the dispatch board.
@@ -102,6 +105,7 @@ impl Flags {
             undocked: has("--undocked"),
             station: has("--station"),
             field: has("--field"),
+            traffic: has("--traffic"),
             fire: has("--fire"),
             contracts: has("--contracts") || has("--contract"),
             take_contract: has("--contract"),
@@ -128,6 +132,7 @@ impl Flags {
                     || self.undocked
                     || self.station
                     || self.field
+                    || self.traffic
                     || self.contracts
                     || self.map
                     || self.course.is_some()
@@ -174,6 +179,9 @@ impl Flags {
         }
         if self.field && world.start_at_field() {
             world.act(Action::Scan);
+        }
+        if self.traffic {
+            world.start_by_traffic();
         }
         world.map_open = self.map;
         if let Some(jumps) = self.course {
@@ -1075,11 +1083,18 @@ impl Running {
                 (proj * view, instances, cam_pos, star)
             }
             None => {
+                let fits: Vec<_> = (self.game.as_ref().expect("playing").world)
+                    .traffic
+                    .contacts
+                    .iter()
+                    .map(|c| c.fit.clone())
+                    .collect();
+                let traffic: Vec<_> = fits.iter().map(|fit| self.ship_mesh(fit)).collect();
                 let world = &self.game.as_ref().expect("playing").world;
                 let view = Mat4::from_quat(cam_rot.as_quat().inverse());
                 (
                     proj * view,
-                    scene(world, &self.meshes, cam_pos),
+                    scene(world, &self.meshes, &traffic, cam_pos),
                     cam_pos,
                     star,
                 )
@@ -1089,7 +1104,12 @@ impl Running {
 }
 
 /// Everything visible, positioned relative to the camera.
-fn scene(world: &World, meshes: &Meshes, cam: DVec3) -> Vec<(MeshId, Instance)> {
+fn scene(
+    world: &World,
+    meshes: &Meshes,
+    traffic: &[(MeshId, meshes::ShipShape)],
+    cam: DVec3,
+) -> Vec<(MeshId, Instance)> {
     let t = world.clock_s;
     let mut out = Vec::new();
     let rel = |p: DVec3| (p - cam).as_vec3();
@@ -1194,6 +1214,8 @@ fn scene(world: &World, meshes: &Meshes, cam: DVec3) -> Vec<(MeshId, Instance)> 
         mining_scene(world, meshes, *field, rocks, cam, &mut out);
     }
 
+    traffic_scene(world, meshes, traffic, cam, &mut out);
+
     let hidden = world.cockpit || !matches!(world.mode, Mode::Normal | Mode::FastTravel(_));
     if !hidden {
         let pos = world.ship_position();
@@ -1278,6 +1300,70 @@ fn scene(world: &World, meshes: &Meshes, cam: DVec3) -> Vec<(MeshId, Instance)> 
         }
     }
     out
+}
+
+/// Ships further than this aren't drawn: they'd be less than a pixel.
+const TRAFFIC_DRAW_M: f64 = 300e3;
+
+/// The bubble's fleets in this system: each ship of a fleet in formation,
+/// nose along its thrust (so a braking ship flies tail first), with its
+/// engines lit by how hard it's burning.
+fn traffic_scene(
+    world: &World,
+    meshes: &Meshes,
+    traffic: &[(MeshId, meshes::ShipShape)],
+    cam: DVec3,
+    out: &mut Vec<(MeshId, Instance)>,
+) {
+    let rel = |p: DVec3| (p - cam).as_vec3();
+    let light = |p: DVec3| {
+        let dir = (-p).normalize_or(DVec3::Y).as_vec3();
+        [dir.x, dir.y, dir.z, 1.3]
+    };
+    for (c, (mesh, shape)) in world.traffic.contacts.iter().zip(traffic) {
+        if (c.pos - cam).length() > TRAFFIC_DRAW_M {
+            continue;
+        }
+        let burn = (c.thrust.length() / c.accel.max(1e-9)).clamp(0.0, 1.0) as f32;
+        let heading = if burn > 0.02 { c.thrust } else { c.vel };
+        let rot = world::look_rotation(heading);
+        let seed = c.key.0.data().as_ffi() ^ u64::from(c.key.1);
+        let length = c.fit.stats().length_m;
+        for offset in traffic::formation(c.ships, length, seed) {
+            let pos = c.pos + rot * offset;
+            let q = rot.as_quat();
+            out.push((
+                *mesh,
+                Instance::new(
+                    Mat4::from_rotation_translation(q, rel(pos)),
+                    [0.8, 0.75, 0.64],
+                    Surface::Plain,
+                    0.0,
+                    0.0,
+                    light(pos),
+                )
+                .with_detail(0.5),
+            ));
+            for &(nozzle, r) in shape.nozzles.iter().filter(|_| burn > 0.02) {
+                let len = r * (1.0 + 3.0 * burn);
+                out.push((
+                    meshes.sphere,
+                    Instance::new(
+                        Mat4::from_scale_rotation_translation(
+                            Vec3::new(r * 0.8, r * 0.8, len),
+                            q,
+                            rel(pos) + q * (nozzle + Vec3::Z * len * 0.6),
+                        ),
+                        [0.35, 0.7, 1.0],
+                        Surface::Star,
+                        1.2 + 2.5 * burn,
+                        0.0,
+                        [0.0, 1.0, 0.0, 1.0],
+                    ),
+                ));
+            }
+        }
+    }
 }
 
 /// Glow colour of a good's veins and loose chunks.

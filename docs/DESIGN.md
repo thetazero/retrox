@@ -238,6 +238,38 @@ Consequences:
   **collapse** back when they leave or when time compresses. Both
   directions conserve state (cargo, damage, losses).
 
+#### 5.2.1 The bubble as built (#59)
+
+- **Radius: 3 jumps** from the player's system, counted in lanes. On
+  the default galaxy that is ~24 systems and ~15–20 trader fleets in
+  flight, with no measurable cost per day.
+- **Time compresses** when the player waits docked or is in the lanes:
+  the bubble goes away for those days and comes back around wherever the
+  player is next. Fast travel in a system keeps it — traders flying past
+  while you cruise are what piracy and interdiction will be made of.
+- **Materialize:** a coarse trip that passes through the bubble becomes
+  a flight on the day it gets there, placed along its trip (burn out,
+  lane, burn in) by how far through its calendar it is. Fleets leaving
+  port inside the bubble fly from the start. Docked, idle fleets stay
+  records.
+- **Collapse:** a flight that jumps toward a system outside the bubble,
+  or that the bubble leaves behind, becomes a coarse trip again, its
+  remaining days estimated the way coarse trips are.
+- **Behaviour:** in the bubble a fleet picks a fresh route at every port
+  instead of waiting for its monthly review, so traders near the player
+  react to the markets the player is changing.
+- **Losses** roll once per trip, coming out of its last lane, in both
+  tiers.
+- **Planet ports:** ships dock at a holding point above a planet's north
+  pole (1.5 radii out), not at its centre.
+- **Not yet in the bubble:** colony ships, miners, patrols.
+- **Seen by the player:** the client carries each flight on between the
+  sim's daily ticks with the same autopilot, and draws each fleet as its
+  ships in a loose echelon, nose along its thrust (a braking ship flies
+  tail first), engines lit by how hard it burns. The HUD marks every
+  fleet in the system with a small VFD-teal square, labelled with
+  company, ships, cargo and range within 2 million km.
+
 ### 5.3 Battles
 
 - Major battles are resolved abstractly over days in the coarse tier.
