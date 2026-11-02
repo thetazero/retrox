@@ -2738,6 +2738,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
+name = "retrox-client"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "egui",
+ "egui-wgpu",
+ "egui-winit",
+ "glam",
+ "pollster",
+ "retrox-gen",
+ "retrox-sim",
+ "wgpu",
+ "winit",
+]
+
+[[package]]
 name = "retrox-content"
 version = "0.1.0"
 dependencies = [

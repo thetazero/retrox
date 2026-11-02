@@ -1,0 +1,446 @@
+//! The heads-up display and station/landing screens (egui for now; a
+//! custom diegetic UI comes with the art pass).
+
+use egui::{Align2, Color32, FontId, Pos2, RichText, Stroke, Vec2};
+use glam::{DVec3, Mat4, Vec4};
+use retrox_sim::EconomyModel;
+use retrox_sim::economy::Good;
+use retrox_sim::layout::{Place, StationKind};
+
+use crate::world::{Action, Mode, World};
+
+pub const AMBER: Color32 = Color32::from_rgb(255, 176, 72);
+const AMBER_DIM: Color32 = Color32::from_rgb(170, 110, 45);
+const CYAN: Color32 = Color32::from_rgb(120, 220, 210);
+const PANEL: Color32 = Color32::from_rgba_premultiplied(8, 7, 5, 200);
+
+pub fn style(ctx: &egui::Context) {
+    let mut style = (*ctx.global_style()).clone();
+    for font in style.text_styles.values_mut() {
+        font.family = egui::FontFamily::Monospace;
+    }
+    let v = &mut style.visuals;
+    *v = egui::Visuals::dark();
+    v.override_text_color = Some(AMBER);
+    v.window_fill = PANEL;
+    v.panel_fill = PANEL;
+    v.window_stroke = Stroke::new(1.0, AMBER_DIM);
+    v.widgets.inactive.bg_fill = Color32::from_rgb(40, 28, 12);
+    v.widgets.inactive.weak_bg_fill = Color32::from_rgb(40, 28, 12);
+    v.widgets.hovered.weak_bg_fill = Color32::from_rgb(80, 52, 18);
+    v.widgets.active.weak_bg_fill = Color32::from_rgb(120, 76, 24);
+    v.selection.bg_fill = Color32::from_rgb(110, 70, 20);
+    v.window_corner_radius = 0.into();
+    ctx.set_global_style(style);
+}
+
+pub struct HudInput<'a> {
+    pub world: &'a World,
+    pub view_proj: Mat4,
+    pub camera: DVec3,
+    pub stick: glam::DVec2,
+    pub captured: bool,
+}
+
+pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
+    let mut actions = Vec::new();
+    let w = h.world;
+    let screen = ctx.content_rect();
+
+    // Markers for every place, brighter for the target.
+    if matches!(w.mode, Mode::Normal | Mode::Supercruise) {
+        let painter = ctx.layer_painter(egui::LayerId::background());
+        for place in w.layout.places() {
+            let pos = w.layout.position(place, w.clock_s);
+            let rel = (pos - h.camera).as_vec3();
+            let targeted = w.target == Some(place);
+            let dist = w.distance_to(place);
+            let Some(p) = project(h.view_proj, rel, screen) else {
+                if targeted {
+                    edge_arrow(&painter, h.view_proj, rel, screen);
+                }
+                continue;
+            };
+            let color = if targeted { CYAN } else { AMBER_DIM };
+            let r = if targeted { 9.0 } else { 4.0 };
+            painter.add(egui::Shape::closed_line(
+                vec![
+                    p + Vec2::new(0.0, -r),
+                    p + Vec2::new(r, 0.0),
+                    p + Vec2::new(0.0, r),
+                    p + Vec2::new(-r, 0.0),
+                ],
+                Stroke::new(1.2, color),
+            ));
+            let near = matches!(place, Place::Body(_) | Place::Gate(_) | Place::Star)
+                || dist < 2e6
+                || targeted;
+            if near {
+                painter.text(
+                    p + Vec2::new(r + 4.0, -2.0),
+                    Align2::LEFT_CENTER,
+                    format!("{}  {}", w.layout.name(place), distance(dist)),
+                    FontId::monospace(if targeted { 13.0 } else { 11.0 }),
+                    color,
+                );
+            }
+        }
+
+        // Crosshair and stick position.
+        let c = screen.center();
+        painter.circle_stroke(c, 14.0, Stroke::new(1.0, AMBER_DIM));
+        let s = Vec2::new(h.stick.x as f32, h.stick.y as f32) * 60.0;
+        painter.circle_filled(c + s, 2.5, AMBER);
+    }
+
+    // Top-left: where and when.
+    egui::Area::new(egui::Id::unique("where"))
+        .anchor(Align2::LEFT_TOP, [16.0, 12.0])
+        .show(ctx, |ui| {
+            let system = &w.galaxy.systems[w.system];
+            ui.label(RichText::new(w.date().to_string()).size(20.0));
+            ui.label(RichText::new(&system.name).size(16.0));
+            let owner = match system.owner {
+                Some(f) => {
+                    let faction = &w.galaxy.factions[f];
+                    let model = match faction.economy {
+                        EconomyModel::Planned => "planned",
+                        EconomyModel::Market => "market",
+                    };
+                    format!("{} · {model}", faction.name)
+                }
+                None => "unclaimed space".into(),
+            };
+            ui.label(RichText::new(owner).color(AMBER_DIM));
+        });
+
+    // Bottom: flight readout.
+    if matches!(w.mode, Mode::Normal | Mode::Supercruise) {
+        egui::Area::new(egui::Id::unique("flight"))
+            .anchor(Align2::CENTER_BOTTOM, [0.0, -18.0])
+            .show(ctx, |ui| {
+                egui::Frame::new()
+                    .fill(PANEL)
+                    .inner_margin(8.0)
+                    .show(ui, |ui| {
+                        ui.set_width(380.0);
+                        let (mode, speed) = match w.mode {
+                            Mode::Supercruise => ("SUPERCRUISE", w.ship.cruise_speed),
+                            _ => ("NORMAL", w.ship.vel.length()),
+                        };
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(mode).strong());
+                            ui.label(RichText::new(speed_text(speed)).size(18.0));
+                            if !w.ship.flight_assist {
+                                ui.label(
+                                    RichText::new("FA OFF").color(Color32::from_rgb(255, 90, 60)),
+                                );
+                            }
+                        });
+                        ui.add(
+                            egui::ProgressBar::new(w.ship.throttle.max(0.0) as f32)
+                                .desired_height(8.0)
+                                .fill(if w.ship.throttle < 0.0 { CYAN } else { AMBER }),
+                        );
+                        if let Some(t) = w.target {
+                            ui.label(format!(
+                                "TARGET {}  {}",
+                                w.layout.name(t),
+                                distance(w.distance_to(t))
+                            ));
+                        }
+                    });
+            });
+    }
+
+    // Prompts.
+    let prompts = w.prompts();
+    let mut lines: Vec<String> = Vec::new();
+    match w.mode {
+        Mode::Normal => {
+            lines.push("[J] supercruise".into());
+            if let Some(i) = prompts.dock {
+                lines.push(format!("[F] dock at {}", w.layout.stations[i].name));
+            }
+            if let Some((b, p)) = prompts.land {
+                let body = &w.layout.bodies[b];
+                lines.push(format!(
+                    "[L] land at {}, {}",
+                    body.landing_points[p].name, body.name
+                ));
+            }
+            if let Some(g) = prompts.jump {
+                lines.push(format!("[H] jump: {}", w.layout.gates[g].name));
+            }
+        }
+        Mode::Supercruise => lines.push(if prompts.drop {
+            "[J] drop out at target".into()
+        } else {
+            "[J] drop out".into()
+        }),
+        _ => {}
+    }
+    if !lines.is_empty() {
+        egui::Area::new(egui::Id::unique("prompts"))
+            .anchor(Align2::CENTER_BOTTOM, [0.0, -120.0])
+            .show(ctx, |ui| {
+                for l in lines {
+                    ui.label(RichText::new(l).color(CYAN));
+                }
+            });
+    }
+
+    if let Some((text, _)) = &w.message {
+        egui::Area::new(egui::Id::unique("message"))
+            .anchor(Align2::CENTER_TOP, [0.0, 80.0])
+            .show(ctx, |ui| {
+                ui.label(RichText::new(text).size(18.0));
+            });
+    }
+
+    // Navigation list.
+    if matches!(w.mode, Mode::Normal | Mode::Supercruise) {
+        egui::Window::new("NAVIGATION")
+            .anchor(Align2::RIGHT_TOP, [-12.0, 12.0])
+            .default_width(400.0)
+            .resizable(false)
+            .collapsible(true)
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(screen.height() * 0.6)
+                    .show(ui, |ui| {
+                        egui::Grid::new("nav")
+                            .num_columns(2)
+                            .spacing([12.0, 2.0])
+                            .show(ui, |ui| {
+                                for place in w.layout.places() {
+                                    let indent = match place {
+                                        Place::Body(i) if w.layout.bodies[i].is_moon() => "  ",
+                                        Place::Station(_) => "◇ ",
+                                        Place::Field(_) => "∴ ",
+                                        Place::Gate(_) => "→ ",
+                                        _ => "",
+                                    };
+                                    let label =
+                                        format!("{indent}{}", truncate(w.layout.name(place), 30));
+                                    if ui
+                                        .selectable_label(w.target == Some(place), label)
+                                        .clicked()
+                                    {
+                                        actions.push(Action::Target(place));
+                                    }
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            ui.label(
+                                                RichText::new(distance(w.distance_to(place)))
+                                                    .color(AMBER_DIM),
+                                            );
+                                        },
+                                    );
+                                    ui.end_row();
+                                }
+                            });
+                    });
+            });
+    }
+
+    match w.mode {
+        Mode::Docked(i) => station_screen(ctx, w, i, &mut actions),
+        Mode::Landed { body, point, timer } => {
+            let fade = (timer / 3.0).clamp(0.0, 1.0);
+            let painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::unique("fade"),
+            ));
+            let alpha = (255.0 * (1.0 - (fade - 0.5).abs() * 2.0).clamp(0.0, 1.0)) as u8;
+            painter.rect_filled(
+                screen,
+                0.0,
+                Color32::from_black_alpha(if timer > 0.0 { alpha.max(120) } else { 230 }),
+            );
+            if timer > 0.0 {
+                painter.text(
+                    screen.center(),
+                    Align2::CENTER_CENTER,
+                    "DESCENT",
+                    FontId::monospace(28.0),
+                    AMBER,
+                );
+            } else {
+                let b = &w.layout.bodies[body];
+                egui::Window::new("SURFACE")
+                    .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
+                    .collapsible(false)
+                    .resizable(false)
+                    .show(ctx, |ui| {
+                        ui.heading(&b.landing_points[point].name);
+                        ui.label(format!("{} · {:?}", b.name, b.kind));
+                        ui.label(RichText::new("(location services come later)").color(AMBER_DIM));
+                        if ui.button("Launch").clicked() {
+                            actions.push(Action::Launch);
+                        }
+                    });
+            }
+        }
+        Mode::Jumping { gate, timer } => {
+            let painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::unique("jump"),
+            ));
+            let t = 1.0 - timer / 4.0;
+            let alpha = (255.0 * (t * 1.4).min(1.0)) as u8;
+            painter.rect_filled(
+                screen,
+                0.0,
+                Color32::from_rgba_unmultiplied(220, 235, 255, alpha),
+            );
+            painter.text(
+                screen.center(),
+                Align2::CENTER_CENTER,
+                format!("IN TRANSIT — {}", w.layout.gates[gate].name),
+                FontId::monospace(26.0),
+                Color32::from_rgb(30, 30, 40),
+            );
+        }
+        _ => {}
+    }
+
+    // Controls help.
+    egui::Area::new(egui::Id::unique("help"))
+        .anchor(Align2::LEFT_BOTTOM, [16.0, -12.0])
+        .show(ctx, |ui| {
+            let text = if h.captured {
+                "mouse steer · W/S throttle · X stop · A/D strafe · SPACE/CTRL lift · Q/E roll · SHIFT boost\n\
+                 J supercruise · T next target · V camera · Z flight assist · TAB free mouse"
+            } else {
+                "TAB or click the view to fly with the mouse · arrow keys also steer"
+            };
+            ui.label(RichText::new(text).size(11.0).color(AMBER_DIM));
+        });
+
+    actions
+}
+
+fn station_screen(ctx: &egui::Context, w: &World, i: usize, actions: &mut Vec<Action>) {
+    let station = &w.layout.stations[i];
+    let market = &w.galaxy.systems[w.system].economy.market;
+    egui::Window::new("STATION")
+        .anchor(Align2::LEFT_CENTER, [24.0, 0.0])
+        .collapsible(false)
+        .resizable(false)
+        .default_width(420.0)
+        .show(ctx, |ui| {
+            ui.heading(&station.name);
+            let kind = match station.kind {
+                StationKind::Habitat => "habitat".into(),
+                StationKind::Outpost => "outpost".into(),
+                StationKind::Facility(f) => format!("{f:?}").to_lowercase(),
+            };
+            ui.label(RichText::new(kind).color(AMBER_DIM));
+            ui.separator();
+            ui.label("MARKET");
+            egui::Grid::new("market").striped(true).show(ui, |ui| {
+                for head in ["good", "stock", "price", "status"] {
+                    ui.label(RichText::new(head).color(AMBER_DIM));
+                }
+                ui.end_row();
+                for good in Good::ALL {
+                    ui.label(good.name());
+                    ui.label(format!("{:.0}", market.stock[good]));
+                    ui.label(format!("{:.2} cr", market.price[good]));
+                    let fill = market.fill(good);
+                    let status = if market.shortfall[good] > 0.01 {
+                        RichText::new("SHORTAGE").color(Color32::from_rgb(255, 90, 60))
+                    } else if fill > 2.5 {
+                        RichText::new("surplus").color(CYAN)
+                    } else {
+                        RichText::new("")
+                    };
+                    ui.label(status);
+                    ui.end_row();
+                }
+            });
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.button("Undock").clicked() {
+                    actions.push(Action::Undock);
+                }
+                if ui.button("Wait 1 day").clicked() {
+                    actions.push(Action::Wait(1));
+                }
+                if ui.button("Wait 7 days").clicked() {
+                    actions.push(Action::Wait(7));
+                }
+                if ui.button("Wait 30 days").clicked() {
+                    actions.push(Action::Wait(30));
+                }
+            });
+        });
+}
+
+fn project(view_proj: Mat4, rel: glam::Vec3, screen: egui::Rect) -> Option<Pos2> {
+    let clip = view_proj * Vec4::new(rel.x, rel.y, rel.z, 1.0);
+    if clip.w <= 0.0 {
+        return None;
+    }
+    let ndc = clip.truncate() / clip.w;
+    if ndc.x.abs() > 1.0 || ndc.y.abs() > 1.0 {
+        return None;
+    }
+    Some(Pos2::new(
+        screen.left() + (ndc.x + 1.0) * 0.5 * screen.width(),
+        screen.top() + (1.0 - ndc.y) * 0.5 * screen.height(),
+    ))
+}
+
+/// An arrow at the screen edge pointing toward an off-screen target.
+fn edge_arrow(painter: &egui::Painter, view_proj: Mat4, rel: glam::Vec3, screen: egui::Rect) {
+    let clip = view_proj * Vec4::new(rel.x, rel.y, rel.z, 1.0);
+    let mut dir = Vec2::new(clip.x, -clip.y);
+    if clip.w < 0.0 {
+        dir = -dir;
+    }
+    let dir = dir.normalized();
+    let c = screen.center();
+    let r = screen.height().min(screen.width()) * 0.42;
+    let tip = c + dir * r;
+    let side = Vec2::new(-dir.y, dir.x) * 7.0;
+    painter.add(egui::Shape::convex_polygon(
+        vec![tip, tip - dir * 14.0 + side, tip - dir * 14.0 - side],
+        CYAN,
+        Stroke::NONE,
+    ));
+}
+
+pub fn distance(m: f64) -> String {
+    const AU: f64 = retrox_sim::layout::AU;
+    if m < 1e3 {
+        format!("{m:.0} m")
+    } else if m < 1e6 {
+        format!("{:.1} km", m / 1e3)
+    } else if m < 0.01 * AU {
+        format!("{:.0} Mm", m / 1e6)
+    } else {
+        format!("{:.2} AU", m / AU)
+    }
+}
+
+fn speed_text(v: f64) -> String {
+    const C: f64 = 299_792_458.0;
+    if v < 1e3 {
+        format!("{v:.0} m/s")
+    } else if v < 0.1 * C {
+        format!("{:.1} km/s", v / 1e3)
+    } else {
+        format!("{:.2} c", v / C)
+    }
+}
+
+fn truncate(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_owned()
+    } else {
+        s.chars().take(n - 1).chain(['…']).collect()
+    }
+}
