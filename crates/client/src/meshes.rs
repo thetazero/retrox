@@ -536,7 +536,7 @@ pub fn station(kind: StationKind, seed: u64) -> Mesh {
                 );
             }
         }
-        StationKind::Facility(FacilityKind::Factory) => {
+        StationKind::Facility(FacilityKind::Factory | FacilityKind::Shipyard) => {
             // Blocky works.
             for _ in 0..3 {
                 let p = Vec3::new(

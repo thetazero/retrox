@@ -14,6 +14,13 @@ use crate::rng::Rng;
 
 /// Galaxy-wide production as a multiple of what consumption needs.
 const SURPLUS: f64 = 1.15;
+/// Settlements start with enough credits to buy this many days of their own
+/// demand at base prices.
+const STARTING_TREASURY_DAYS: f64 = 60.0;
+/// Settlements above this population with a factory get a shipyard.
+const SHIPYARD_MIN_POPULATION: f64 = 30.0;
+/// Tonnes of hull a day per unit of population.
+const SHIPYARD_SCALE_PER_POPULATION: f64 = 0.05;
 
 /// Population per system: capitals large, claimed systems log-normal,
 /// a share of unclaimed systems small frontier outposts, the rest empty.
@@ -82,7 +89,8 @@ pub fn seed(rng: &mut Rng, state: &mut GalaxyState) {
                 res.ice * if owned { 1.0 } else { 0.5 },
             ));
         }
-        if pop > 0.0 && r.chance(0.75) {
+        // Big settlements always grow some of their own food.
+        if pop > 0.0 && (pop > 20.0 || r.chance(0.75)) {
             placed.push((i, FacilityKind::Hydroponics, pop));
         }
         if pop > 2.0 && (res.ice > 0.3 || r.chance(0.3)) {
@@ -96,6 +104,22 @@ pub fn seed(rng: &mut Rng, state: &mut GalaxyState) {
         }
     }
 
+    // Shipyards at big industrial settlements. They make hulls, not goods,
+    // so they're sized by population and only feed into how much metal and
+    // components the galaxy must make.
+    for &(i, kind, _) in &placed {
+        let pop = state.settlements[ids[i]].economy.population;
+        if kind == FacilityKind::Factory && pop > SHIPYARD_MIN_POPULATION {
+            state.settlements[ids[i]]
+                .economy
+                .facilities
+                .push(Facility::new(
+                    FacilityKind::Shipyard,
+                    pop * SHIPYARD_SCALE_PER_POPULATION,
+                ));
+        }
+    }
+
     let required = required_output(state);
     for kind in FacilityKind::ALL {
         let total: f64 = placed.iter().filter(|p| p.1 == kind).map(|p| p.2).sum();
@@ -105,10 +129,10 @@ pub fn seed(rng: &mut Rng, state: &mut GalaxyState) {
         let (good, per_scale) = kind.recipe().outputs[0];
         let scale_per_weight = required[good] / per_scale / total;
         for &(i, k, weight) in placed.iter().filter(|p| p.1 == kind) {
-            state.settlements[ids[i]].economy.facilities.push(Facility {
-                kind: k,
-                scale: weight * scale_per_weight,
-            });
+            state.settlements[ids[i]]
+                .economy
+                .facilities
+                .push(Facility::new(k, weight * scale_per_weight));
         }
     }
 
@@ -121,6 +145,11 @@ pub fn seed(rng: &mut Rng, state: &mut GalaxyState) {
             economy.market.stock[good] = economy.market.target(good);
         }
         economy.update_prices(model);
+        economy.treasury = STARTING_TREASURY_DAYS
+            * Good::ALL
+                .iter()
+                .map(|&g| economy.market.demand[g] * g.base_price())
+                .sum::<f64>();
     }
 }
 /// Daily output of each good the galaxy needs, working back up the supply
@@ -134,6 +163,18 @@ fn required_output(state: &GalaxyState) -> GoodMap<f64> {
     let mut need = GoodMap::splat(0.0);
     for (good, per_capita) in PER_CAPITA_DEMAND {
         need[good] += per_capita * population;
+    }
+    for s in state.settlements.values() {
+        for f in s
+            .economy
+            .facilities
+            .iter()
+            .filter(|f| f.kind == FacilityKind::Shipyard)
+        {
+            for &(good, amount) in f.kind.recipe().inputs {
+                need[good] += amount * f.scale;
+            }
+        }
     }
     // Walk the chain from finished goods down to raw materials, adding each
     // stage's inputs to what its suppliers must make.

@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 retrox-sim.workspace = true
+retrox-content.workspace = true
 rayon.workspace = true
 slotmap.workspace = true
 
