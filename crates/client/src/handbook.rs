@@ -135,8 +135,8 @@ fn first_steps(ui: &mut egui::Ui) {
         ui,
         3,
         "Leave the gravity well",
-        "Near a planet the flight panel reads GRAVITY WELL. Fly away from the planet until it \
-         clears: fast travel and jumps only work outside.",
+        "Near a planet the flight panel reads GRAVITY WELL. Jumps only work outside it, and \
+         fast travel only within it: [J] climbs you out to the edge, then [J] again goes on.",
     );
     step(
         ui,

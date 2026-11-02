@@ -467,6 +467,32 @@ rather than space bugs.
 - Supercruise for in-system travel; hyperlane jumps between systems.
 - Interdiction can pull ships out of supercruise (piracy, patrols).
 
+#### 7.1.1 Gravity wells and planet stops (#95)
+
+A planet city stop used to cost about five real minutes of plain flying:
+in from the well's edge to landing range, and back out again, at the
+150 km/s cruise cap. Wells now cost **galaxy time and a stop**, not real
+minutes (pillar 4):
+
+- **Fast travel to a planet with a city stops low over it**, at 1.6
+  radii, inside the 2-radii landing range: arrive, [L] to land. Planets
+  without a city still stop just past their well's edge.
+- **Inside a gravity well the autopilot only flies within it**: down to
+  anything whose arrival point is in the same well (the planet's city, a
+  station in orbit), or else **up and out**: [J] climbs the ship to just
+  past the well's edge and stops it there, on the side facing the
+  selected target. A second [J] goes on. A climb is fast travel in every
+  other way: the shared autopilot flying the real flight model under
+  sped-up time, interceptable, droppable with [J], refused with hostiles
+  near.
+- **Jumps still need open space**, and a trip that leaves a well always
+  breaks at its edge. That stop, the galaxy time the climb takes, and the
+  fact that every launch starts inside one are what make wells matter.
+- Flying out by hand still works, for anyone who wants to.
+
+A planet stop now takes about as long as a station stop: a few seconds
+of autopilot each way plus the landing sequence.
+
 ### 7.2 Combat
 
 - Small/medium ships: direct dogfighting.
@@ -622,6 +648,8 @@ from a random generator (pillar 5).
 
 - No seamless landing. Planets have **predefined landing points**; landing
   plays an animation and opens the location's UI.
+- Fast travel brings the ship into landing range of a planet's city, and
+  [J] climbs back out after launch (§7.1.1).
 
 ### 7.7 Death
 
