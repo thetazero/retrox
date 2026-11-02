@@ -274,10 +274,82 @@ Consequences:
   layout. A settlement is ~480 bytes with its facilities in a separate
   heap list. Facilities could sit inline, one slot per kind (there are
   eight), and the fields the books touch could be kept together, apart
-  from names and history. Making reviews cheaper is #58's job.
-- **Politics** isn't built yet. When it is, a settlement's distance to
-  its capital is stored, and refreshed at its monthly review, never
-  searched for daily (§5.1.1).
+  from names and history. Making reviews cheaper was #58's job
+  (§5.1.3).
+
+#### 5.1.3 Monthly decisions as built (#58)
+
+Decisions read data prepared for them; the searching happens when the
+data is made, once a month or when something changes. `retrox bench`
+times each kind of decision.
+
+- **A "region" is a system's trading neighbourhood:** its 20 nearest
+  settled systems by lane (`ROUTE_SYSTEMS`, the same reach traders
+  always had). Lists hang off systems, so a trader reads its port's.
+- **Trade lists.** Each settled system keeps, for every good, the four
+  nearby settlements paying most for it; the four most valuable
+  surpluses nearby; and the four nearest shipyards, each with its lane
+  distance. It refreshes them once a month, on its own day (system index
+  mod 30), from the day's listings: each system's best buyer of every
+  good and its best surplus, still rebuilt daily from the books. A
+  trader at its review looks only at its port's lists, but prices what it
+  finds there at today's prices, and keeps to its own class's range. With
+  nothing worth carrying, it heads for the listed surplus that would
+  fetch most today. Systems in the bubble refresh daily, so traders near
+  the player still answer the markets the player changes (§5.2.1). A
+  system settled since its day came round makes its lists on the spot.
+  Lists are saved: they hold the prices of the day they were made, and a
+  loaded game must choose as the running one would.
+- **Hulls.** New crews fetch hulls from, and captains leave orders at,
+  the yards on their port's lists, rather than searching for one. Each
+  system notes its own yards when it refreshes, and its neighbours read
+  that instead of every facility.
+- **Idle ports.** Founding a trading or harvesting company checks a set
+  of the systems where ships sat docked idle, made in one scan of the
+  fleets on the first day of each month (and saved), not by each
+  settlement that asks.
+- **Colonization.** Each system keeps its settleable sites best first
+  (sites and their scores don't change) and how many at the front are
+  taken. A launch compares the first free site of each system in reach,
+  which is exactly what searching every body in reach found: a test
+  checks the two agree while sites are taken. Taking a site moves its
+  system's list past it; one that comes free (colonists who scatter)
+  sends only its own system's list back to the start. This follows from
+  the state, so it isn't saved.
+- **Construction** compares margins in the settlement's own books: one
+  pass over its facilities sums each kind, and the system's bodies are
+  looked at only for a kind that needs a resource.
+- **Pirates.** A settlement's crews consider turning pirate a week after
+  its other reviews, found by the same stride through the slots. The
+  count of settled places that caps gangs is kept until a settlement is
+  founded, and a gang choosing a lair reads fields from an index by
+  system instead of scanning every field.
+- **Politics** isn't built yet, but each settlement already stores its
+  lane distance to its capital (`to_capital`): worked out when it is
+  founded, and again only when its owner or its faction's capital
+  changes (`politics::set_owner`, `set_capital`), never at a review.
+  Saves made before it was stored work it out on loading.
+- **Where it stands** (seed 0, static galaxy of ~4,450 settlements, one
+  core, ns per decision, before → after):
+
+  | decision | before | after |
+  |---|---|---|
+  | trader's route | 7,300 | 1,360 |
+  | trade lists, per system-month | — | 2,000 |
+  | founding a company | 1,780 | 65 |
+  | colonization | 1,260 | 310 |
+  | pirates (now every due settlement, ports included) | 6,900 | 310 |
+  | construction | 330 | 310 |
+  | harvester's run (unchanged) | 1,770 | 1,710 |
+
+  A day went from 3.1 to 1.8 ms: planning from 115 to 35 ns per
+  settlement-day, trade from 350 to 180 ns per fleet-day. A 60-year
+  `retrox simulate` went from 76 to 57 s, its planning from 17 to 3.5 s,
+  and its health report barely moved (fewer idle traders, fuller holds).
+  Still above ~100 ns: a route, which prices a dozen or so listed
+  buyers at today's prices; a list refresh, which reads 20 neighbours'
+  listings; and a harvester's run, which still walks its system's
+  sources and markets. Those are the next levers.
 
 ### 5.2 Two tiers + LOD bubble
 
@@ -314,7 +386,8 @@ Consequences:
   or that the bubble leaves behind, becomes a coarse trip again, its
   remaining days estimated the way coarse trips are.
 - **Behaviour:** in the bubble a fleet picks a fresh route at every port
-  instead of waiting for its monthly review, so traders near the player
+  instead of waiting for its monthly review, and the bubble's systems
+  refresh their trade lists daily (§5.1.3), so traders near the player
   react to the markets the player is changing.
 - **Losses** roll once per trip, coming out of its last lane, in both
   tiers.
@@ -383,8 +456,9 @@ report to check them on a long run.
 - **Ships follow freight.** A company buys a ship only when a fleet came
   in with its holds ≥ 90 % full and none of its fleets is idle. A
   settlement founds a company only when it has a full hold's worth of
-  surplus and no ships sit idle in its system; the crew fetches its hull
-  from the nearest yard in trading reach that has it. A fleet that has
+  surplus and no ships sat idle in its system at the start of the month;
+  the crew fetches its hull from the nearest listed yard in trading reach
+  that has it (§5.1.3). A fleet that has
   carried nothing for three monthly reviews running (cargo aboard counts
   as carrying) sells half its ships, at least one, for scrap: half their
   mass, as metal, to the port it's in. A company whose last fleet goes
