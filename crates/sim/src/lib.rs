@@ -21,6 +21,7 @@ pub mod ledger;
 pub mod phases;
 pub mod pool;
 pub mod rng;
+pub mod routes;
 pub mod settlement;
 pub mod ship;
 pub mod state;

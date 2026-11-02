@@ -1,7 +1,7 @@
 //! Between systems: hyperlanes, routes along them, and the jump itself.
 
 use glam::DVec3;
-use retrox_sim::{GalaxyState, SystemId};
+use retrox_sim::{GalaxyState, SystemId, routes};
 
 use super::{AU, Mode, Place, REFERENCE, SECONDS_PER_DAY, SystemView, World, look_rotation};
 
@@ -83,37 +83,9 @@ impl World {
     /// The quickest way along the hyperlanes from here to `to` (by days in
     /// transit): every system on the way, starting here and ending at `to`.
     pub fn route(&self, to: SystemId) -> Option<Vec<SystemId>> {
-        use std::cmp::Reverse;
-        use std::collections::{BinaryHeap, HashMap};
-        let from = self.system;
-        let mut best: HashMap<SystemId, (f64, SystemId)> = HashMap::from([(from, (0.0, from))]);
-        let mut heap = BinaryHeap::from([Reverse((0.0f64.to_bits(), from))]);
-        while let Some(Reverse((bits, system))) = heap.pop() {
-            let days = f64::from_bits(bits);
-            if best.get(&system).is_some_and(|&(b, _)| b < days) {
-                continue;
-            }
-            if system == to {
-                let mut path = vec![to];
-                while let Some(&last) = path.last()
-                    && last != from
-                {
-                    path.push(best[&last].1);
-                }
-                path.reverse();
-                return Some(path);
-            }
-            for &lane in &self.galaxy.systems[system].lanes {
-                let lane = &self.galaxy.lanes[lane];
-                let next = lane.other(system);
-                let d = days + jump_days(lane.length_ly);
-                if best.get(&next).is_none_or(|&(b, _)| d < b) {
-                    best.insert(next, (d, system));
-                    heap.push(Reverse((d.to_bits(), next)));
-                }
-            }
-        }
-        None
+        routes::path(&self.galaxy, self.system, to, |lane| {
+            jump_days(lane.length_ly)
+        })
     }
 
     /// The galaxy map can be opened: flying normally, docked, or landed.
