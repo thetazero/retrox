@@ -2584,5 +2584,60 @@ fn remote_info(w: &World) -> String {
         let _ = writeln!(out, "bearing yaw {yaw:.1} pitch {pitch:.1} (deg; +yaw right, +pitch up)");
         let _ = writeln!(out, "closing_mps {closing:.0}");
     }
+    let bearing = |to: glam::DVec3| {
+        let local = w.ship.rot.inverse() * to.normalize_or_zero();
+        (
+            local.x.atan2(-local.z).to_degrees(),
+            local.y.asin().to_degrees(),
+        )
+    };
+    let me = w.combat_position();
+    let _ = writeln!(
+        out,
+        "player shield {:.0} hull_damage {:.0} heat {:.1} locked {}",
+        w.combat.player.shield,
+        w.combat.player.damage.total(),
+        w.combat.player.heat,
+        w.combat.player.locked
+    );
+    for r in &w.combat.raiders {
+        let to = r.craft.pos - me;
+        let (yaw, pitch) = bearing(to);
+        let _ = writeln!(
+            out,
+            "raider {} dist {:.0} yaw {yaw:.1} pitch {pitch:.1} shield {:.0} damage {:.0} targeted {}",
+            r.id,
+            to.length(),
+            r.vessel.shield,
+            r.vessel.damage.total(),
+            w.combat.target == Some(r.id)
+        );
+    }
+    if let Some((field, rocks)) = &w.field_rocks {
+        let ship = w.ship.rel;
+        let mut near: Vec<_> = w
+            .mining
+            .live_rocks(*field, &w.galaxy.fields[*field], rocks, w.clock_s)
+            .filter(|r| !r.worked_out)
+            .map(|r| ((r.pos - ship).length(), r))
+            .collect();
+        near.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for (d, r) in near.iter().take(6) {
+            let (yaw, pitch) = bearing(r.pos - ship);
+            let _ = writeln!(
+                out,
+                "rock {:?} dist {d:.0} r {:.0} scanned {} grade {:.2} veins {} damage {:.2} yaw {yaw:.1} pitch {pitch:.1}",
+                r.id,
+                r.radius,
+                r.scanned,
+                r.lode.grade,
+                r.lode.veins().len(),
+                r.damage
+            );
+        }
+        if let Some(state) = w.mining.field(*field) {
+            let _ = writeln!(out, "nuggets {}", state.nuggets.len());
+        }
+    }
     out
 }
