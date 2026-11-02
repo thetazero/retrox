@@ -37,6 +37,7 @@ mod prowl;
 mod routing;
 #[cfg(test)]
 mod tests;
+mod yards;
 
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
@@ -72,6 +73,7 @@ pub const LANDING_RADII: f64 = 2.0;
 /// low enough to land straight away.
 pub const APPROACH_RADII: f64 = 1.6;
 pub use pilot::{COMBAT_SPEED, STRAFE_SPEED, assist, handling, look_rotation, steer};
+pub use yards::{Nearby, Service};
 
 /// Real seconds the hyperlane sequence plays for.
 pub const JUMP_DURATION: f32 = 4.0;

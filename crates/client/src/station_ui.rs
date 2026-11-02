@@ -13,7 +13,7 @@ use crate::hud::{
 };
 use crate::trade;
 use crate::widgets::{Look, push};
-use crate::world::{Action, Screen, World};
+use crate::world::{Action, Screen, Service, World};
 
 pub fn draw(ctx: &egui::Context, w: &World, here: SettlementId, actions: &mut Vec<Action>) {
     if w.galaxy.settlements.get(here).is_none() {
@@ -123,7 +123,7 @@ fn hub(ctx: &egui::Context, w: &World, here: SettlementId, actions: &mut Vec<Act
             let hangar_note = match (services.outfitter, stored_here) {
                 (true, 0) => "refit your ship".to_owned(),
                 (true, n) => format!("refit · {n} stored here"),
-                (false, 0) => "no outfitter · storage only".to_owned(),
+                (false, 0) => format!("no outfitter · {}", nearest_note(w, Service::Refit)),
                 (false, n) => format!("no outfitter · {n} stored here"),
             };
             if menu_button(ui, "Hangar", &hangar_note, true) {
@@ -139,7 +139,7 @@ fn hub(ctx: &egui::Context, w: &World, here: SettlementId, actions: &mut Vec<Act
                     n => format!("{n} ships on the lot"),
                 }
             } else {
-                "no shipyard here".to_owned()
+                format!("none here · {}", nearest_note(w, Service::Shipyard))
             };
             if menu_button(ui, "Shipyard", &yard_note, services.shipyard) {
                 actions.push(Action::Open(Screen::Shipyard));
@@ -493,5 +493,17 @@ fn market_table(
         ) {
             actions.push(Action::Trade(good, -sells[k].1));
         }
+    }
+}
+
+/// "nearest: Kirov Yards, 2 jumps" (issue #161), or where to look.
+fn nearest_note(w: &World, service: Service) -> String {
+    match w.nearest(service, 1).first() {
+        Some(n) => format!(
+            "nearest {}, {}",
+            w.galaxy.settlements[n.at].name,
+            crate::hud::jumps_text(n.jumps)
+        ),
+        None => "none within 12 jumps".to_owned(),
     }
 }

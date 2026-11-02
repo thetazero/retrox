@@ -699,6 +699,12 @@ fn nav_list(ui: &mut egui::Ui, w: &World, actions: &mut Vec<Action>) {
             (_, Some(s)) | (Place::Station(s), None) if bound.contains(&s) => {
                 Some(("CARGO", AMBER))
             }
+            // Where ships are sold (issue #161).
+            (_, Some(s)) | (Place::Station(s), None)
+                if w.offers(s, crate::world::Service::Shipyard) =>
+            {
+                Some(("YARD", CREAM))
+            }
             _ => None,
         };
         let tag = tag.map(|(text, colour)| painter.layout_no_wrap(text.into(), mono(11.0), colour));

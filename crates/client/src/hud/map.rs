@@ -221,6 +221,14 @@ pub(super) fn draw(ctx: &egui::Context, w: &World, actions: &mut Vec<Action>) {
     let next_hop = route.get(1).copied();
     let neighbours: Vec<SystemId> = w.lanes().iter().map(|l| l.to).collect();
     let mut hovered: Option<SystemId> = None;
+    // The shipyards panel's systems, marked on the glass; and the one
+    // whose row the pointer was on last frame.
+    let found_yards = w.nearest(crate::world::Service::Shipyard, YARDS_LISTED);
+    let yard_systems: Vec<SystemId> = found_yards.iter().map(|y| y.system).collect();
+    let pointed_id = egui::Id::unique("galaxy_map_yard_pointed");
+    let pointed = ctx
+        .data(|d| d.get_temp::<Option<SystemId>>(pointed_id))
+        .flatten();
 
     egui::Area::new(egui::Id::unique("galaxy_map"))
         .order(egui::Order::Background)
@@ -273,6 +281,8 @@ pub(super) fn draw(ctx: &egui::Context, w: &World, actions: &mut Vec<Action>) {
                 w,
                 &route,
                 &neighbours,
+                &yard_systems,
+                pointed,
                 response.hover_pos(),
             );
             crosshair(&glass, centre, r);
@@ -341,7 +351,11 @@ pub(super) fn draw(ctx: &egui::Context, w: &World, actions: &mut Vec<Action>) {
         });
 
     sidebar(ctx, w, hovered, &route, next_hop, &mut view, actions);
-    ctx.data_mut(|d| d.insert_temp(id, view));
+    let pointed = yards_panel(ctx, w, &found_yards, actions);
+    ctx.data_mut(|d| {
+        d.insert_temp(id, view);
+        d.insert_temp(pointed_id, pointed);
+    });
 }
 
 /// Lanes, height lines, systems and their markers and labels, on the glass.
@@ -355,6 +369,8 @@ fn chart(
     w: &World,
     route: &[SystemId],
     neighbours: &[SystemId],
+    yards: &[SystemId],
+    pointed: Option<SystemId>,
     cursor: Option<Pos2>,
 ) -> Option<SystemId> {
     let pos = |s: SystemId| galaxy_point(w.galaxy.systems[s].position);
@@ -473,6 +489,23 @@ fn chart(
             AMBER,
         );
     }
+    // Shipyards in the panel: a cream square round each (issue #161),
+    // bright for the one whose row the pointer is on.
+    for &y in yards {
+        if let Some(&(p, r)) = screen_of.get(&y) {
+            let (side, ink) = if pointed == Some(y) {
+                (r * 2.0 + 14.0, CREAM)
+            } else {
+                (r * 2.0 + 9.0, CREAM.gamma_multiply(0.75))
+            };
+            painter.rect_stroke(
+                Rect::from_center_size(p, Vec2::splat(side)),
+                0.0,
+                Stroke::new(1.2, ink),
+                egui::StrokeKind::Middle,
+            );
+        }
+    }
     if let Some(&(p, r)) = hovered.and_then(|h| screen_of.get(&h)) {
         painter.circle_stroke(p, r + 4.0, Stroke::new(1.5, CREAM));
     }
@@ -480,9 +513,11 @@ fn chart(
     // Labels, most important first, skipping any that would overlap.
     let mut wanted: Vec<(SystemId, Color32, f32)> = vec![(w.system, VFD, 14.0)];
     wanted.extend(hovered.map(|h| (h, CREAM, 13.0)));
+    wanted.extend(pointed.map(|p| (p, CREAM, 13.0)));
     wanted.extend(w.course.map(|c| (c, AMBER, 13.0)));
     wanted.extend(route.iter().map(|&s| (s, AMBER.gamma_multiply(0.8), 11.0)));
     wanted.extend(neighbours.iter().map(|&s| (s, CREAM, 11.0)));
+    wanted.extend(yards.iter().map(|&s| (s, CREAM, 11.0)));
     // Then whatever's near the focus, nearest the camera first.
     wanted.extend(
         dots.iter()
@@ -1166,6 +1201,149 @@ fn sidebar(
     );
 }
 
+/// Shipyards listed in the course panel (issue #161).
+const YARDS_LISTED: usize = 4;
+
+/// The nearest places to buy a ship, in a panel of their own in the
+/// console's free corner (so it holds still while the course panel above
+/// changes with the pointer), as instrument rows: a click plots a course
+/// there, or, in this system, targets it and closes the chart. Returns the
+/// system of the row under the pointer, to mark on the glass.
+fn yards_panel(
+    ctx: &egui::Context,
+    w: &World,
+    found: &[crate::world::Nearby],
+    actions: &mut Vec<Action>,
+) -> Option<SystemId> {
+    let mut pointed = None;
+    panel(
+        ctx,
+        Panel {
+            id: "galaxy_map_yards",
+            title: "Nearest shipyards",
+            anchor: Align2::RIGHT_BOTTOM,
+            offset: [-16.0, -16.0],
+            width: 360.0,
+            collapsible: None,
+        },
+        |ui| {
+            ui.label(
+                RichText::new("ships sold and refitted · click one to plot a course")
+                    .size(11.0)
+                    .color(CREAM_DIM),
+            );
+            ui.add_space(4.0);
+            if found.is_empty() {
+                ui.label(RichText::new("none within 12 jumps").color(CREAM_DIM));
+                return;
+            }
+            pointed = yard_rows(ui, w, found, actions);
+        },
+    );
+    pointed
+}
+
+fn yard_rows(
+    ui: &mut egui::Ui,
+    w: &World,
+    found: &[crate::world::Nearby],
+    actions: &mut Vec<Action>,
+) -> Option<SystemId> {
+    let mut pointed = None;
+    ui.spacing_mut().item_spacing.y = 0.0;
+    for &yard in found {
+        let st = &w.galaxy.settlements[yard.at];
+        let here = yard.system == w.system;
+        let selected = if here {
+            w.nav_selected().is_some_and(|(place, city)| {
+                city == Some(yard.at) || place == Place::Station(yard.at)
+            })
+        } else {
+            w.course == Some(yard.system)
+        };
+        let (rect, response, look) = crate::widgets::list_row(ui, 36.0, selected, true, AMBER);
+        if response.hovered() {
+            pointed = Some(yard.system);
+        }
+        if response.clicked() {
+            if here {
+                actions.push(match st.site {
+                    retrox_sim::Site::Space(_) => Action::Target(Place::Station(yard.at)),
+                    _ => Action::TargetCity(yard.at),
+                });
+                actions.push(Action::ToggleMap);
+            } else {
+                actions.push(Action::PlotCourse(Some(yard.system)));
+            }
+        }
+        let painter = ui.painter();
+        let ink = if look.selected && !look.hot {
+            AMBER
+        } else {
+            CREAM_DIM
+        };
+        let glyph = Pos2::new(rect.left() + 16.0, rect.top() + 12.0);
+        match st.site {
+            retrox_sim::Site::Space(_) => {
+                place_glyph(painter, w, Place::Station(yard.at), glyph, ink)
+            }
+            _ => city_glyph(painter, glyph, ink),
+        }
+        let range = painter.layout_no_wrap(
+            jumps_text(yard.jumps).to_uppercase(),
+            mono(13.0),
+            if look.hot {
+                CREAM
+            } else if look.selected {
+                AMBER.gamma_multiply(0.85)
+            } else {
+                VFD.gamma_multiply(0.85)
+            },
+        );
+        let name_x = rect.left() + 32.0;
+        let room = rect.right() - 6.0 - range.size().x - 10.0 - name_x;
+        painter.text(
+            Pos2::new(name_x, glyph.y),
+            Align2::LEFT_CENTER,
+            crate::widgets::fit(painter, &st.name, mono(14.0), room),
+            mono(14.0),
+            look.text(AMBER),
+        );
+        let lot = crate::hangar::lot()
+            .iter()
+            .filter(|o| crate::hangar::can_build(&st.economy, o))
+            .count();
+        let lot = match lot {
+            0 => "nothing on the lot".to_owned(),
+            n => format!("{} on the lot", count(n, "ship")),
+        };
+        let line = if here {
+            lot
+        } else {
+            format!(
+                "{} · about {:.0} d · {lot}",
+                w.galaxy.systems[yard.system].name, yard.days
+            )
+        };
+        painter.text(
+            Pos2::new(name_x, rect.top() + 27.0),
+            Align2::LEFT_CENTER,
+            crate::widgets::fit(painter, &line, mono(11.0), rect.right() - 6.0 - name_x),
+            mono(11.0),
+            CREAM_DIM,
+        );
+        painter.galley(
+            Pos2::new(
+                rect.right() - 6.0 - range.size().x,
+                glyph.y - range.size().y / 2.0,
+            ),
+            range,
+            Color32::PLACEHOLDER,
+        );
+    }
+    pointed
+}
+
 fn system_info(ui: &mut egui::Ui, w: &World, s: SystemId) {
     let system = &w.galaxy.systems[s];
     ui.label(
@@ -1193,6 +1371,10 @@ fn system_info(ui: &mut egui::Ui, w: &World, s: SystemId) {
         facts += &format!(" · pop {population:.1}k");
     }
     ui.label(RichText::new(facts).color(CREAM_DIM));
+    let yards = w.count_in(s, crate::world::Service::Shipyard);
+    if yards > 0 {
+        ui.label(RichText::new(count(yards, "shipyard")).color(CREAM));
+    }
     let here = w.galaxy.systems[w.system].position;
     let away = if s == w.system {
         "you are here".to_owned()

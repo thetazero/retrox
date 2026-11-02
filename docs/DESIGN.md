@@ -1050,6 +1050,36 @@ work.
   location — the same section model at a larger scale.
 - Procedural generation of ship visuals is built from the same module kit.
 
+#### 7.4.1 Finding a shipyard (#161)
+
+Only big industrial settlements build ships (§5.4), a handful in any
+stretch of space, so where to buy one is shown, not left to docking
+round:
+
+- **Which settlements build ships is public knowledge**, like a pilot's
+  almanac, not something learned by visiting. (Prices two jumps out are
+  still learned, §7.8; a yard's lot is shown because a yard is a
+  landmark.)
+- **The star chart has a NEAREST SHIPYARDS panel** in the console's
+  free bottom-right corner, reachable from anywhere the chart is: the
+  four quickest to reach by days in transit, this system's own first,
+  each with its system, the trip and what's on the lot. A click plots
+  a course there; on one in this system it targets the yard and closes
+  the chart. The listed yards carry a cream square on the glass,
+  brighter for the row under the pointer. It is its own panel rather
+  than a section of the course panel, because the course panel changes
+  height with the pointer and the rows moved under the click.
+- **NAVIGATION tags a yard YARD** in cream (a plain fact, so neither
+  amber's buying nor teal's paying); CARGO outranks it on a row.
+- **A station with no yard says where the nearest is** on its menu
+  ("none here · nearest Maeala, 4 jumps"), as one with no outfitter does
+  for refits. Every shipyard refits, so the chart lists only yards.
+- **Only places the player can dock or land count.** Settlements on
+  undivided bodies (§5.1, `Site::Surface`) can't be visited yet, so a
+  yard there is never listed or tagged; nor is one whose faction counts
+  the player hostile, since it won't clear the ship in. The search goes
+  out 12 jumps.
+
 ### 7.5 Fleet & automation
 
 - Own multiple ships, hire faceless NPC captains, assign automated trade
@@ -1357,7 +1387,7 @@ Decided while bringing every screen into one style (issue #77):
   off the body they're on the same way, one step further in. A city row
   carries no range (its planet's row has it). Where the hold's cargo is
   bound, the row is tagged CARGO in amber, as a pirate lair is tagged
-  RAIDERS in red. Under TRAFFIC, trader fleets are teal squares.
+  RAIDERS in red and a shipyard YARD in cream (§7.4.1). Under TRAFFIC, trader fleets are teal squares.
 - **Hostiles and standing** (audit 3, #137): anything hostile is alarm
   red, and anything leaning that way is the same red dimmer: a pirate gang
   about its own business is a dim red diamond (bright, and doubled, when
