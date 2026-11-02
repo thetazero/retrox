@@ -969,6 +969,77 @@ fn a_hostile_convoy_left_behind_leaves_the_scene() {
 }
 
 #[test]
+fn a_fight_stays_put_when_the_convoy_it_was_framed_in_is_lost() {
+    let mut world = World::new(1);
+    assert!(world.start_by_traffic(), "seed 1 has traffic");
+    let key = world
+        .traffic
+        .contacts
+        .iter()
+        .max_by_key(|c| c.ships)
+        .unwrap()
+        .key;
+    let faction = world.fleet_faction(key).expect("a faction");
+    world.player.standing.change(faction, -100.0);
+    world.enter_frame(Place::Convoy(key));
+    world.ship.flight_assist = true;
+    // A gang is on us too, and fights on when the convoy is gone.
+    let gang = world.galaxy.pirates.gangs.keys().next().expect("a gang");
+    let me = world.combat_position();
+    world.engage(gang, None, me + DVec3::new(4e3, 0.0, 0.0), me);
+    world.update(1.0 / 60.0, Controls::default());
+    assert!(world.combat.has_convoy(key), "its ships are in the scene");
+    let pirate = |r: &&crate::combat::Raider| r.crew == crate::combat::Crew::Pirate;
+    assert!(
+        world.combat.raiders.iter().any(|r| pirate(&r)),
+        "the gang is out"
+    );
+    // Where the pirates and wrecks are, in the system frame.
+    let scene = |w: &World| {
+        let o = w.combat_origin();
+        let ships: Vec<(u32, DVec3)> = (w.combat.raiders.iter())
+            .filter(pirate)
+            .map(|r| (r.id, o + r.craft.pos))
+            .collect();
+        let wrecks: Vec<DVec3> = w.combat.wrecks.iter().map(|x| o + x.pos).collect();
+        (ships, wrecks)
+    };
+    // Shoot down every ship in the convoy, the last one too.
+    let pilot = crate::combat::Pilot {
+        craft: world.player_craft(),
+        burn: 0.0,
+        trigger: false,
+    };
+    let traders: Vec<u32> = (world.combat.raiders.iter())
+        .filter(|r| r.trader_fleet() == Some(key))
+        .map(|r| r.id)
+        .collect();
+    assert!(!traders.is_empty());
+    for id in traders {
+        world.combat.hit_raider(id, 1e6, &pilot);
+    }
+    let mut before = scene(&world);
+    for _ in 0..30 {
+        world.update(1.0 / 60.0, Controls::default());
+        let after = scene(&world);
+        for (id, at) in &after.0 {
+            if let Some((_, was)) = before.0.iter().find(|(i, _)| i == id) {
+                let moved = (*at - *was).length();
+                assert!(moved < 2e3, "raider {id} jumped {moved:.0} m");
+            }
+        }
+        for (was, at) in before.1.iter().zip(&after.1) {
+            let moved = (*at - *was).length();
+            assert!(moved < 2e3, "a wreck jumped {moved:.0} m");
+        }
+        before = after;
+    }
+    assert_eq!(world.ship.frame, Place::Star, "the convoy is gone");
+    assert!(!before.1.is_empty(), "its wrecks are left");
+    assert!(world.hostiles_near() > 0, "the gang fights on, close by");
+}
+
+#[test]
 fn intercept_brings_the_ship_alongside_a_convoy() {
     let mut world = World::new(1);
     assert!(world.start_by_traffic(), "seed 1 has traffic");

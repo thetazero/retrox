@@ -381,6 +381,52 @@ impl Combat {
         self.target = next.map(|(_, id)| *id);
     }
 
+    /// The fight's anchor moved: `dpos` and `dvel` are the old anchor's
+    /// position and velocity less the new one's. Carry everything in the
+    /// scene over, so nothing in it moves in the system frame.
+    pub fn rebase(&mut self, dpos: DVec3, dvel: DVec3) {
+        for r in &mut self.raiders {
+            r.craft.pos += dpos;
+            r.craft.vel += dvel;
+            r.home += dpos;
+            if let Some((pos, vel)) = &mut r.slot {
+                *pos += dpos;
+                *vel += dvel;
+            }
+        }
+        for s in &mut self.shots {
+            s.pos += dpos;
+            s.vel += dvel;
+        }
+        for p in &mut self.pulses {
+            p.from += dpos;
+            p.to += dpos;
+        }
+        for f in &mut self.flashes {
+            f.pos += dpos;
+            f.vel += dvel;
+        }
+        for b in &mut self.blasts {
+            b.pos += dpos;
+            b.vel += dvel;
+        }
+        for d in &mut self.debris {
+            d.pos += dpos;
+            d.vel += dvel;
+        }
+        for w in &mut self.wrecks {
+            w.pos += dpos;
+            w.vel += dvel;
+        }
+        for (_, _, point) in &mut self.pending {
+            *point += dpos;
+        }
+        for (pos, vel, ..) in &mut self.dropped {
+            *pos += dpos;
+            *vel += dvel;
+        }
+    }
+
     /// The fight is somewhere else now: shells, flashes, wrecks and the
     /// gang go (their positions are relative to the anchor). The world
     /// reports the fight to the sim first.
