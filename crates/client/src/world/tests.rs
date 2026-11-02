@@ -84,6 +84,15 @@ fn fast_travel_reaches_every_place_and_only_climbs_out_of_a_well() {
             world.name(target)
         );
         assert!(world.clock_s > before, "galaxy time must pass");
+        // Arrives nose-on (#118), not braking tail-first.
+        let nose = world.ship.rot * DVec3::NEG_Z;
+        let to = (world.position(target) - world.ship_position()).normalize();
+        assert!(
+            nose.dot(to) > 0.99,
+            "{}: arrived facing {:.0}° off",
+            world.name(target),
+            nose.dot(to).clamp(-1.0, 1.0).acos().to_degrees()
+        );
     }
 }
 
@@ -653,6 +662,7 @@ fn a_highport_is_a_hop_from_the_city_below() {
         world.distance_to(station) < world.arrival_distance(station) * 1.2,
         "stopped at the port's arrival point"
     );
+    assert_eq!(world.prompts().dock, Some(port), "arrives in reach of [F] dock");
     assert_eq!(world.current_well(), Some(planet), "never left the well");
     assert!(down + up < 20.0, "{down:.1} s down, {up:.1} s up");
 }

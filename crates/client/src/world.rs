@@ -623,7 +623,9 @@ impl World {
             Place::Body(b) if self.has_city(b) => self.place_radius(place) * APPROACH_RADII,
             Place::Star | Place::Body(_) => self.well_radius(place) * 1.05,
             Place::Field(_) => self.place_radius(place) + 10e3,
-            Place::Station(_) => 20e3,
+            // Inside the dock prompt's reach ([`World::prompts`]), clear of
+            // the hull: arrive, [F] to dock.
+            Place::Station(s) => self.station_size_m(s) * 1.2 + 200.0,
             Place::Convoy(_) => 2.5e3,
         }
     }

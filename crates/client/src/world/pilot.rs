@@ -20,6 +20,9 @@ pub const STRAFE_SPEED: f64 = 80.0;
 const TURN_RATES: DVec3 = DVec3::new(1.3, 0.9, 2.2);
 /// The ship's main drive under autopilot, m/s²: about a day per AU.
 const DRIVE_ACCEL: f64 = ACCEL;
+/// Real seconds before the autopilot hands back that the ship turns from
+/// braking tail-first to face where it's going (DESIGN §7.1.2).
+const TURN_OVER_S: f64 = 1.5;
 
 /// Forward speed for a throttle setting: linear up to [`COMBAT_SPEED`] at
 /// 0.5, then exponential up to [`CRUISE_SPEED`] at 1.0.
@@ -116,6 +119,19 @@ impl World {
         }
     }
 
+    /// Which way the ship should be looking when `leg` ends: at the place
+    /// it travelled to, or, out of a well, the way it's headed next.
+    pub(super) fn arrival_facing(&self, leg: Leg, ship: DVec3, t: f64) -> DVec3 {
+        match leg {
+            Leg::To(place) => self.position_at(place, t) - ship,
+            Leg::Intercept(fleet) => self.position_at(Place::Convoy(fleet), t) - ship,
+            Leg::Climb { .. } => {
+                let goal = self.fast_travel_goal(leg, ship, t);
+                DVec3::from_array(goal.pos) - self.position_at(leg.frame(), t)
+            }
+        }
+    }
+
     /// The fast-travel drive's acceleration for this ship.
     pub(super) fn drive_accel(&self) -> f64 {
         DRIVE_ACCEL * self.handling().0
@@ -178,11 +194,19 @@ impl World {
         let pos = DVec3::from_array(trip.ship.pos);
         let vel = DVec3::from_array(trip.ship.vel);
         // Face the way the drive is pushing: out along the route, then
-        // flipped round to brake.
-        let goal = self.fast_travel_goal(leg, pos, self.t_days());
+        // flipped round to brake. In the last moments of the stop (and
+        // at the very start, before it's moving) it turns to face where
+        // it's going, so the place is the first thing the pilot sees.
+        let t = self.t_days();
+        let goal = self.fast_travel_goal(leg, pos, t);
         let thrust = DVec3::from_array(flight::autopilot(&trip.ship, &goal, accel, 1.0));
-        if thrust.length() > accel * 0.1 {
-            let k = 1.0 - (-4.0 * dt).exp();
+        let closing = (vel - DVec3::from_array(goal.vel)).length();
+        let stop_in = closing / (accel * trip.warp.max(1e-9));
+        let k = 1.0 - (-4.0 * dt).exp();
+        if stop_in < TURN_OVER_S {
+            let face = self.arrival_facing(leg, pos, t);
+            self.ship.rot = self.ship.rot.slerp(look_rotation(face), k).normalize();
+        } else if thrust.length() > accel * 0.1 {
             self.ship.rot = self.ship.rot.slerp(look_rotation(thrust), k).normalize();
         }
         self.ship.frame = Place::Star;
@@ -213,6 +237,10 @@ impl World {
     }
 
     pub(super) fn arrive_fast_travel(&mut self, leg: Leg) {
+        // Finish the turn: hand back looking at where we came to.
+        let face = self.arrival_facing(leg, self.ship_position(), self.t_days());
+        self.ship.rot = look_rotation(face);
+        self.ship.spin = DVec3::ZERO;
         // At rest relative to the target, within a few m/s: carry on from
         // exactly there.
         self.enter_frame(leg.frame());
