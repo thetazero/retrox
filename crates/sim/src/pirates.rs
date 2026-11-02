@@ -455,11 +455,13 @@ pub fn review(state: &mut GalaxyState) {
             .map(|(id, _)| id)
             .collect();
         for id in due {
-            let p = BASE_CHANCE + HARDSHIP_CHANCE * hardship(state, id);
-            let mut rng = Rng::stream(state.seed, "gang-found", day, settlement_bits(id));
-            if rng.chance(p) && state.pirates.gangs.len() < cap {
-                found(state, id, &mut rng);
-            }
+            crate::decisions::time(crate::decisions::Decision::Pirates, || {
+                let p = BASE_CHANCE + HARDSHIP_CHANCE * hardship(state, id);
+                let mut rng = Rng::stream(state.seed, "gang-found", day, settlement_bits(id));
+                if rng.chance(p) && state.pirates.gangs.len() < cap {
+                    found(state, id, &mut rng);
+                }
+            });
         }
     }
     let gangs: Vec<GangId> = state

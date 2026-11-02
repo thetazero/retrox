@@ -206,7 +206,9 @@ pub fn review(state: &mut GalaxyState) {
     let day = state.time.days();
     for i in crate::settlement::review_slots(day, 0, state.settlements.slot_count()) {
         if let Some(id) = state.settlements.key_at(i) {
-            review_one(state, id);
+            crate::decisions::time(crate::decisions::Decision::Construction, || {
+                review_one(state, id);
+            });
         }
     }
 }
