@@ -8,12 +8,14 @@ use retrox_gen::{GalaxyConfig, generate};
 use retrox_sim::{GalaxyTime, PIPELINE, tick_profiled};
 
 mod map;
+mod ship;
 
 const USAGE: &str = "\
 usage:
   retrox simulate [--seed N] [--years N]   run the sim headless, print timings
   retrox map [--seed N] > galaxy.svg       render the generated galaxy as SVG
-  retrox stats [--seed N]                  print generation statistics";
+  retrox stats [--seed N]                  print generation statistics
+  retrox ship [HULL]                       list stock ships, or show one in detail";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -21,6 +23,9 @@ fn main() -> ExitCode {
         eprintln!("{USAGE}");
         return ExitCode::FAILURE;
     };
+    if command == "ship" {
+        return ship::print(args.get(1).map(String::as_str));
+    }
     let (seed, years) = match parse_flags(&args[1..]) {
         Ok(flags) => flags,
         Err(err) => {

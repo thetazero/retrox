@@ -250,10 +250,27 @@ rather than space bugs.
 
 ### 7.4 Ships
 
-- **Hull + slots** for small ships.
-- **Large ships: hull compartments + slots** — a capital ship is a stack of
-  modules (habitation, cargo, reactor, hangar, weapons…), each with its
-  own slots, and each a damage location.
+- Ships are built from **sections**, each with its own slots and each its
+  own damage location. **Small ships** are one built-in section. **Medium
+  and large ships** are a frame with bow, mid and stern mounts; any section
+  of the matching position and *exact* size goes in a mount (a gun deck or
+  a cargo bay amidships, a sprint stern or a cruise stern aft). The frame
+  itself differs per hull: number of mid mounts, mass, structure.
+- Slot kinds: weapon, engine, RCS, power, shield, radar, radiator, cargo.
+  A slot takes a module of its kind at its size or smaller.
+- Two budgets tie a fit together: **power** (reactors vs. everything that
+  draws) and **heat** (active modules vs. sections + radiators, with a heat
+  capacity that buffers surplus). Fits may be over budget at full load —
+  e.g. an interceptor that can't fire, shield and burn all at once — and
+  the pilot manages that in flight.
+- **Refitting only while docked.** Swapping a section takes longer than
+  swapping a module, and unfits the modules inside it.
+- Turning comes from **RCS thrusters** working against the ship's moment
+  of inertia (mass × length²), so heavy or long ships turn slowly.
+- Roles: combat, trade, speed, at small / medium / large. No hangars yet.
+- **Capital ships** come later: a stack of modules (habitation, cargo,
+  reactor, hangar, weapons…), each with its own slots, and each a damage
+  location — the same section model at a larger scale.
 - Procedural generation of ship visuals is built from the same module kit.
 
 ### 7.5 Fleet & automation
