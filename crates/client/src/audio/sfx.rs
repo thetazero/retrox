@@ -71,10 +71,15 @@ pub enum Cue {
     ShieldHit,
     /// A shot through to the hull: a clang.
     HullHit,
+    /// The ship lost: a falling tone under the card, like a station
+    /// signing off.
+    Lost,
+    /// The tape transport rewinding to the checkpoint, then stopping.
+    Rewind,
 }
 
 impl Cue {
-    pub const ALL: [Cue; 34] = [
+    pub const ALL: [Cue; 36] = [
         Cue::Switch,
         Cue::Tick,
         Cue::Confirm,
@@ -109,6 +114,8 @@ impl Cue {
         Cue::Zap,
         Cue::ShieldHit,
         Cue::HullHit,
+        Cue::Lost,
+        Cue::Rewind,
     ];
 
     pub fn index(self) -> usize {
@@ -145,6 +152,8 @@ impl Cue {
             Cue::ShieldHit => 0.4,
             Cue::HullHit => 0.5,
             Cue::Blast => 0.72,
+            Cue::Lost => 0.5,
+            Cue::Rewind => 0.45,
             Cue::JumpArrive | Cue::Land | Cue::Launch => 0.62,
             _ => 0.55,
         }
@@ -156,7 +165,7 @@ impl Cue {
             Cue::Tick | Cue::Confirm | Cue::Back | Cue::Switch | Cue::Relay | Cue::Teletype => 0.08,
             Cue::Comms => 0.05,
             Cue::Scan | Cue::Delivered | Cue::Clank => 0.5,
-            Cue::Fracture | Cue::Blast | Cue::JumpArrive => 0.35,
+            Cue::Fracture | Cue::Blast | Cue::JumpArrive | Cue::Lost => 0.35,
             _ => 0.2,
         }
     }
@@ -607,6 +616,86 @@ fn render(cue: Cue, seed: u64, variant: usize) -> Vec<f32> {
             let ring = [(340.0, 0.4, 0.15), (571.0, 0.3, 0.1), (893.0, 0.2, 0.06)];
             mix_in(&mut buf, &synth(0.4, |t| metal(t, &ring, pitch)), 0.0, 0.7);
             mix_in(&mut buf, &transient(seed, 0.04, 2400.0, 0.006), 0.0, 1.2);
+            buf
+        }
+        Cue::Lost => {
+            // D falling to A an octave down, on detuned saws through a
+            // closing filter, with tape wow; a low thud under the first.
+            let mut a = Osc::default();
+            let mut b = Osc::default();
+            let mut sub = Osc::default();
+            let mut lp = Svf::default();
+            let mut buf = synth(3.2, |t| {
+                let wow = 1.0 + 0.004 * (TAU * 0.7 * t).sin() + 0.002 * (TAU * 5.3 * t).sin();
+                let (f, start) = if t < 0.75 {
+                    (146.83, 0.0)
+                } else {
+                    (110.0, 0.75)
+                };
+                let local = t - start;
+                let glide = if start > 0.0 {
+                    1.0 + 0.06 * decay(local, 0.05)
+                } else {
+                    1.0
+                };
+                let f = f * wow * glide;
+                let s =
+                    a.saw(f, DT) * 0.5 + b.saw(f * 1.006, DT) * 0.5 + sub.sine(f * 0.5, DT) * 0.6;
+                let env = ramp(local, 0.06)
+                    * if start > 0.0 {
+                        decay(local, 1.1)
+                    } else {
+                        1.0 - 0.3 * ramp(local - 0.5, 0.25)
+                    };
+                let cutoff = 300.0 + 1400.0 * decay(local, 0.5);
+                lp.low(s * env, cutoff, 0.9, DT) * 0.8
+            });
+            mix_in(
+                &mut buf,
+                &synth(0.8, |t| thud(t, 70.0, 30.0, 0.35)),
+                0.0,
+                0.9,
+            );
+            buf
+        }
+        Cue::Rewind => {
+            // The motor winding up to a whine with the tape's flutter and
+            // hiss, squeals off the heads, then the brakes and a clunk.
+            let len = 2.95;
+            let brake = 2.15;
+            let mut motor = Osc::default();
+            let mut motor2 = Osc::default();
+            let mut bp = Svf::default();
+            let mut hiss = Svf::default();
+            let mut squeal = Svf::default();
+            let mut gate = 0.0f32;
+            let mut buf = synth(len, |t| {
+                let up = ramp(t, 0.5);
+                let down = 1.0 - ramp(t - brake, 0.55);
+                let speed = up * up * down;
+                let flutter = 1.0 + 0.02 * (TAU * 9.0 * t).sin() + 0.01 * (TAU * 23.0 * t).sin();
+                let f = (140.0 + 760.0 * speed) * flutter;
+                let whine = bp.band(
+                    motor.saw(f, DT) + 0.5 * motor2.saw(f * 2.01, DT),
+                    f * 2.0,
+                    3.0,
+                    DT,
+                );
+                let rush = hiss.band(rng.noise(), 900.0 + 3500.0 * speed, 0.8, DT);
+                if rng.chance(0.0008) {
+                    gate = 1.0;
+                }
+                gate *= 0.9993;
+                let sq = squeal.band(rng.noise(), 2600.0 + 900.0 * speed, 12.0, DT) * gate * speed;
+                (0.45 * whine + 0.35 * rush + 0.6 * sq) * speed.max(0.0) * ramp(t, 0.02)
+            });
+            mix_in(&mut buf, &clank(seed, 1.1, 0.8), brake + 0.5, 0.9);
+            mix_in(
+                &mut buf,
+                &transient(seed + 3, 0.03, 3000.0, 0.002),
+                0.0,
+                0.8,
+            );
             buf
         }
         Cue::Collect => {

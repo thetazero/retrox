@@ -1159,6 +1159,20 @@ impl World {
                 let b = Place::Body(body);
                 orbit_view(self.position(b), self.place_radius(b) * 3.0)
             }
+            // The ship lost: from outside, drawing slowly back and round from
+            // what's left of it (DESIGN §7.7).
+            _ if self.combat.lost.is_some() => {
+                let t = self.combat.lost.unwrap_or(0.0);
+                let ease = 1.0 - (-t / 3.0).exp();
+                let rot = self.cam_rot * DQuat::from_rotation_y(-0.35 * ease + 0.02 * t);
+                let offset = DVec3::new(0.0, 6.0 + 10.0 * ease, 28.0 + 50.0 * ease);
+                let offset = rot * offset * self.camera_scale();
+                // At the wreck, keeping the chase camera's roll.
+                let f = (-offset).normalize();
+                let r = f.cross(rot * DVec3::Y).normalize_or(rot * DVec3::X);
+                let look = DQuat::from_mat3(&glam::DMat3::from_cols(r, r.cross(f), -f));
+                (ship + offset, look)
+            }
             _ if self.cockpit => (
                 ship + self.ship.rot * DVec3::new(0.0, 1.2, -self.stats().length_m * 0.5 + 1.0),
                 self.ship.rot,

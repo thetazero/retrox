@@ -553,7 +553,7 @@ of autopilot each way plus the landing sequence.
   lasers, an electric fizz on the shield, a metal clang and hull creak
   when shots get through, and the volatile-rock blast for ships going up.
 - **Losing the ship** shows a "ship lost" card and restores the last
-  checkpoint (§7.7); everything else about death is its own issue.
+  checkpoint (§7.7.1).
 
 ### 7.3 Mining
 
@@ -657,6 +657,40 @@ from a random generator (pillar 5).
   autosave). Because the game is deterministic, the same future plays out
   again unless you act differently — what you learned before dying is
   yours to use.
+
+#### 7.7.1 Losing the ship, as built (#78)
+
+- **The same future, really.** A checkpoint is written on docking or
+  landing, and a ship at rest in a dock or city is exactly what a loaded
+  checkpoint has: cool, shields up, guns ready, nothing in flight. So
+  nothing left over from before the dock (gun cooldowns, heat, an earlier
+  fight's dice) changes what comes after it. Each fight's own dice (shot
+  scatter, wreckage) are also reseeded from the band when it comes out,
+  so a fight is decided by the field, the date and what the player does
+  from then on. A test plays a lost fight from a checkpoint twice, frame
+  by frame, and they match to the bit; flying differently changes it.
+- **The moment.** The instruments die with the ship: the HUD goes, and
+  the camera draws back and round from the fireball in its last roll,
+  the view darkening at the edges. After 1.6 s a red constructivist band
+  slams across the view, **SHIP LOST** in display type with the ship's
+  name plate riveted beside it, over a panel of readouts: when and where
+  it was destroyed (alarm red), the last checkpoint's date and place
+  (teal), and how much time going back costs (amber, "1 d 04 h
+  earlier"). A falling two-note synth tone, like a station signing off,
+  plays under it.
+- **The choice is the player's.** No automatic restore: Enter or the red
+  key restores; Esc opens the pause menu (whose Load page has every save
+  and checkpoint). Without a checkpoint the key reads *title screen*.
+- **The rewind.** Restoring rolls the tape back rather than cutting: film
+  runs backwards through the gate (frame lines, sprocket holes,
+  scratches, grain, an unsteady projector lamp) behind a reel-to-reel
+  transport plate whose drum counter rolls the galaxy date and hour back
+  to the checkpoint's, with a tape-rewind whine ending in the brake's
+  clunk. It lasts at least 2.8 s and the checkpoint loads behind it.
+  Then the black lifts off the dock with **CHECKPOINT RESTORED** and the
+  place and date.
+- Saves' headers carry the exact galaxy clock (for the counter); older
+  headers without it still load.
 
 ## 8. Art direction & audio
 

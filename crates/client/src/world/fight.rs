@@ -110,9 +110,13 @@ impl World {
             }
         }
 
+        if self.docked_at().is_some() {
+            self.combat
+                .rest(&self.player.ship.fit, &self.player.ship.damage);
+            return;
+        }
         if self.mode != Mode::Normal {
-            // Docked, landed or in transit: the ship cools and its shields
-            // come back.
+            // In transit: the ship cools and its shields come back.
             self.combat.player.systems(dt, 0.0, false);
             return;
         }
@@ -180,6 +184,13 @@ impl World {
             self.arrive_jump(system);
         }
         self.park_in(field)
+    }
+
+    /// Blow the ship up, as if `t` seconds ago (for screenshots).
+    pub fn stage_loss(&mut self, t: f64) {
+        let craft = self.player_craft();
+        self.combat.lose_player(craft);
+        self.combat.lost = Some(t);
     }
 
     /// Bring a band in close, in front of the ship and already battered,

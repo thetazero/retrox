@@ -7,7 +7,10 @@
 //! Development flags skip the title and drop straight into a fresh game:
 //! `--seed N`, `--station`, `--undocked`, `--map`, `--course <jumps>`,
 //! `--ship <hull>`, `--screen <trade|hangar|shipyard|contracts>`,
-//! `--combat` (by a raider band), `--brawl` (in a fight),
+//! `--combat` (by a raider band), `--brawl` (in a fight), `--lost <s>`
+//! (the ship lost that long ago; with `--keys`, it has a checkpoint at a
+//! station to go back to), `--rewind` (rewinding to a checkpoint),
+//! `--arrival` (back at the checkpoint),
 //! `--ship-view <deg>`, `--screenshot <path.ppm>`. `--menu <page>` opens a
 //! menu page instead (`title`, `new`, `load`, `settings`, `handbook[:chapter]`, or `pause` or `quit`
 //! over a fresh game), for screenshots. `--keys` plays a key script
@@ -23,6 +26,7 @@ mod hangar;
 mod hangar_ui;
 mod hud;
 mod hulls;
+mod lost;
 mod menu;
 mod meshes;
 mod mining;
@@ -74,6 +78,12 @@ struct Flags {
     combat: bool,
     /// With `combat`: the band close in front, battered, fighting at once.
     brawl: bool,
+    /// With `brawl`: the ship blown up this many seconds ago.
+    lost: Option<f64>,
+    /// Show the rewind to a checkpoint, or the arrival back at one (for
+    /// screenshots).
+    rewind: bool,
+    arrival: bool,
     /// Hold the mining laser's trigger down (for screenshots).
     fire: bool,
     /// Start on the dispatch board.
@@ -121,8 +131,13 @@ impl Flags {
             station: has("--station"),
             field: has("--field"),
             traffic: has("--traffic"),
-            combat: has("--combat") || has("--brawl"),
-            brawl: has("--brawl"),
+            combat: has("--combat") || has("--brawl") || has("--lost") || has("--rewind"),
+            brawl: has("--brawl") || has("--lost") || has("--rewind"),
+            lost: value("--lost")
+                .and_then(|s| s.parse().ok())
+                .or(has("--rewind").then_some(3.0)),
+            rewind: has("--rewind"),
+            arrival: has("--arrival"),
             fire: has("--fire"),
             contracts: has("--contracts") || has("--contract"),
             take_contract: has("--contract"),
@@ -153,6 +168,7 @@ impl Flags {
                     || self.field
                     || self.traffic
                     || self.combat
+                    || self.arrival
                     || self.contracts
                     || self.map
                     || self.course.is_some()
@@ -167,7 +183,7 @@ impl Flags {
     /// A fresh world set up as the flags ask.
     fn world(&self) -> World {
         let mut world = World::new(self.seed.unwrap_or(1));
-        if self.station || self.screen.is_some() {
+        if self.station || self.screen.is_some() || self.arrival {
             world.start_at_station();
         }
         if let Some(mut fit) = self.ship.as_deref().and_then(retrox_content::ships::stock) {
@@ -220,6 +236,9 @@ impl Flags {
         }
         if self.brawl {
             world.stage_brawl();
+            if let Some(t) = self.lost {
+                world.stage_loss(t);
+            }
         } else if self.combat {
             world.start_by_raiders();
         }
@@ -363,6 +382,10 @@ struct Running {
     script_wait: u32,
     /// A short note in the corner: "checkpoint saved".
     toast: Option<(String, bool, Instant)>,
+    /// The ship was lost and the game is rewinding to its checkpoint
+    /// (loading behind it), then the black lifting off the checkpoint.
+    rewind: Option<lost::Rewind>,
+    arrival: Option<lost::Arrival>,
     audio: audio::Audio,
     quit: bool,
 }
@@ -446,6 +469,8 @@ impl ApplicationHandler for App {
             written_rx,
             writers: Vec::new(),
             toast: None,
+            rewind: None,
+            arrival: None,
             audio,
             quit: false,
             script: self.flags.keys.iter().cloned().collect(),
@@ -460,6 +485,34 @@ impl ApplicationHandler for App {
                 played_s: 0.0,
                 from: None,
             });
+            if self.flags.lost.is_some() && !r.read_only {
+                // Something to go back to: this game docked at a station.
+                let mut earlier = World::new(seed);
+                earlier.start_at_station();
+                let id = &r.game.as_ref().expect("started").id;
+                if let Ok(snap) = save::snapshot(&earlier, id, Kind::Checkpoint, 0.0) {
+                    let _ = save::write(&r.data, &snap);
+                    r.saves = save::list(&r.data);
+                }
+            }
+            let place = r.game.as_ref().map(|g| save::place_text(&g.world));
+            let game = r.game.as_ref().expect("started");
+            if self.flags.rewind {
+                r.rewind = Some(lost::Rewind {
+                    started: Instant::now(),
+                    from_s: game.world.clock_s,
+                    to_s: game.world.clock_s - 2.6 * world::SECONDS_PER_DAY,
+                    place: "docked at a station".to_owned(),
+                    date: game.world.date().to_string(),
+                });
+            }
+            if self.flags.arrival {
+                r.arrival = Some(lost::Arrival {
+                    started: Instant::now(),
+                    place: place.unwrap_or_default(),
+                    date: game.world.date().to_string(),
+                });
+            }
         } else {
             r.back_to_title();
         }
@@ -585,10 +638,9 @@ impl Running {
     /// In free flight, unpaused: where clicking the view takes the mouse.
     fn flying(&self) -> bool {
         !self.paused
-            && self
-                .game
-                .as_ref()
-                .is_some_and(|g| g.world.mode == Mode::Normal && !g.world.map_open)
+            && self.game.as_ref().is_some_and(|g| {
+                g.world.mode == Mode::Normal && !g.world.map_open && g.world.combat.lost.is_none()
+            })
     }
 
     fn set_captured(&mut self, captured: bool) {
@@ -712,14 +764,33 @@ impl Running {
     /// Pick up finished background work: a game ready to play, saves
     /// written.
     fn poll_background(&mut self) {
-        if let Some(p) = &self.pending {
+        // A rewind runs its course however fast the checkpoint loads.
+        let rewinding = self
+            .rewind
+            .as_ref()
+            .is_some_and(|r| r.elapsed() < lost::REWIND_S);
+        if let Some(p) = &self.pending
+            && !rewinding
+        {
             match p.rx.try_recv() {
                 Ok(Ok(started)) => {
                     self.pending = None;
                     self.start_game(started);
+                    if let Some(r) = self.rewind.take() {
+                        self.arrival = Some(lost::Arrival {
+                            started: Instant::now(),
+                            place: r.place,
+                            date: r.date,
+                        });
+                    }
                 }
                 Ok(Err(why)) => {
                     self.pending = None;
+                    if self.rewind.take().is_some() {
+                        // Show why over the pause menu.
+                        self.paused = true;
+                        self.menu = Menu::default();
+                    }
                     self.menu.error = Some(why);
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
@@ -948,7 +1019,7 @@ impl Running {
         } else if self
             .game
             .as_ref()
-            .is_some_and(|g| g.world.combat.lost.is_some_and(|t| t > 1.2))
+            .is_some_and(|g| g.world.combat.lost.is_some_and(|t| t > lost::READY_AT))
             && keys
                 .iter()
                 .any(|k| matches!(k, KeyCode::Enter | KeyCode::NumpadEnter))
@@ -961,7 +1032,15 @@ impl Running {
             for a in actions {
                 game.world.act(a);
             }
+            let was_lost = game.world.combat.lost;
             game.world.update(dt, controls);
+            // The card slams in over the wreck.
+            if let (Some(before), Some(now)) = (was_lost, game.world.combat.lost)
+                && before < lost::CARD_AT
+                && now >= lost::CARD_AT
+            {
+                self.audio.play(audio::Cue::Lost);
+            }
             game.played_s += dt;
             if pause {
                 menu_actions.push(MenuAction::Pause);
@@ -994,9 +1073,12 @@ impl Running {
 
         let raw_input = self.egui_state.take_egui_input(&self.renderer.window);
         let mut ui_actions = Vec::new();
+        let mut lost_choice = None;
         let output = self.egui_ctx.run_ui(raw_input, |ui| {
             let ctx = ui.ctx();
-            if let Some(p) = &self.pending {
+            if let Some(r) = &self.rewind {
+                lost::rewind(ctx, r);
+            } else if let Some(p) = &self.pending {
                 menu::loading(ctx, &p.title, &p.subtitle, time);
             } else if let Some(game) = &self.game {
                 if self.paused {
@@ -1016,7 +1098,8 @@ impl Running {
                             nav: &nav,
                         },
                     );
-                } else {
+                } else if game.world.combat.lost.is_none() {
+                    // (The instruments die with the ship.)
                     ui_actions = hud::draw(
                         ctx,
                         hud::HudInput {
@@ -1029,6 +1112,20 @@ impl Running {
                             notes: self.settings.first_steps,
                         },
                     );
+                }
+                if !self.paused
+                    && let Some(t) = game.world.combat.lost
+                {
+                    let checkpoint =
+                        Self::newest_checkpoint(&self.saves, &game.id.id).map(|(h, _)| {
+                            lost::Checkpoint {
+                                place: h.place.clone(),
+                                date: h.date.clone(),
+                                clock_s: h.clock_s,
+                            }
+                        });
+                    let info = lost::LostInfo::new(&game.world, checkpoint);
+                    lost_choice = lost::card(ctx, &info, t);
                 }
             } else {
                 menu_actions = self.menu.draw(
@@ -1044,6 +1141,9 @@ impl Running {
             }
             if let Some((text, ok, at)) = &self.toast {
                 menu::toast(ctx, text, *ok, at.elapsed().as_secs_f32());
+            }
+            if let Some(a) = &self.arrival {
+                lost::arrival(ctx, a);
             }
         });
         // Interface clicks: egui's own widgets report them; the menus'
@@ -1067,6 +1167,18 @@ impl Running {
         }
         for a in menu_actions {
             self.apply(a);
+        }
+        match lost_choice {
+            Some(lost::Choice::Restore) => self.restore_checkpoint(),
+            Some(lost::Choice::Menu) => self.apply(MenuAction::Pause),
+            None => {}
+        }
+        if self
+            .arrival
+            .as_ref()
+            .is_some_and(|a| a.started.elapsed().as_secs_f32() > lost::ARRIVE_S)
+        {
+            self.arrival = None;
         }
         self.audio.set_volumes(&self.settings);
         self.audio.update(
@@ -1140,21 +1252,43 @@ impl Running {
         self.script_wait = 2;
     }
 
-    /// The ship was destroyed: go back to the game's last checkpoint
-    /// (DESIGN §7.7), or to the title if it has none.
-    fn restore_checkpoint(&mut self) {
-        let Some(game) = &self.game else { return };
-        let id = game.id.id.clone();
-        self.saves = save::list(&self.data);
-        let newest = self
-            .saves
+    /// A game's newest checkpoint on disk, if it has one.
+    fn newest_checkpoint<'a>(
+        saves: &'a [save::Entry],
+        game: &str,
+    ) -> Option<(&'a save::Header, &'a save::Entry)> {
+        saves
             .iter()
             .filter_map(|e| Some((e.header.as_ref().ok()?, e)))
-            .filter(|(h, _)| h.game.id == id && h.kind == Kind::Checkpoint)
+            .filter(|(h, _)| h.game.id == game && h.kind == Kind::Checkpoint)
             .max_by_key(|(h, _)| h.saved)
-            .map(|(_, e)| e.path.clone());
-        match newest {
-            Some(path) => self.apply(MenuAction::Load(path)),
+    }
+
+    /// The ship was destroyed: rewind to the game's last checkpoint
+    /// (DESIGN §7.7), or go to the title if it has none.
+    fn restore_checkpoint(&mut self) {
+        if self.pending.is_some() {
+            return;
+        }
+        let Some(game) = &self.game else { return };
+        self.saves = save::list(&self.data);
+        let found = Self::newest_checkpoint(&self.saves, &game.id.id).map(|(h, e)| {
+            let date_s = h.clock_s.unwrap_or(game.world.clock_s);
+            let rewind = lost::Rewind {
+                started: Instant::now(),
+                from_s: game.world.clock_s,
+                to_s: date_s,
+                place: h.place.clone(),
+                date: h.date.clone(),
+            };
+            (e.path.clone(), rewind)
+        });
+        match found {
+            Some((path, rewind)) => {
+                self.audio.play(audio::Cue::Rewind);
+                self.rewind = Some(rewind);
+                self.apply(MenuAction::Load(path));
+            }
             None => {
                 self.back_to_title();
                 self.toast("No checkpoint to go back to", false);
