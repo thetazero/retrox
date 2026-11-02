@@ -1007,7 +1007,11 @@ fn every_city_on_a_planet_can_be_landed_at() {
     for &city in &cities {
         world.act(Action::TargetCity(city));
         assert_eq!(world.target, Some(Place::Body(body)));
-        assert_eq!(world.prompts().land, Some((city, body)), "[L] lands where picked");
+        assert_eq!(
+            world.prompts().land,
+            Some((city, body)),
+            "[L] lands where picked"
+        );
     }
     let last = *cities.last().unwrap();
     world.act(Action::Land);
@@ -1039,13 +1043,28 @@ fn the_landing_prompt_offers_where_the_cargo_is_bound() {
         accepted: world.galaxy.time,
     });
     assert_eq!(world.prompts().land, Some((to, body)));
-    // The hint names the planet the city is on, until it's picked.
+    let hint = crate::guide::hint(&world).expect("a hint");
+    let name = world.galaxy.settlements[to].name.clone();
+    assert_eq!(hint, format!("[L] to land at {name}."));
+
+    // From afar, the hint names the planet the city is on, until it's
+    // picked in NAVIGATION.
+    let near = world.ship.clone();
+    open_space(&mut world);
     let hint = crate::guide::hint(&world).expect("a hint");
     let planet = world.name(Place::Body(body));
-    assert!(hint.contains(&format!("on {planet}")), "{hint}");
+    assert!(hint.contains(&format!("{name}, on {planet}")), "{hint}");
+    world.act(Action::TargetCity(cities[0]));
+    let hint = crate::guide::hint(&world).expect("a hint");
+    assert!(
+        hint.contains(&format!("on {planet}")),
+        "the wrong city: {hint}"
+    );
     world.act(Action::TargetCity(to));
     let hint = crate::guide::hint(&world).expect("a hint");
-    assert!(hint.contains("[L] to land at"), "{hint}");
+    assert!(!hint.contains("NAVIGATION"), "picked: {hint}");
+    world.ship = near;
+    assert_eq!(world.prompts().land, Some((to, body)));
 }
 
 #[test]

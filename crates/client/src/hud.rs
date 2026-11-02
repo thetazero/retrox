@@ -624,7 +624,10 @@ fn nav_list(ui: &mut egui::Ui, w: &World, actions: &mut Vec<Action>) {
         }
         if city.is_some() {
             if moon && moon_follows {
-                painter.line_segment([Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())], stroke);
+                painter.line_segment(
+                    [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
+                    stroke,
+                );
             }
             // The city's own bracket, back to the body above.
             let bx = glyph_x - 16.0;
