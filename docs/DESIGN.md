@@ -512,8 +512,13 @@ Wells cost **galaxy time and a stop**, not real minutes (pillar 4):
   hull's own rates to face where it was going. No rotation is set by a
   timer; touching the stick hands the turn to the pilot. An intercept ends
   facing the convoy.
-- **The camera looks where you're going**, not back where you came from,
-  even while the ship brakes tail-first (#158).
+- **The camera looks where the trip is going.** Through fast travel and
+  the turn-over after it, the view (chase or cockpit) faces the place the
+  trip goes to, not the nose: braking, the ship faces the camera
+  tail-first with the place beyond it. The view eases onto that heading
+  and back to the nose, never snapping; a climb out of a well looks
+  outward, an intercept at the convoy. Flying by hand it follows the
+  nose.
 - **The engines show what the drive is doing**, for every autopilot ship,
   the player's and NPCs': plumes lit by thrust along the nose, dark while
   turning over or holding still.

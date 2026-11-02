@@ -290,7 +290,7 @@ impl Flags {
             world.ship.throttle = 0.3;
             // Look back at the station.
             world.ship.rot *= DQuat::from_rotation_y(2.6);
-            world.cam_rot = world.ship.rot;
+            world.reset_camera();
         }
         if self.colony && world.colony_due_here().is_none() {
             eprintln!("--colony: no free region on the starting planet");

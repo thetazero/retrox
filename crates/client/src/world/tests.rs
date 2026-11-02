@@ -120,6 +120,78 @@ fn fast_travel_reaches_every_place_and_only_climbs_out_of_a_well() {
 }
 
 #[test]
+fn the_camera_looks_ahead_while_the_ship_brakes_tail_first() {
+    // #158: the camera turned round with the ship as it flipped to brake,
+    // so half of every trip looked back where it came from.
+    let mut world = World::new(1);
+    world.act(Action::Launch);
+    open_space(&mut world);
+    world.reset_camera();
+    let target = world
+        .nav_places()
+        .into_iter()
+        .find(|p| matches!(p, Place::Body(_)))
+        .expect("a planet to fly to");
+    world.target = Some(target);
+    world.act(Action::FastTravel);
+    assert!(matches!(world.mode, Mode::FastTravel(_)));
+    let dt = 1.0 / 60.0;
+    let look = |w: &World| w.camera().1 * DVec3::NEG_Z;
+    let mut last = look(&world);
+    let (mut braking, mut worst_step, mut worst_off) = (0, 0.0_f64, 0.0_f64);
+    let mut t = 0.0;
+    while world.mode != Mode::Normal || world.turn_over.is_some() {
+        assert!(t < 40.0, "trip never ended");
+        world.update(dt, Controls::default());
+        t += dt;
+        let now = look(&world);
+        // Past the swing round to the route at the start (which the ship
+        // makes too, faster), the view never jumps.
+        if t > 1.0 {
+            worst_step = worst_step.max(now.angle_between(last));
+        }
+        last = now;
+        let to = world.position(target) - world.ship_position();
+        let nose = world.ship.rot * DVec3::NEG_Z;
+        if matches!(world.mode, Mode::FastTravel(_)) && nose.dot(to) < 0.0 && t > 1.5 {
+            braking += 1;
+            worst_off = worst_off.max(now.angle_between(to).to_degrees());
+        }
+    }
+    assert!(
+        braking > 30,
+        "the ship should spend a while braking tail-first"
+    );
+    assert!(
+        worst_off < 10.0,
+        "camera {worst_off:.1}° off the destination mid-brake"
+    );
+    // Smooth through the flip and the turn-over: no frame turns the view
+    // by more than 1° (60°/s).
+    assert!(
+        worst_step.to_degrees() < 1.0,
+        "the camera snapped {:.1}° in one frame",
+        worst_step.to_degrees()
+    );
+    // Handed back: a couple of seconds on, it's on the nose again, and
+    // flying by hand follows the ship as ever.
+    for _ in 0..180 {
+        world.update(dt, Controls::default());
+    }
+    assert!(
+        world.travel_view < 0.02,
+        "view still {:.2} turned",
+        world.travel_view
+    );
+    let off = look(&world).angle_between(world.ship.rot * DVec3::NEG_Z);
+    assert!(
+        off.to_degrees() < 1.0,
+        "chase camera {:.1}° off the nose",
+        off.to_degrees()
+    );
+}
+
+#[test]
 fn buy_and_refit_a_ship_at_the_starting_yard() {
     let mut world = World::new(1);
     // The starting purse doesn't stretch to a ship.

@@ -145,7 +145,7 @@ impl World {
         self.ship.frame = Place::Star;
         self.ship.rel = entry * distance;
         self.ship.rot = look_rotation(-entry);
-        self.cam_rot = self.ship.rot;
+        self.reset_camera();
         self.ship.vel = DVec3::ZERO;
         self.ship.throttle = 0.0;
         self.mode = Mode::Normal;
