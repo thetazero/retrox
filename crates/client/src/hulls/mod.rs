@@ -117,3 +117,62 @@ pub(super) fn placed(fit: &Loadout) -> Vec<Placed<'_>> {
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use retrox_content::ships::{HULLS, MODULES, SECTIONS, stock};
+
+    fn check(fit: &Loadout, what: &str) {
+        let (mesh, shape) = crate::meshes::ship(fit);
+        assert!(!mesh.vertices.is_empty(), "{what}: empty mesh");
+        assert!(
+            mesh.indices
+                .iter()
+                .all(|&i| (i as usize) < mesh.vertices.len()),
+            "{what}: index out of range"
+        );
+        assert!(
+            mesh.vertices
+                .iter()
+                .all(|v| v.pos.iter().chain(&v.normal).all(|x| x.is_finite())),
+            "{what}: non-finite vertex"
+        );
+        for (p, r) in &shape.nozzles {
+            assert!(
+                p.is_finite() && r.is_finite() && *r > 0.0,
+                "{what}: bad nozzle"
+            );
+        }
+    }
+
+    /// Every hull is hand-built, and builds with every section it can
+    /// mount, both empty and with every slot filled.
+    #[test]
+    fn every_hull_builds_with_every_section() {
+        for hull in HULLS {
+            let fit = stock(hull.id).unwrap();
+            assert!(authored(&fit).is_some(), "{} has no model", hull.id);
+            check(&fit, hull.id);
+            for mount in 0..hull.mounts.len() {
+                for section in SECTIONS {
+                    let mut fit = stock(hull.id).unwrap();
+                    if fit.set_section(mount, section).is_err() {
+                        continue;
+                    }
+                    check(&fit, &format!("{} with empty {}", hull.id, section.id));
+                    for (i, slot) in section.slots.iter().enumerate() {
+                        let best = MODULES
+                            .iter()
+                            .filter(|m| m.kind() == slot.kind && m.size <= slot.size)
+                            .max_by_key(|m| m.size);
+                        if let Some(m) = best {
+                            fit.fit(mount, i, m).unwrap();
+                        }
+                    }
+                    check(&fit, &format!("{} with full {}", hull.id, section.id));
+                }
+            }
+        }
+    }
+}
