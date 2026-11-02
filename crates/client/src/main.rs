@@ -413,7 +413,7 @@ impl Running {
             let rot = self.world.ship.rot;
             let dir =
                 DQuat::from_rotation_y(yaw.to_radians()) * DVec3::new(0.0, 0.4, 1.0).normalize();
-            let offset = rot * dir * 38.0;
+            let offset = rot * dir * (self.world.stats().length_m * 1.5).max(24.0);
             cam_pos = self.world.ship_position() + offset;
             cam_rot = rot * world::look_rotation(-dir);
         }
