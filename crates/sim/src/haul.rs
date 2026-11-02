@@ -240,11 +240,13 @@ pub(crate) type Contracts = SecondaryMap<FactionId, f64>;
 
 /// Each system's best buyer of every good, and its most valuable surplus:
 /// what route choice reads instead of scanning every market. Rebuilt at the
-/// start of every trade phase in one pass over settlements.
-/// Only settled systems have an entry.
+/// start of every trade phase in one pass over settlements, in place: it
+/// lives on the [`GalaxyState`] between days so the pass allocates
+/// nothing. Only settled systems have an entry.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Board {
-    systems: HashMap<SystemId, Listing>,
+    /// By system index.
+    systems: Vec<Option<Listing>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -257,11 +259,11 @@ struct Listing {
 }
 
 impl Board {
-    fn build(state: &GalaxyState) -> Self {
-        let mut systems: HashMap<SystemId, Listing> =
-            HashMap::with_capacity(state.settlements.len());
-        for (id, s) in &state.settlements {
-            let listing = systems.entry(s.system).or_insert(Listing {
+    fn rebuild(&mut self, state: &GalaxyState) {
+        self.systems.clear();
+        self.systems.resize(state.systems.len(), None);
+        for (id, s) in state.settlements.iter() {
+            let listing = self.systems[s.system.index()].get_or_insert(Listing {
                 buyers: GoodMap::splat(None),
                 source: None,
             });
@@ -279,7 +281,10 @@ impl Board {
                 }
             }
         }
-        Self { systems }
+    }
+
+    fn get(&self, system: SystemId) -> Option<&Listing> {
+        self.systems.get(system.index())?.as_ref()
     }
 }
 
@@ -522,7 +527,8 @@ pub(crate) fn fleet_index(state: &GalaxyState, company: CompanyId, fleet: u32) -
 pub fn trade(state: &mut GalaxyState) {
     let today = state.time;
     let contracts = crate::fiscal::open_contracts(state);
-    let board = Board::build(state);
+    let mut board = std::mem::take(&mut state.board);
+    board.rebuild(state);
     for event in state.calendar.take(today) {
         let Some(n) = fleet_index(state, event.company, event.fleet) else {
             continue;
@@ -534,6 +540,7 @@ pub fn trade(state: &mut GalaxyState) {
         }
     }
     crate::bubble::step(state, &contracts, &board);
+    state.board = board;
     found_companies(state);
     crate::harvest::found(state);
 }
@@ -776,7 +783,7 @@ fn choose_route(
     let mut considered = 0;
     for &(system, ly, lanes) in reach(state, origin.system, MAX_TRIP_DAYS * class.jump_laden).iter()
     {
-        let Some(listing) = board.systems.get(&system) else {
+        let Some(listing) = board.get(system) else {
             continue;
         };
         considered += 1;

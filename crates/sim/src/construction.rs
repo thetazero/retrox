@@ -70,20 +70,21 @@ fn reachable_resources(state: &GalaxyState, id: SettlementId) -> Resources {
 /// Facility kinds this settlement could sensibly build now: the resources
 /// are there, the inputs are on hand, existing facilities of the kind are
 /// busy, and it isn't over its cap.
-fn buildable(state: &GalaxyState, id: SettlementId) -> Vec<FacilityKind> {
+fn buildable(state: &GalaxyState, id: SettlementId) -> impl Iterator<Item = FacilityKind> + '_ {
     let resources = reachable_resources(state, id);
     let economy = &state.settlements[id].economy;
     let market = &economy.market;
     FacilityKind::ALL
         .into_iter()
-        .filter(|&kind| {
-            let existing: Vec<&Facility> = economy
+        .filter(move |&kind| {
+            let (scale, busy) = economy
                 .facilities
                 .iter()
                 .filter(|f| f.kind == kind)
-                .collect();
-            let scale: f64 = existing.iter().map(|f| f.scale).sum();
-            existing.iter().all(|f| f.utilization >= BUSY)
+                .fold((0.0, true), |(scale, busy), f| {
+                    (scale + f.scale, busy && f.utilization >= BUSY)
+                });
+            busy
                 && scale < SCALE_PER_POPULATION * economy.population + SCALE_BASE
                 && kind
                     .recipe()
@@ -91,7 +92,7 @@ fn buildable(state: &GalaxyState, id: SettlementId) -> Vec<FacilityKind> {
                     .iter()
                     .all(|&(g, _)| market.fill(g) >= INPUT_FILL)
         })
-        .filter(|&kind| match kind {
+        .filter(move |&kind| match kind {
             FacilityKind::Mine => resources.ore > MINEABLE,
             FacilityKind::IceHarvester => resources.ice > MINEABLE,
             // Gas plants sit by a giant their harvesters can skim.
@@ -107,7 +108,6 @@ fn buildable(state: &GalaxyState, id: SettlementId) -> Vec<FacilityKind> {
             }
             _ => true,
         })
-        .collect()
 }
 
 /// Daily margin per unit of scale at local prices.
