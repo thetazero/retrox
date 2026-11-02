@@ -62,6 +62,10 @@ pub enum Paint {
     Hazard = 10,
     /// Deep teal-grey military enamel.
     Gunmetal = 11,
+    /// Olive drab.
+    Olive = 12,
+    /// Sky-blue racing enamel.
+    Sky = 13,
 }
 
 #[derive(Clone, Default)]
@@ -663,15 +667,18 @@ pub struct ShipShape {
     pub nozzles: Vec<(Vec3, f32)>,
 }
 
-/// A ship built from its fit: each section a segment of the spine, nose
-/// (-Z) to tail, sized by its mass and length, with its modules where its
-/// slots are — engine bells, gun barrels, radiator fins, cargo pods, shield
-/// rings, radar masts.
+/// A ship's mesh: its hull's hand-built model (see [`crate::hulls`]), or
+/// one generated from the fit.
 pub fn ship(fit: &retrox_sim::ship::Loadout) -> (Mesh, ShipShape) {
+    crate::hulls::authored(fit).unwrap_or_else(|| generated(fit))
+}
+
+/// A ship generated from its fit: each section a segment of the spine,
+/// nose (-Z) to tail, sized by its mass and length, with its modules where
+/// its slots are — engine bells, gun barrels, radiator fins, cargo pods,
+/// shield rings, radar masts.
+pub fn generated(fit: &retrox_sim::ship::Loadout) -> (Mesh, ShipShape) {
     use retrox_sim::ship::{Position, Size, SlotKind};
-    if let Some(built) = crate::hulls::authored(fit) {
-        return built;
-    }
     let (cyl, cube, ball) = (cylinder(14), cube(), icosphere(1).flat());
     let ring = torus(0.06, 32, 6);
     let module_m = |size: Size| -> f32 {

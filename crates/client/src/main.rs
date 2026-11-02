@@ -45,6 +45,10 @@ fn main() {
     let map = std::env::args().any(|a| a == "--map");
     // `--ship <hull>`: start in that stock ship instead (for testing).
     let ship = std::env::args().skip_while(|a| a != "--ship").nth(1);
+    // `--sections <id,id,...>`: with `--ship`, put these sections in its
+    // mounts, in order, each filled with the biggest modules that fit (for
+    // looking at every section on every hull).
+    let sections = std::env::args().skip_while(|a| a != "--sections").nth(1);
     // `--screenshot <path.ppm>`: save the 90th frame and quit (for checking
     // visual changes without a person at the window).
     let screenshot = std::env::args()
@@ -63,6 +67,7 @@ fn main() {
         station,
         map,
         ship,
+        sections,
         screenshot,
         ship_view,
         running: None,
@@ -79,6 +84,7 @@ struct App {
     /// Start with the galaxy map open.
     map: bool,
     ship: Option<String>,
+    sections: Option<String>,
     screenshot: Option<std::path::PathBuf>,
     ship_view: Option<f64>,
     running: Option<Running>,
@@ -134,7 +140,10 @@ impl ApplicationHandler for App {
         if self.station {
             world.start_at_station();
         }
-        if let Some(fit) = self.ship.as_deref().and_then(retrox_content::ships::stock) {
+        if let Some(mut fit) = self.ship.as_deref().and_then(retrox_content::ships::stock) {
+            if let Some(ids) = &self.sections {
+                refit_sections(&mut fit, ids);
+            }
             world.player.ship.fit = fit;
         }
         if self.undocked {
@@ -793,4 +802,29 @@ fn sky(world: &World) -> Vec<SkyVertex> {
             }
         })
         .collect()
+}
+
+/// Put the sections named in `ids` (comma-separated) into `fit`'s mounts in
+/// order, each slot filled with the biggest module of its kind that fits.
+fn refit_sections(fit: &mut retrox_sim::ship::Loadout, ids: &str) {
+    use retrox_content::ships::{MODULES, section};
+    for (mount, id) in ids.split(',').enumerate() {
+        let Some(s) = section(id.trim()) else {
+            eprintln!("--sections: no section {id}");
+            continue;
+        };
+        if let Err(e) = fit.set_section(mount, s) {
+            eprintln!("--sections: {id} won't go in mount {mount}: {e:?}");
+            continue;
+        }
+        for (i, slot) in s.slots.iter().enumerate() {
+            let best = MODULES
+                .iter()
+                .filter(|m| m.kind() == slot.kind && m.size <= slot.size)
+                .max_by_key(|m| m.size);
+            if let Some(m) = best {
+                let _ = fit.fit(mount, i, m);
+            }
+        }
+    }
 }

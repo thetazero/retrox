@@ -121,6 +121,8 @@ const LAMP: u32 = 8u;
 const OCHRE: u32 = 9u;
 const HAZARD: u32 = 10u;
 const GUNMETAL: u32 = 11u;
+const OLIVE: u32 = 12u;
+const SKY: u32 = 13u;
 
 // Sovietwave ambient: a cool teal sky above, a dusky violet below.
 fn ambient_light(n: vec3<f32>) -> vec3<f32> {
@@ -202,8 +204,16 @@ fn built(i: VOut, n: vec3<f32>, mu: f32, fw: vec3<f32>) -> vec3<f32> {
         base = vec3<f32>(0.15, 0.19, 0.2) * i.shade;
         spec = 0.18;
         gloss = 24.0;
+    } else if (paint == OLIVE) {
+        base = vec3<f32>(0.22, 0.24, 0.13) * i.shade;
+        spec = 0.08;
+    } else if (paint == SKY) {
+        base = vec3<f32>(0.25, 0.52, 0.78) * i.shade;
+        spec = 0.3;
+        gloss = 40.0;
     }
-    let enamel = paint == HULL || paint == RED || paint == OCHRE || paint == GUNMETAL;
+    let enamel = paint == HULL || paint == RED || paint == OCHRE || paint == GUNMETAL
+        || paint == OLIVE || paint == SKY;
     if (scale > 0.0 && enamel) {
         base = base * (1.0 - 0.3 * seams(p, fw));
         // Wear, faded out before it aliases: grime streaked along the

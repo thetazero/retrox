@@ -1,372 +1,15 @@
-//! Hand-built ships. Most hulls are generated from their fit
-//! ([`meshes::ship`]); the ones here are modelled by hand, each with its
-//! own silhouette, and draw their fitted modules — guns, cargo, radiators,
-//! radar, shield emitters, engines — from a shared kit at the slots'
-//! positions, so a refit shows.
-//!
-//! Model space is metres, nose toward -Z; a slot's `position_m` (+z
-//! forward) lands at `(x, y, -z)`.
+//! The small hulls, each modelled whole.
 
 use std::f32::consts::{FRAC_PI_2, TAU};
 
 use glam::{Mat4, Quat, Vec3};
-use retrox_sim::ship::{Loadout, Module, Size, Slot, SlotKind};
+use retrox_sim::ship::{Loadout, SlotKind};
 
+use super::kit::*;
+use super::{at, fitted, is_laser, scale};
 use crate::meshes::{
-    Mesh, Paint, ShipShape, boxed, chamfer_rect, cube, cylinder, fin, icosphere, lathe, loft,
-    strut, torus,
+    Mesh, Paint, ShipShape, boxed, chamfer_rect, cube, cylinder, fin, icosphere, lathe, loft, strut,
 };
-
-/// The hand-built model for `fit`'s hull, if it has one.
-pub fn authored(fit: &Loadout) -> Option<(Mesh, ShipShape)> {
-    match fit.hull().id {
-        "courier" => Some(courier(fit.stats().length_m as f32)),
-        "light-trader" => Some(light_trader(fit)),
-        "interceptor" => Some(interceptor(fit)),
-        _ => None,
-    }
-}
-
-/// Every slot with its fitted module, and where it sits in model space.
-fn fitted(fit: &Loadout) -> Vec<(&'static Slot, &'static Module, Vec3)> {
-    fit.mounts()
-        .filter_map(|(_, s)| s)
-        .flat_map(|s| s.slots())
-        .filter_map(|(slot, module)| {
-            let [x, y, z] = slot.position_m.map(|v| v as f32);
-            module.map(|m| (slot, m, Vec3::new(x, y, -z)))
-        })
-        .collect()
-}
-
-/// How much bigger a module of this size is drawn than a small one.
-fn scale(size: Size) -> f32 {
-    match size {
-        Size::Small => 1.0,
-        Size::Medium => 1.4,
-        Size::Large => 2.0,
-    }
-}
-
-fn at(p: Vec3, s: f32) -> Mat4 {
-    Mat4::from_scale_rotation_translation(Vec3::splat(s), Quat::IDENTITY, p)
-}
-
-// --- The module kit -------------------------------------------------------
-
-/// A gun from `breech` forward to `muzzle_z`: twin barrels with muzzle
-/// brakes for cannon, one finned barrel with a glowing lens for lasers.
-fn gun(m: &mut Mesh, breech: Vec3, muzzle_z: f32, module: &Module) {
-    let k = scale(module.size);
-    let cyl = cylinder(10);
-    let tip = |off: Vec3| Vec3::new(breech.x + off.x, breech.y + off.y, muzzle_z);
-    if module.id.contains("laser") {
-        m.paint(
-            &cyl,
-            strut(breech, tip(Vec3::ZERO), 0.07 * k),
-            1.0,
-            Paint::Metal,
-        );
-        let len = breech.z - muzzle_z;
-        for f in [0.25f32, 0.4, 0.55] {
-            let z = breech.z - len * f;
-            m.paint(
-                &cyl,
-                strut(
-                    Vec3::new(breech.x, breech.y, z),
-                    Vec3::new(breech.x, breech.y, z - 0.06),
-                    0.15 * k,
-                ),
-                1.0,
-                Paint::Metal,
-            );
-        }
-        m.paint(
-            &icosphere(1),
-            at(tip(Vec3::ZERO), 0.1 * k),
-            1.0,
-            Paint::Glass,
-        );
-    } else {
-        for side in [-1.0f32, 1.0] {
-            let off = Vec3::X * side * 0.09 * k;
-            m.paint(
-                &cyl,
-                strut(breech + off, tip(off), 0.05 * k),
-                1.0,
-                Paint::Metal,
-            );
-            m.paint(
-                &cyl,
-                strut(tip(off) + Vec3::Z * 0.25 * k, tip(off), 0.075 * k),
-                0.8,
-                Paint::Metal,
-            );
-        }
-    }
-}
-
-/// A cargo container hung at `centre`: ribbed sides, a painted band.
-fn container(m: &mut Mesh, centre: Vec3, size: Vec3, paint: Paint) {
-    let cube = cube();
-    m.paint(&cube, boxed(centre, size), 1.0, paint);
-    let ribs = 5;
-    for i in 0..ribs {
-        let z = centre.z - size.z / 2.0 + size.z * (i as f32 + 0.5) / ribs as f32;
-        m.paint(
-            &cube,
-            boxed(
-                Vec3::new(centre.x, centre.y, z),
-                Vec3::new(size.x + 0.06, size.y * 0.94, 0.08),
-            ),
-            0.82,
-            paint,
-        );
-    }
-    // Locking bars on the end doors.
-    for side in [-1.0f32, 1.0] {
-        m.paint(
-            &cube,
-            boxed(
-                centre + Vec3::new(side * size.x * 0.2, 0.0, -size.z / 2.0 - 0.02),
-                Vec3::new(0.05, size.y * 0.85, 0.05),
-            ),
-            1.0,
-            Paint::Metal,
-        );
-    }
-}
-
-/// Where markings go: layout position (along the text, up it) to a point
-/// on the surface and the text's right and up directions there (the
-/// outward normal is right × up).
-type Surface<'a> = &'a dyn Fn(f32, f32) -> (Vec3, Vec3, Vec3);
-
-/// A flat surface from `origin` (the text's bottom left).
-fn flat(origin: Vec3, right: Vec3, up: Vec3) -> impl Fn(f32, f32) -> (Vec3, Vec3, Vec3) {
-    move |u, v| (origin + right * u + up * v, right, up)
-}
-
-/// The flank of a body of revolution about Z, on the `side` (±1) of x:
-/// text reading nose-ward from `z0`, its foot at angle `a0` above
-/// horizontal, wrapped round the curve. `radius(z)` is the surface.
-fn flank(
-    side: f32,
-    z0: f32,
-    a0: f32,
-    radius: impl Fn(f32) -> f32,
-) -> impl Fn(f32, f32) -> (Vec3, Vec3, Vec3) {
-    move |u, v| {
-        let z = z0 - side * u;
-        let r = radius(z);
-        let a = a0 + v / r;
-        (
-            Vec3::new(side * r * a.cos(), r * a.sin(), z),
-            Vec3::new(0.0, 0.0, -side),
-            Vec3::new(-side * a.sin(), a.cos(), 0.0),
-        )
-    }
-}
-
-/// Stencilled markings in seven-segment figures, like a VFD readout:
-/// `text` of digits, '-' and spaces, `h` tall, laid out on `surface` and
-/// raised just off it.
-fn stencil(m: &mut Mesh, text: &str, h: f32, paint: Paint, surface: Surface) {
-    // Segments a–g (top, top right, bottom right, bottom, bottom left,
-    // top left, middle) lit for each figure.
-    const FIGURES: [u8; 10] = [
-        0b0111111, 0b0000110, 0b1011011, 0b1001111, 0b1100110, 0b1101101, 0b1111101, 0b0000111,
-        0b1111111, 0b1101111,
-    ];
-    let (w, t) = (0.55 * h, 0.14 * h);
-    let (long_h, long_v) = (w - t * 1.3, h / 2.0 - t * 1.3);
-    // (centre u, centre v, size u, size v) for each segment.
-    let segments = [
-        (w / 2.0, h - t / 2.0, long_h, t),
-        (w - t / 2.0, h * 0.75, t, long_v),
-        (w - t / 2.0, h * 0.25, t, long_v),
-        (w / 2.0, t / 2.0, long_h, t),
-        (t / 2.0, h * 0.25, t, long_v),
-        (t / 2.0, h * 0.75, t, long_v),
-        (w / 2.0, h / 2.0, long_h, t),
-    ];
-    let cube = cube();
-    let mut u0 = 0.0;
-    for ch in text.chars() {
-        let lit = match ch {
-            '0'..='9' => FIGURES[ch as usize - '0' as usize],
-            '-' => 0b1000000,
-            _ => 0,
-        };
-        for (k, &(cu, cv, su, sv)) in segments.iter().enumerate() {
-            if lit & (1 << k) == 0 {
-                continue;
-            }
-            let (at, right, up) = surface(u0 + cu, cv);
-            let (right, up) = (right.normalize(), up.normalize());
-            let normal = right.cross(up).normalize();
-            let centre = at + normal * 0.6 * t;
-            let to_world = Mat4::from_cols(
-                (right * su).extend(0.0),
-                (up * sv).extend(0.0),
-                (normal * t).extend(0.0),
-                centre.extend(1.0),
-            );
-            m.paint(&cube, to_world, 1.0, paint);
-        }
-        u0 += w + 0.3 * h;
-    }
-}
-
-/// Darken everything (but lamps and glass) toward the engines, from
-/// nothing at `z0` to `amount` at `z1`.
-fn soot(m: &mut Mesh, z0: f32, z1: f32, amount: f32) {
-    let lit = [Paint::Glass, Paint::Beacon, Paint::Lamp].map(|p| p as u32 as f32);
-    for v in &mut m.vertices {
-        if lit.contains(&v.paint) {
-            continue;
-        }
-        let t = ((v.pos[2] - z0) / (z1 - z0)).clamp(0.0, 1.0);
-        v.shade *= 1.0 - amount * t * t * (3.0 - 2.0 * t);
-    }
-}
-
-/// A flying surface (see [`fin`]) with a split control surface along its
-/// trailing edge, and its outer span from `tip_from` painted `tip_paint`.
-#[allow(clippy::too_many_arguments)]
-fn flapped(
-    m: &mut Mesh,
-    to_world: Mat4,
-    root: (f32, f32),
-    tip: (f32, f32),
-    span: f32,
-    thick: f32,
-    paint: Paint,
-    tip_paint: Paint,
-    tip_from: f32,
-) {
-    let chord = |(le, te): (f32, f32), a: f32, b: f32| (le + (te - le) * a, le + (te - le) * b);
-    let piece = |m: &mut Mesh, a: f32, b: f32, y: (f32, f32), t: f32, shade: f32, p: Paint| {
-        m.paint(
-            &fin(chord(root, a, b), chord(tip, a, b), span, t, y),
-            to_world,
-            shade,
-            p,
-        );
-    };
-    piece(m, 0.0, 0.78, (0.0, tip_from), thick, 1.0, paint);
-    piece(m, 0.0, 0.78, (tip_from, 1.0), thick, 1.0, tip_paint);
-    piece(m, 0.78, 1.0, (0.0, 0.12), thick * 0.45, 1.0, paint);
-    piece(m, 0.8, 1.0, (0.13, 0.84), thick * 0.4, 0.8, paint);
-    piece(m, 0.78, 1.0, (0.85, 1.0), thick * 0.45, 1.0, tip_paint);
-}
-
-/// A radiator panel standing out from `root` along `out`, `len` long in Z:
-/// a white plate with dark coolant ribs.
-fn radiator(m: &mut Mesh, root: Vec3, out: Vec3, height: f32, len: f32) {
-    let cube = cube();
-    let rot = Quat::from_rotation_arc(Vec3::Y, out.normalize());
-    let panel = |m: &mut Mesh, size: Vec3, offset_z: f32, shade: f32, paint: Paint| {
-        m.paint(
-            &cube,
-            Mat4::from_scale_rotation_translation(
-                size,
-                rot,
-                root + out.normalize() * height / 2.0 + Vec3::Z * offset_z,
-            ),
-            shade,
-            paint,
-        );
-    };
-    panel(m, Vec3::new(0.05, height, len), 0.0, 1.1, Paint::Hull);
-    let ribs = (len / 0.3) as i32;
-    for i in 0..ribs {
-        let z = -len / 2.0 + len * (i as f32 + 0.5) / ribs as f32;
-        panel(
-            m,
-            Vec3::new(0.08, height * 0.92, 0.03),
-            z,
-            1.0,
-            Paint::Metal,
-        );
-    }
-    // A dark frame round the ends.
-    for end in [-1.0f32, 1.0] {
-        panel(
-            m,
-            Vec3::new(0.1, height, 0.07),
-            end * len / 2.0,
-            1.0,
-            Paint::Metal,
-        );
-    }
-    // A red edge along the top.
-    m.paint(
-        &cube,
-        Mat4::from_scale_rotation_translation(
-            Vec3::new(0.1, 0.12, len),
-            rot,
-            root + out.normalize() * (height - 0.06),
-        ),
-        1.0,
-        Paint::Red,
-    );
-}
-
-/// A radar on a mast from `base`: a dish tilted up and forward, a red-tipped
-/// feed. Long-range sets get a bigger dish on a taller mast.
-fn radar(m: &mut Mesh, base: Vec3, module: &Module) {
-    let k = scale(module.size);
-    let top = base + Vec3::Y * 0.55 * k;
-    m.paint(&cylinder(8), strut(base, top, 0.05 * k), 1.0, Paint::Metal);
-    let dish: Vec<(f32, f32)> = (0..=6)
-        .map(|i| {
-            let r = 0.4 * k * i as f32 / 6.0;
-            (r * r * 0.9 / k, r)
-        })
-        .collect();
-    let facing = Quat::from_rotation_arc(Vec3::NEG_Z, Vec3::new(0.0, 0.7, -1.0).normalize());
-    let to_world = Mat4::from_rotation_translation(facing, top);
-    m.add(&lathe(&dish, 16, 0.0, TAU), to_world, 1.1);
-    let feed = to_world.transform_point3(Vec3::new(0.0, 0.0, -0.35 * k));
-    m.paint(&cylinder(6), strut(top, feed, 0.02 * k), 1.0, Paint::Metal);
-    m.paint(&icosphere(1), at(feed, 0.05 * k), 1.0, Paint::Red);
-}
-
-/// A deflector emitter: a low dome in a red ring.
-fn shield(m: &mut Mesh, centre: Vec3, module: &Module) {
-    let k = scale(module.size);
-    m.paint(
-        &icosphere(2),
-        Mat4::from_scale_rotation_translation(
-            Vec3::new(0.32, 0.18, 0.32) * k,
-            Quat::IDENTITY,
-            centre,
-        ),
-        1.0,
-        Paint::Metal,
-    );
-    m.paint(&torus(0.15, 24, 6), at(centre, 0.34 * k), 1.0, Paint::Red);
-}
-
-/// An engine bell from `throat` aft, flaring; returns the nozzle (exit, radius).
-fn bell(m: &mut Mesh, throat: Vec3, module: &Module, r0: f32) -> (Vec3, f32) {
-    let k = scale(module.size);
-    let (len, r1) = (1.0 * k, r0 * 1.7);
-    let profile: Vec<(f32, f32)> = (0..=8)
-        .map(|i| {
-            let t = i as f32 / 8.0;
-            (len * t, r0 + (r1 - r0) * t.powf(1.6))
-        })
-        .collect();
-    m.paint(
-        &lathe(&profile, 20, 0.0, TAU),
-        Mat4::from_translation(throat),
-        1.0,
-        Paint::Metal,
-    );
-    (throat + Vec3::Z * len, r1)
-}
 
 /// Where the courier's main engine bell ends, in model units (+Z is aft).
 const COURIER_NOZZLE_Z: f32 = 12.2;
@@ -400,7 +43,7 @@ fn starter_profile(z0: f32, z1: f32, steps: u32, inflate: f32) -> Vec<(f32, f32)
 /// a red nose and cheatline, a wraparound windscreen, lit portholes, three
 /// swept radiator fins, a gold-foil service collar and a clustered engine.
 /// Scaled so it is `length` metres from nose to bell exit.
-fn courier(length: f32) -> (Mesh, ShipShape) {
+pub(super) fn courier(length: f32) -> (Mesh, ShipShape) {
     const SEGS: u32 = 36;
     let (cyl, ball) = (cylinder(16), icosphere(2));
     let mut m = Mesh::default();
@@ -658,7 +301,7 @@ fn courier(length: f32) -> (Mesh, ShipShape) {
 /// containers hung in it, and a square engine block with hazard stripes,
 /// radiators standing up off its shoulders. Empty cargo slots leave the
 /// frame bare.
-fn light_trader(fit: &Loadout) -> (Mesh, ShipShape) {
+pub(super) fn light_trader(fit: &Loadout) -> (Mesh, ShipShape) {
     let (cube, cyl) = (cube(), cylinder(12));
     let id = Mat4::IDENTITY;
     let mut m = Mesh::default();
@@ -868,7 +511,7 @@ fn light_trader(fit: &Loadout) -> (Mesh, ShipShape) {
                 // A chin turret under the cab.
                 let turret = Vec3::new(p.x, -1.0, p.z + 0.2);
                 m.paint(&icosphere(2), at(turret, 0.32), 1.0, Paint::Metal);
-                gun(&mut m, turret, p.z - 1.3 * k, module);
+                gun(&mut m, turret, p.z - 1.3 * k, is_laser(module), k);
             }
             SlotKind::Engine => {
                 m.paint(
@@ -877,10 +520,10 @@ fn light_trader(fit: &Loadout) -> (Mesh, ShipShape) {
                     0.8,
                     Paint::Metal,
                 );
-                nozzles.push(bell(&mut m, Vec3::new(p.x, p.y, 8.0), module, 0.32));
+                nozzles.push(bell(&mut m, Vec3::new(p.x, p.y, 8.0), k, 0.32));
             }
-            SlotKind::Shield => shield(&mut m, Vec3::new(p.x, 1.42, p.z), module),
-            SlotKind::Radar => radar(&mut m, Vec3::new(p.x, 1.55, p.z), module),
+            SlotKind::Shield => shield(&mut m, Vec3::new(p.x, 1.42, p.z), k),
+            SlotKind::Radar => radar(&mut m, Vec3::new(p.x, 1.55, p.z), k),
             SlotKind::Radiator => {
                 let side = p.x.signum();
                 radiator(
@@ -934,7 +577,7 @@ fn interceptor_profile(z0: f32, z1: f32, steps: u32, inflate: f32) -> Vec<(f32, 
 /// a red nose and red tips, a bubble canopy, cheek intakes, forward-swept
 /// wings carrying gun pods, canted radiator fins for a tail and one big
 /// engine.
-fn interceptor(fit: &Loadout) -> (Mesh, ShipShape) {
+pub(super) fn interceptor(fit: &Loadout) -> (Mesh, ShipShape) {
     const SEGS: u32 = 28;
     let id = Mat4::IDENTITY;
     let mut m = Mesh::default();
@@ -1098,7 +741,13 @@ fn interceptor(fit: &Loadout) -> (Mesh, ShipShape) {
                     boxed(Vec3::new(p.x, y + 0.2, 0.0), Vec3::new(0.06, 0.25, 1.2)),
                     0.9,
                 );
-                gun(&mut m, Vec3::new(p.x, y, -1.1), p.z - 0.3 * k, module);
+                gun(
+                    &mut m,
+                    Vec3::new(p.x, y, -1.1),
+                    p.z - 0.3 * k,
+                    is_laser(module),
+                    k,
+                );
             }
             SlotKind::Engine => {
                 m.paint(
@@ -1107,7 +756,7 @@ fn interceptor(fit: &Loadout) -> (Mesh, ShipShape) {
                     1.0,
                     Paint::Metal,
                 );
-                nozzles.push(bell(&mut m, Vec3::new(p.x, p.y, 4.35), module, 0.34));
+                nozzles.push(bell(&mut m, Vec3::new(p.x, p.y, 4.35), k, 0.34));
             }
             SlotKind::Radiator => {
                 // Canted fins make the tail.
@@ -1126,7 +775,7 @@ fn interceptor(fit: &Loadout) -> (Mesh, ShipShape) {
                     0.75,
                 );
             }
-            SlotKind::Shield => shield(&mut m, Vec3::new(p.x, 0.9, 0.3), module),
+            SlotKind::Shield => shield(&mut m, Vec3::new(p.x, 0.9, 0.3), k),
             SlotKind::Radar => {
                 // A dark radome on the nose and a pitot probe.
                 m.paint(
@@ -1150,5 +799,335 @@ fn interceptor(fit: &Loadout) -> (Mesh, ShipShape) {
         }
     }
     soot(&mut m, 2.5, 5.0, 0.4);
+    (m, ShipShape { nozzles })
+}
+
+// --- Heavy fighter --------------------------------------------------------
+
+/// The heavy fighter: a flying tank. A squat armoured wedge in olive drab
+/// over a gunmetal belly, bolted-on armour plates down its flanks, a low
+/// cupola with a slit windscreen, stub wings that are really gun pylons
+/// (two guns stacked on each), a chin cannon, and an armoured engine skirt.
+/// Red only on the muzzles and the number.
+pub(super) fn heavy_fighter(fit: &Loadout) -> (Mesh, ShipShape) {
+    let (cube, cyl) = (cube(), cylinder(10));
+    let id = Mat4::IDENTITY;
+    let mut m = Mesh::default();
+
+    // The hull: a blunt wedge widening into a slab-sided box.
+    let hull = [
+        (-6.6, chamfer_rect(1.6, 0.35, 0.12, -0.35)),
+        (-4.4, chamfer_rect(3.3, 1.2, 0.45, -0.15)),
+        (-1.0, chamfer_rect(4.0, 1.6, 0.6, 0.0)),
+        (3.2, chamfer_rect(4.0, 1.6, 0.6, 0.0)),
+        (5.2, chamfer_rect(2.8, 1.4, 0.5, 0.0)),
+    ];
+    let two_tone = |_, e: usize| {
+        if (3..=5).contains(&e) {
+            Paint::Gunmetal
+        } else {
+            Paint::Olive
+        }
+    };
+    m.add(&loft(&hull, two_tone, Paint::Gunmetal), id, 1.0);
+
+    // Bolted armour plates down each flank, with rivet rows.
+    for side in [-1.0f32, 1.0] {
+        for (k, (z0, z1)) in [(-0.8f32, 0.5f32), (0.6, 1.9), (2.0, 3.1)]
+            .into_iter()
+            .enumerate()
+        {
+            let shade = if k % 2 == 0 { 0.92 } else { 1.06 };
+            m.paint(
+                &cube,
+                boxed(
+                    Vec3::new(side * 2.04, 0.0, (z0 + z1) / 2.0),
+                    Vec3::new(0.08, 0.36, z1 - z0),
+                ),
+                shade,
+                Paint::Olive,
+            );
+            for y in [-0.13f32, 0.13] {
+                for i in 0..4 {
+                    let z = z0 + 0.12 + (z1 - z0 - 0.24) * i as f32 / 3.0;
+                    m.paint(
+                        &cube,
+                        boxed(Vec3::new(side * 2.09, y, z), Vec3::splat(0.05)),
+                        1.0,
+                        Paint::Metal,
+                    );
+                }
+            }
+        }
+        // Her number on the aft plate.
+        let surface = flat(
+            Vec3::new(side * 2.09, -0.15, if side > 0.0 { 2.9 } else { 2.2 }),
+            Vec3::new(0.0, 0.0, -side),
+            Vec3::Y,
+        );
+        stencil(&mut m, "63", 0.3, Paint::Red, &surface);
+    }
+
+    // The cupola: low and armoured, a slit windscreen across its face and
+    // vision slits down its sides.
+    let cupola = [
+        (-3.9, chamfer_rect(0.9, 0.25, 0.1, 0.62)),
+        (-3.3, chamfer_rect(1.4, 0.6, 0.2, 0.85)),
+        (-1.0, chamfer_rect(1.4, 0.6, 0.2, 0.92)),
+        (0.2, chamfer_rect(1.0, 0.3, 0.12, 0.8)),
+    ];
+    let slit = |s: usize, e: usize| match (s, e) {
+        (0, 0 | 1 | 7) => Paint::Glass,
+        _ => Paint::Olive,
+    };
+    m.add(&loft(&cupola, slit, Paint::Olive), id, 1.02);
+    for side in [-1.0f32, 1.0] {
+        m.paint(
+            &cube,
+            boxed(
+                Vec3::new(side * 0.71, 0.97, -2.6),
+                Vec3::new(0.03, 0.08, 0.9),
+            ),
+            1.0,
+            Paint::Glass,
+        );
+    }
+
+    // Stub wings, thick and straight: pylons more than wings.
+    let wing = |side: f32| {
+        Mat4::from_translation(Vec3::new(side * 1.85, -0.25, 0.0))
+            * Mat4::from_rotation_z(-side * FRAC_PI_2)
+    };
+    for side in [-1.0f32, 1.0] {
+        m.paint(
+            &fin((-4.4, 0.4), (-4.2, -1.6), 1.7, 0.3, (0.0, 1.0)),
+            wing(side),
+            1.0,
+            Paint::Olive,
+        );
+        m.paint(
+            &icosphere(1),
+            wing(side) * at(Vec3::new(0.0, 1.75, -2.9), 0.1),
+            1.0,
+            Paint::Beacon,
+        );
+    }
+
+    // The armoured engine skirt.
+    let skirt = [
+        (5.2, chamfer_rect(2.8, 1.4, 0.5, 0.0)),
+        (6.3, chamfer_rect(3.1, 1.7, 0.6, 0.0)),
+    ];
+    m.add(&loft(&skirt, |_, _| Paint::Gunmetal, Paint::Metal), id, 0.9);
+
+    let mut nozzles = Vec::new();
+    let muzzle = |m: &mut Mesh, p: Vec3, k: f32| {
+        m.paint(
+            &cyl,
+            strut(p + Vec3::Z * 0.12 * k, p, 0.09 * k),
+            1.0,
+            Paint::Red,
+        );
+    };
+    for (slot, module, p) in fitted(fit) {
+        let k = scale(module.size);
+        match slot.kind {
+            SlotKind::Weapon if p.x.abs() < 0.5 => {
+                // A chin cannon in a ball mount.
+                let ball = Vec3::new(0.0, -0.8, -4.1);
+                m.paint(&icosphere(2), at(ball, 0.42), 1.0, Paint::Gunmetal);
+                let tip = -6.9;
+                gun(&mut m, ball, tip, is_laser(module), k);
+                for x in [-0.09f32, 0.09] {
+                    muzzle(&mut m, Vec3::new(x * k, ball.y, tip), k);
+                }
+            }
+            SlotKind::Weapon => {
+                // A pod under the wing with two guns stacked in it.
+                let pod = Vec3::new(p.x * 1.3, -0.5, -2.6);
+                m.paint(
+                    &cube,
+                    boxed(pod, Vec3::new(0.42, 0.62, 1.7)),
+                    1.0,
+                    Paint::Gunmetal,
+                );
+                for dy in [0.15f32, -0.15] {
+                    let breech = pod + Vec3::new(0.0, dy, -0.8);
+                    gun(&mut m, breech, -5.1, is_laser(module), k * 0.8);
+                    muzzle(&mut m, Vec3::new(pod.x + 0.072, breech.y, -5.1), 0.8);
+                }
+            }
+            SlotKind::Engine => {
+                nozzles.push(bell(&mut m, Vec3::new(p.x, p.y, 6.0), k, 0.46));
+            }
+            SlotKind::Shield => shield(&mut m, Vec3::new(0.0, 0.82, 1.0), k),
+            SlotKind::Radar => radar(&mut m, Vec3::new(0.0, 1.22, -1.7), k * 0.8),
+            SlotKind::Radiator if p.x.abs() < 0.5 => {
+                radiator(&mut m, Vec3::new(0.0, 0.8, p.z), Vec3::Y, 1.1 * k, 1.8 * k);
+            }
+            SlotKind::Radiator => {
+                let side = p.x.signum();
+                radiator(
+                    &mut m,
+                    Vec3::new(side * 1.5, 0.75, p.z),
+                    Vec3::new(side, 1.1, 0.0),
+                    1.0 * k,
+                    1.8 * k,
+                );
+            }
+            _ => {}
+        }
+    }
+    soot(&mut m, 3.0, 6.5, 0.4);
+    (m, ShipShape { nozzles })
+}
+
+// --- Racer ----------------------------------------------------------------
+
+/// The racer: an engine with a seat. A huge engine in cream with a sky-blue
+/// racing stripe, a tiny cockpit pod perched on its nose under a bubble,
+/// and long outrigger fins carrying roundels and the racing number.
+pub(super) fn racer(fit: &Loadout) -> (Mesh, ShipShape) {
+    const SEGS: u32 = 32;
+    let id = Mat4::IDENTITY;
+    let mut m = Mesh::default();
+    let up = TAU / 4.0;
+
+    // The engine: everything else hangs off it.
+    let engine = [
+        (-1.7, 0.55),
+        (-1.4, 0.95),
+        (-0.8, 1.12),
+        (2.4, 1.18),
+        (3.3, 1.02),
+        (3.3, 1.02),
+        (3.5, 0.95),
+    ];
+    m.add(&lathe(&engine, SEGS, 0.0, TAU), id, 1.05);
+    // An intake lip, and the racing stripe over the top.
+    m.paint(
+        &lathe(&[(-1.75, 0.5), (-1.62, 0.62), (-1.55, 0.5)], SEGS, 0.0, TAU),
+        id,
+        1.0,
+        Paint::Metal,
+    );
+    let stripe = |inflate: f32| -> Vec<(f32, f32)> {
+        engine[1..5]
+            .iter()
+            .map(|&(z, r)| (z, r + inflate))
+            .collect()
+    };
+    m.paint(
+        &lathe(&stripe(0.01), 6, up - 0.32, up + 0.32),
+        id,
+        1.0,
+        Paint::Sky,
+    );
+    for edge in [up - 0.42, up + 0.38] {
+        m.paint(
+            &lathe(&stripe(0.012), 1, edge, edge + 0.04),
+            id,
+            1.0,
+            Paint::Red,
+        );
+    }
+    // A red band round the tail.
+    m.paint(
+        &lathe(&[(2.7, 1.17), (3.0, 1.12)], SEGS, 0.0, TAU),
+        id,
+        1.0,
+        Paint::Red,
+    );
+
+    // The cockpit pod on the nose: a sky-blue teardrop with a bubble.
+    let pod: Vec<(f32, f32)> = (0..=14)
+        .map(|i| {
+            let t = i as f32 / 14.0;
+            let z = -4.7 + 3.4 * t;
+            (z, 0.58 * (t * std::f32::consts::PI).sin().powf(0.6))
+        })
+        .collect();
+    let perch = Mat4::from_translation(Vec3::Y * 0.3);
+    m.paint(&lathe(&pod, 24, 0.0, TAU), perch, 1.0, Paint::Sky);
+    m.paint(
+        &icosphere(3),
+        Mat4::from_scale_rotation_translation(
+            Vec3::new(0.36, 0.34, 0.8),
+            Quat::IDENTITY,
+            Vec3::new(0.0, 0.72, -3.0),
+        ),
+        1.0,
+        Paint::Glass,
+    );
+    // Struts tying the pod to the engine.
+    for side in [-1.0f32, 1.0] {
+        m.paint(
+            &cylinder(8),
+            strut(
+                Vec3::new(side * 0.3, 0.1, -2.0),
+                Vec3::new(side * 0.7, 0.0, -1.0),
+                0.05,
+            ),
+            1.0,
+            Paint::Metal,
+        );
+    }
+
+    let mut nozzles = Vec::new();
+    for (slot, module, p) in fitted(fit) {
+        let k = scale(module.size);
+        match slot.kind {
+            SlotKind::Engine => {
+                nozzles.push(bell(&mut m, Vec3::new(0.0, 0.0, 3.45), k * 1.1, 0.72));
+            }
+            SlotKind::Radar => {
+                // A long pitot boom off the pod's nose.
+                m.paint(
+                    &cylinder(6),
+                    strut(Vec3::new(0.0, 0.3, -4.6), Vec3::new(0.0, 0.3, -5.9), 0.025),
+                    1.0,
+                    Paint::Red,
+                );
+            }
+            SlotKind::Radiator => {
+                // A long outrigger fin, a tip pod, and a roundel on top.
+                let side = p.x.signum();
+                let t = Mat4::from_translation(Vec3::new(side * 1.05, 0.0, 0.0))
+                    * Mat4::from_rotation_z(-side * FRAC_PI_2);
+                let span = 2.6 * k;
+                m.add(
+                    &fin((0.4, 3.2), (2.0, 3.3), span, 0.07, (0.0, 1.0)),
+                    t,
+                    1.05,
+                );
+                let tip = Vec3::new(side * (1.05 + span), 0.0, 2.6);
+                let cigar = [(-1.0, 0.0), (-0.7, 0.13), (0.6, 0.13), (1.0, 0.0)];
+                m.paint(
+                    &lathe(&cigar, 12, 0.0, TAU),
+                    Mat4::from_translation(tip),
+                    1.0,
+                    Paint::Red,
+                );
+                let disc = |r: f32, y: f32, paint: Paint, m: &mut Mesh| {
+                    m.paint(
+                        &cylinder(24),
+                        Mat4::from_scale_rotation_translation(
+                            Vec3::new(r, 0.012, r),
+                            Quat::IDENTITY,
+                            Vec3::new(side * (1.05 + span * 0.55), y, 2.55),
+                        ),
+                        1.0,
+                        paint,
+                    );
+                };
+                disc(0.5, 0.035, Paint::Red, &mut m);
+                disc(0.42, 0.047, Paint::Hull, &mut m);
+                let x0 = side * (1.05 + span * 0.55) - 0.17;
+                let surface = flat(Vec3::new(x0, 0.06, 2.75), Vec3::X, Vec3::NEG_Z);
+                stencil(&mut m, "5", 0.4, Paint::Red, &surface);
+            }
+            _ => {}
+        }
+    }
     (m, ShipShape { nozzles })
 }
