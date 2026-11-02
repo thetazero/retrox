@@ -83,6 +83,7 @@ pub fn generate(seed: u64, config: &GalaxyConfig) -> GalaxyState {
     economy::seed(&mut Rng::derive(seed, "economy"), &mut state);
     let classes = haulers::classes(&mut state);
     haulers::seed(&mut Rng::derive(seed, "companies"), &mut state, &classes);
+    haulers::seed_harvesters(&mut Rng::derive(seed, "harvesters"), &mut state, &classes);
     state
 }
 
@@ -95,6 +96,7 @@ pub fn generate_cradle(seed: u64, config: &GalaxyConfig) -> GalaxyState {
     economy::seed(&mut Rng::derive(seed, "economy"), &mut state);
     let classes = haulers::classes(&mut state);
     haulers::seed(&mut Rng::derive(seed, "companies"), &mut state, &classes);
+    haulers::seed_harvesters(&mut Rng::derive(seed, "harvesters"), &mut state, &classes);
     state
 }
 

@@ -37,6 +37,7 @@ pub fn generate(rng: &mut Rng, state: &mut GalaxyState) {
                 resources: Resources {
                     ore: vary(&mut r, res.ore),
                     ice: vary(&mut r, res.ice),
+                    gas: 0.0,
                 },
                 seed: r.next_u64(),
             });

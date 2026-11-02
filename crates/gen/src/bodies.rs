@@ -170,6 +170,7 @@ fn make_body(
             let resources = Resources {
                 ore: roll(0.5, ob),
                 ice: roll(if beyond_frost { 0.7 } else { 2.0 }, ib),
+                gas: 0.0,
             };
             (BodyKind::Belt, resources, 0.0)
         }
@@ -179,22 +180,27 @@ fn make_body(
                 Barren => Resources {
                     ore: roll(1.5, ob),
                     ice: roll(3.0, ib),
+                    gas: 0.0,
                 },
                 Desert => Resources {
                     ore: roll(1.5, ob),
                     ice: roll(4.0, ib),
+                    gas: 0.0,
                 },
                 Terran => Resources {
                     ore: roll(2.0, ob),
                     ice: roll(2.0, ib),
+                    gas: 0.0,
                 },
                 Ocean => Resources {
                     ore: roll(2.5, ob),
                     ice: roll(0.8, ib),
+                    gas: 0.0,
                 },
                 Ice => Resources {
                     ore: roll(3.0, ob),
                     ice: roll(0.6, ib),
+                    gas: 0.0,
                 },
             };
             let class_hab = match class {
@@ -227,6 +233,16 @@ fn make_body(
             let re = r.range(lo, hi);
             (re.powi(3) * r.range(0.8, 1.1), re * EARTH_RADIUS_KM)
         }
+    };
+    // Bigger giants have deeper, richer atmospheres to skim. Set from mass
+    // rather than a roll, so adding gas left every other roll as it was.
+    let resources = if kind == BodyKind::GasGiant {
+        Resources {
+            gas: (0.35 + 0.6 * (mass / 15.0).ln() / (400.0f64 / 15.0).ln()).clamp(0.2, 1.0),
+            ..resources
+        }
+    } else {
+        resources
     };
     let habitability =
         class_hab * star_factor(star) * (0.03 + 0.97 * zone_factor(orbit.semi_major_au, hz));
@@ -264,6 +280,7 @@ fn regions(r: &mut Rng, state: &mut GalaxyState, body: retrox_sim::BodyId) {
             resources: Resources {
                 ore: (resources.ore * r.range(0.3, 1.7)).min(1.0),
                 ice: (resources.ice * r.range(0.3, 1.7)).min(1.0),
+                gas: 0.0,
             },
             habitability: (habitability * r.range(0.5, 1.3)).min(1.0),
         };
@@ -277,6 +294,7 @@ fn regions(r: &mut Rng, state: &mut GalaxyState, body: retrox_sim::BodyId) {
     b.resources = Resources {
         ore: sum.0.ore / n,
         ice: sum.0.ice / n,
+        gas: 0.0,
     };
     b.habitability = sum.1 / n;
 }
@@ -315,11 +333,13 @@ fn moons(
             Resources {
                 ore: (r.f64().powf(2.5) * ore_bias(star)).min(1.0),
                 ice: (r.f64().powf(0.8) * ice_bias(star)).min(1.0),
+                gas: 0.0,
             }
         } else {
             Resources {
                 ore: (r.f64().powf(2.2) * ore_bias(star)).min(1.0),
                 ice: (r.f64().powi(4) * ice_bias(star)).min(1.0),
+                gas: 0.0,
             }
         };
         let habitability = 0.08 * star_factor(star) * zone_factor(parent_a, hz);

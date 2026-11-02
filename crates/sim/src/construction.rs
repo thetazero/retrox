@@ -62,6 +62,7 @@ fn reachable_resources(state: &GalaxyState, id: SettlementId) -> Resources {
             Resources {
                 ore: acc.ore.max(r.ore),
                 ice: acc.ice.max(r.ice),
+                gas: acc.gas.max(r.gas),
             }
         })
 }
@@ -93,6 +94,8 @@ fn buildable(state: &GalaxyState, id: SettlementId) -> Vec<FacilityKind> {
         .filter(|&kind| match kind {
             FacilityKind::Mine => resources.ore > MINEABLE,
             FacilityKind::IceHarvester => resources.ice > MINEABLE,
+            // Gas plants sit by a giant their harvesters can skim.
+            FacilityKind::GasPlant => resources.gas > MINEABLE,
             // Only where captains want more hull than there is.
             FacilityKind::Shipyard => {
                 economy.hull_wanted > economy.hull_t

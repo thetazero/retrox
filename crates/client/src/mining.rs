@@ -988,7 +988,11 @@ mod tests {
             name: "Test field".into(),
             orbit: Orbit::circular(Orbiting::Star, 1.0, 0.0),
             radius_km: 20.0,
-            resources: Resources { ore: 0.8, ice: 0.1 },
+            resources: Resources {
+                ore: 0.8,
+                ice: 0.1,
+                gas: 0.0,
+            },
             seed: 7,
         }
     }
