@@ -359,11 +359,16 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
                     Stroke::new(1.0, AMBER_DIM),
                 );
             }
-            let days = trip.travel_s / SECONDS_PER_DAY;
+            let days = (w.clock_s - trip.depart_s) / SECONDS_PER_DAY;
+            let km_s = w.ship.vel.length() / 1000.0;
+            let au = w.distance_to(trip.target) / AU;
             painter.text(
                 c + Vec2::new(0.0, -screen.height() * 0.3),
                 Align2::CENTER_CENTER,
-                format!("FAST TRAVEL — {} · {days:.1} d", w.name(trip.target)),
+                format!(
+                    "FAST TRAVEL — {} · {au:.2} AU · {km_s:.0} km/s · {days:.1} d · J drop out",
+                    w.name(trip.target)
+                ),
                 FontId::monospace(22.0),
                 AMBER,
             );

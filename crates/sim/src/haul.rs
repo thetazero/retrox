@@ -5,9 +5,11 @@
 //! A fleet docked at a settlement with an empty hold picks the trip with
 //! the best expected profit per day: buy a good here, sell it somewhere
 //! within reach. The expected sale price counts cargo already on its way
-//! to that market, so fleets don't all chase the same gap. Trips take real
-//! time: accelerate-and-brake inside systems, at the class's laden
-//! acceleration, and the jump drive's speed along hyperlanes.
+//! to that market, so fleets don't all chase the same gap. Trips are real
+//! flights: inside a system the fleet flies under the [`crate::flight`]
+//! autopilot at the class's laden acceleration, out to the star's jump
+//! point if the destination is elsewhere, then along the hyperlanes at the
+//! jump drive's speed, and in again from the far jump point.
 //!
 //! Companies pay their crews' upkeep to their home settlement, which is
 //! how money gets back to settlements that don't export.
@@ -21,6 +23,8 @@ use serde::{Deserialize, Serialize};
 use slotmap::new_key_type;
 
 use crate::economy::{Good, GoodMap};
+use crate::flight::Vec3;
+use crate::flight::{self, Goal, Kinematics};
 use crate::settlement::{SettlementId, Site};
 use crate::{EconomyModel, GalaxyState, GalaxyTime, Id, Rng, SystemId};
 
@@ -72,8 +76,20 @@ pub enum Location {
     Docked(SettlementId),
     Travelling {
         to: SettlementId,
-        arrive: GalaxyTime,
+        /// Hyperlane time to the destination's system, zero inside one.
+        jump_days: f64,
+        stage: Stage,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Stage {
+    /// Under autopilot in `system`: to the destination if it's here,
+    /// otherwise to the jump point toward it.
+    Flying { system: SystemId, ship: Kinematics },
+    /// In the hyperlanes from `from`, coming out at the destination
+    /// system's jump point facing it.
+    Jumping { from: SystemId, arrive: GalaxyTime },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -116,6 +132,8 @@ const FOUNDING_WEALTH: f64 = 3.0;
 const LOSS_PER_SHIP_TRIP: f64 = 0.001;
 
 const METRES_PER_AU: f64 = 1.496e11;
+/// Jump points sit this far from a star, toward the system on the far end.
+pub const JUMP_POINT_AU: f64 = 0.3;
 const SECONDS_PER_DAY: f64 = 86_400.0;
 
 /// Where a settlement is at time `t_days`, in AU from its star.
@@ -128,17 +146,39 @@ pub fn settlement_position(state: &GalaxyState, id: SettlementId, t_days: f64) -
     }
 }
 
+/// A settlement's position and velocity at `t_days`, in metres from its
+/// star: where a ship docking there has to be, and how fast.
+pub fn settlement_goal(state: &GalaxyState, id: SettlementId, t_days: f64) -> Goal {
+    const H_DAYS: f64 = 1e-3;
+    let at = |t| flight::scale(settlement_position(state, id, t), METRES_PER_AU);
+    let (a, b) = (at(t_days - H_DAYS), at(t_days + H_DAYS));
+    Goal {
+        pos: at(t_days),
+        vel: flight::scale(flight::sub(b, a), 1.0 / (2.0 * H_DAYS * SECONDS_PER_DAY)),
+    }
+}
+
+/// The jump point in `here` toward `there`, in metres from the star.
+pub fn jump_point(state: &GalaxyState, here: SystemId, there: SystemId) -> Vec3 {
+    let (a, b) = (state.systems[here].position, state.systems[there].position);
+    let d = [b.x - a.x, b.y - a.y, b.z - a.z];
+    let len = norm(d);
+    let dir = if len > 0.0 {
+        flight::scale(d, 1.0 / len)
+    } else {
+        [1.0, 0.0, 0.0]
+    };
+    flight::scale(dir, JUMP_POINT_AU * METRES_PER_AU)
+}
+
 fn norm(p: [f64; 3]) -> f64 {
     (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt()
 }
 
-/// Days to cover `au` accelerating halfway and braking the rest, at
-/// `accel` m/s².
+/// Days to fly `au` from rest to rest under autopilot at `accel` m/s²: a
+/// planning estimate of what [`flight::fly`] will take.
 pub fn cruise_days(au: f64, accel: f64) -> f64 {
-    if accel <= 0.0 {
-        return f64::INFINITY;
-    }
-    2.0 * (au * METRES_PER_AU / accel).sqrt() / SECONDS_PER_DAY
+    flight::trip_seconds(au * METRES_PER_AU, accel) / SECONDS_PER_DAY
 }
 
 /// Shortest lane distance from `origin` to every system within `max_ly`.
@@ -236,9 +276,9 @@ impl Ctx {
             return cruise_days(norm(d), class.accel_laden);
         }
         // Out to the star's jump point, along the lanes, and in again.
-        cruise_days(norm(pa), class.accel_laden)
+        cruise_days((norm(pa) - JUMP_POINT_AU).abs(), class.accel_laden)
             + lane_ly / class.jump_laden
-            + cruise_days(norm(pb), class.accel_laden)
+            + cruise_days((norm(pb) - JUMP_POINT_AU).abs(), class.accel_laden)
     }
 }
 
@@ -252,6 +292,7 @@ struct Plan {
     good: Good,
     amount: f64,
     days: f64,
+    jump_days: f64,
 }
 
 /// The most profitable trip for a fleet docked at `here`, if any beats
@@ -292,6 +333,11 @@ fn best_trip(
                 continue;
             }
             let days = ctx.trip_days(state, class, here, to, ly);
+            let jump_days = if system == origin.system {
+                0.0
+            } else {
+                ly / class.jump_laden
+            };
             if days > MAX_TRIP_DAYS {
                 continue;
             }
@@ -321,6 +367,7 @@ fn best_trip(
                             good: Good::Ore,
                             amount: 0.0,
                             days,
+                            jump_days,
                         },
                     ));
                 }
@@ -352,6 +399,7 @@ fn best_trip(
                             good,
                             amount,
                             days,
+                            jump_days,
                         },
                     ));
                 }
@@ -362,38 +410,56 @@ fn best_trip(
     best.or(reposition).map(|(_, plan)| plan)
 }
 
-/// Movement phase: fleets that reach their destination dock there. Some
-/// ships don't make it.
+/// Movement phase: every travelling fleet flies one day of its trip.
+/// Fleets that reach their destination dock there, and some ships don't
+/// make it.
 pub fn movement(state: &mut GalaxyState) {
+    use rayon::prelude::*;
+
     let now = state.time;
     let seed = state.seed;
-    for (key, company) in state.companies.iter_mut() {
+    let jobs: Vec<(CompanyId, usize, Location, f64)> = state
+        .companies
+        .iter()
+        .flat_map(|(key, company)| {
+            company.fleets.iter().enumerate().filter_map(move |(n, f)| {
+                matches!(f.at, Location::Travelling { .. }).then_some((key, n, f.at, f.class))
+            })
+        })
+        .map(|(key, n, at, class)| (key, n, at, state.ship_classes[class].accel_laden))
+        .collect();
+    let moved: Vec<(CompanyId, usize, Location)> = jobs
+        .into_par_iter()
+        .map(|(key, n, at, accel)| (key, n, advance(state, at, accel)))
+        .collect();
+
+    for (key, n, at) in moved {
         let company_bits = slotmap::Key::data(&key).as_ffi();
-        for (n, fleet) in company.fleets.iter_mut().enumerate() {
-            let Location::Travelling { to, arrive } = fleet.at else {
-                continue;
-            };
-            if arrive > now {
-                continue;
-            }
-            let mut rng = Rng::stream(
-                seed,
-                "ship-loss",
-                now.days(),
-                company_bits ^ ((n as u64) << 48),
-            );
-            let survivors = (0..fleet.ships)
-                .filter(|_| !rng.chance(LOSS_PER_SHIP_TRIP))
-                .count() as u32;
-            if survivors < fleet.ships {
-                // Lost ships take their share of the cargo with them.
-                if let Some(cargo) = fleet.cargo.as_mut() {
-                    cargo.amount *= f64::from(survivors) / f64::from(fleet.ships);
-                }
-                fleet.ships = survivors;
-            }
-            fleet.at = Location::Docked(to);
+        let fleet = &mut state.companies[key].fleets[n];
+        fleet.at = at;
+        if !matches!(at, Location::Docked(_)) {
+            continue;
         }
+        let mut rng = Rng::stream(
+            seed,
+            "ship-loss",
+            now.days(),
+            company_bits ^ ((n as u64) << 48),
+        );
+        let survivors = (0..fleet.ships)
+            .filter(|_| !rng.chance(LOSS_PER_SHIP_TRIP))
+            .count() as u32;
+        if survivors < fleet.ships {
+            // Lost ships take their share of the cargo with them.
+            if let Some(cargo) = fleet.cargo.as_mut() {
+                cargo.amount *= f64::from(survivors) / f64::from(fleet.ships);
+            }
+            fleet.ships = survivors;
+        }
+        // Unloading and loading before it can set off again.
+        fleet.idle_until = GalaxyTime::from_days(now.days() + HANDLING_DAYS as u64);
+    }
+    for company in state.companies.values_mut() {
         company.fleets.retain(|f| f.ships > 0);
     }
     // A company with no ships left winds up; its money goes home.
@@ -413,6 +479,75 @@ pub fn movement(state: &mut GalaxyState) {
                 if let Some(f) = state.factions.values_mut().next() {
                     f.treasury += company.credits;
                 }
+            }
+        }
+    }
+}
+
+/// One day of a trip: fly, jump, or come out of the lanes.
+fn advance(state: &GalaxyState, at: Location, accel: f64) -> Location {
+    let Location::Travelling {
+        to,
+        jump_days,
+        stage,
+    } = at
+    else {
+        return at;
+    };
+    let now = state.time;
+    let Some(dest) = state.settlements.get(to) else {
+        // Nowhere left to go: the trip just ends.
+        return Location::Docked(to);
+    };
+    let dest_system = dest.system;
+    match stage {
+        Stage::Jumping { arrive, .. } if arrive > now => at,
+        Stage::Jumping { from, .. } => {
+            // Out of the lanes at rest, on the side facing where we came
+            // from; the autopilot takes it from here tomorrow.
+            let entry = jump_point(state, dest_system, from);
+            Location::Travelling {
+                to,
+                jump_days,
+                stage: Stage::Flying {
+                    system: dest_system,
+                    ship: Kinematics {
+                        pos: entry,
+                        vel: [0.0; 3],
+                    },
+                },
+            }
+        }
+        Stage::Flying { system, mut ship } => {
+            let t0 = now.days() as f64;
+            let arrived = if system == dest_system {
+                flight::fly(&mut ship, accel, SECONDS_PER_DAY, |t, _| {
+                    settlement_goal(state, to, t0 + t / SECONDS_PER_DAY)
+                })
+            } else {
+                let goal = Goal {
+                    pos: jump_point(state, system, dest_system),
+                    vel: [0.0; 3],
+                };
+                flight::fly(&mut ship, accel, SECONDS_PER_DAY, |_, _| goal)
+            };
+            match arrived {
+                None => Location::Travelling {
+                    to,
+                    jump_days,
+                    stage: Stage::Flying { system, ship },
+                },
+                Some(_) if system == dest_system => Location::Docked(to),
+                Some(_) => Location::Travelling {
+                    to,
+                    jump_days,
+                    stage: Stage::Jumping {
+                        from: system,
+                        arrive: GalaxyTime::from_days(
+                            now.days() + jump_days.ceil().max(1.0) as u64,
+                        ),
+                    },
+                },
             }
         }
     }
@@ -555,6 +690,7 @@ fn depart(
         * plan.days;
     let loading = fleet.cargo.is_none() && plan.amount > 0.0;
     let class_capacity = class.cargo_t * f64::from(fleet.ships);
+    let credits = state.companies[key].credits.max(0.0);
 
     let origin = &mut state.settlements[here].economy;
     let mut cost = 0.0;
@@ -562,11 +698,14 @@ fn depart(
         cost += plan.amount * origin.market.price[plan.good];
         origin.market.stock[plan.good] -= plan.amount;
     }
-    // Fuel comes out of the port's stock; what it can't supply is burned
-    // from the ships' own reserves, free.
-    let fuel_bought = fuel.min(origin.market.stock[Good::Fuel]);
+    // Fuel comes out of the port's stock, as much as the company can still
+    // pay for; the rest is burned from the ships' own reserves, free.
+    let fuel_price = origin.market.price[Good::Fuel];
+    let fuel_bought = fuel
+        .min(origin.market.stock[Good::Fuel])
+        .min((credits - cost).max(0.0) / fuel_price);
     origin.market.stock[Good::Fuel] -= fuel_bought;
-    cost += fuel_bought * origin.market.price[Good::Fuel];
+    cost += fuel_bought * fuel_price;
     origin.treasury += cost;
 
     let company = &mut state.companies[key];
@@ -582,10 +721,19 @@ fn depart(
         Some(cargo) => *ctx.inbound.entry((plan.to, cargo.good)).or_default() += cargo.amount,
         None => *ctx.claimed.entry(plan.to).or_default() += class_capacity,
     }
-    let days = (plan.days + HANDLING_DAYS).ceil() as u64;
-    fleet.at = Location::Travelling {
+    // Cast off from the port, moving with it.
+    let port = settlement_goal(state, here, state.time.days() as f64);
+    let system = state.settlements[here].system;
+    state.companies[key].fleets[n].at = Location::Travelling {
         to: plan.to,
-        arrive: GalaxyTime::from_days(state.time.days() + days),
+        jump_days: plan.jump_days,
+        stage: Stage::Flying {
+            system,
+            ship: Kinematics {
+                pos: port.pos,
+                vel: port.vel,
+            },
+        },
     };
 }
 
