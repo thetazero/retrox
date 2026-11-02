@@ -62,6 +62,11 @@ pub fn open_contracts(state: &GalaxyState) -> SecondaryMap<FactionId, bool> {
         .collect()
 }
 
+/// The most a contract can ever pay per unit of `good`.
+pub fn max_premium(good: Good) -> f64 {
+    good.base_price() * CONTRACT_PREMIUM
+}
+
 /// The premium per unit a faction pays a captain for delivering `good` to
 /// `settlement`, on top of the price, if the market held `stock` of it:
 /// only from factions in `open` (see [`open_contracts`]), and only below

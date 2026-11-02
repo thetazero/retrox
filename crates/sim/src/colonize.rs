@@ -172,8 +172,8 @@ pub fn launch(state: &mut GalaxyState) {
             origin,
             (MAX_DAYS - 2.0 * IN_SYSTEM_DAYS) * JUMP_LY_PER_DAY,
         )
-        .into_iter()
-        .flat_map(|(system, ly)| {
+        .iter()
+        .flat_map(|&(system, ly)| {
             let days = 2.0 * IN_SYSTEM_DAYS + ly / JUMP_LY_PER_DAY;
             candidates(state, taken, system)
                 .into_iter()

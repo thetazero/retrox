@@ -112,8 +112,15 @@ impl Orbit {
 
     /// Position relative to the parent at time `t_days`, in AU.
     pub fn position_at(&self, t_days: f64, parent_mass_suns: f64) -> [f64; 3] {
+        self.state_at(t_days, parent_mass_suns).0
+    }
+
+    /// Position (AU) and velocity (AU per day) relative to the parent at
+    /// time `t_days`, from one solution of Kepler's equation.
+    pub fn state_at(&self, t_days: f64, parent_mass_suns: f64) -> ([f64; 3], [f64; 3]) {
         let e = self.eccentricity;
-        let mean = self.mean_anomaly_epoch + TAU * t_days / self.period_days(parent_mass_suns);
+        let period = self.period_days(parent_mass_suns);
+        let mean = self.mean_anomaly_epoch + TAU * t_days / period;
         let mean = mean.rem_euclid(TAU);
         // Kepler's equation, E - e sin E = M, by Newton's method.
         let mut ecc = if e < 0.8 { mean } else { std::f64::consts::PI };
@@ -125,12 +132,47 @@ impl Orbit {
             }
         }
         let a = self.semi_major_au;
-        let (x, y) = (a * (ecc.cos() - e), a * (1.0 - e * e).sqrt() * ecc.sin());
+        let (se, ce) = ecc.sin_cos();
+        let b = a * (1.0 - e * e).sqrt();
+        let (x, y) = (a * (ce - e), b * se);
+        // dE/dt from M = E - e sin E, with dM/dt = 2π / period.
+        let de = TAU / period / (1.0 - e * ce);
+        let (vx, vy) = (-a * se * de, b * ce * de);
 
         let (sw, cw) = self.arg_periapsis.sin_cos();
         let (si, ci) = self.inclination.sin_cos();
         let (sn, cn) = self.ascending_node.sin_cos();
-        let (xw, yw) = (x * cw - y * sw, x * sw + y * cw);
-        [xw * cn - yw * ci * sn, xw * sn + yw * ci * cn, yw * si]
+        let rotate = |x: f64, y: f64| {
+            let (xw, yw) = (x * cw - y * sw, x * sw + y * cw);
+            [xw * cn - yw * ci * sn, xw * sn + yw * ci * cn, yw * si]
+        };
+        (rotate(x, y), rotate(vx, vy))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn analytic_velocity_matches_finite_difference() {
+        let orbit = Orbit {
+            parent: Orbiting::Star,
+            semi_major_au: 1.7,
+            eccentricity: 0.3,
+            inclination: 0.2,
+            ascending_node: 1.1,
+            arg_periapsis: 2.3,
+            mean_anomaly_epoch: 0.4,
+        };
+        for t in [0.0, 37.0, 400.0] {
+            let (_, v) = orbit.state_at(t, 1.2);
+            let h = 1e-4;
+            let (a, b) = (orbit.position_at(t - h, 1.2), orbit.position_at(t + h, 1.2));
+            for i in 0..3 {
+                let fd = (b[i] - a[i]) / (2.0 * h);
+                assert!((v[i] - fd).abs() < 1e-6, "t {t} axis {i}: {} vs {fd}", v[i]);
+            }
+        }
     }
 }
