@@ -11,13 +11,15 @@ pub fn production(state: &mut GalaxyState) {
 /// Faction AI: plan quotas, fleet orders, diplomacy.
 pub fn planning(_state: &mut GalaxyState) {}
 
-/// Goods flow between markets along the hyperlane network.
+/// Docked fleets sell their cargo and pick their next trip.
 pub fn trade(state: &mut GalaxyState) {
-    crate::economy::trade(state);
+    crate::haul::trade(state);
 }
 
-/// Fleets and coarse traffic move along lanes.
-pub fn movement(_state: &mut GalaxyState) {}
+/// Fleets arrive where they were going.
+pub fn movement(state: &mut GalaxyState) {
+    crate::haul::movement(state);
+}
 
 /// Battles are resolved abstractly.
 pub fn conflict(_state: &mut GalaxyState) {}

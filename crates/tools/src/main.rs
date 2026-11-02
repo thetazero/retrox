@@ -274,6 +274,10 @@ fn print_economy(state: &retrox_sim::GalaxyState) {
         e.population, e.money
     );
     println!(
+        "  hauling: {} companies, {} ships ({} travelling)",
+        e.companies, e.ships, e.ships_travelling
+    );
+    println!(
         "  {:<11} {:>12} {:>10} {:>10} {:>9} {:>8}",
         "good", "stock", "demand/d", "short/d", "price", "#short"
     );

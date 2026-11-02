@@ -2765,6 +2765,7 @@ name = "retrox-gen"
 version = "0.1.0"
 dependencies = [
  "rayon",
+ "retrox-content",
  "retrox-sim",
  "serde_json",
  "slotmap",

@@ -6,19 +6,14 @@
 //! [`EconomyModel::Planned`] economy hold prices at their official base
 //! value and move goods by plan instead of by price.
 //!
-//! Goods move between settlements through **market centers**: in each
-//! system, every faction present has one, its largest settlement there.
-//! A settlement trades with its own faction's center; rival centers in a
-//! system trade with each other; and across a hyperlane, the centers on
-//! each side trade pairwise.
+//! Goods only move between settlements in ships; see [`crate::haul`].
 
 use std::ops::{Index, IndexMut};
 
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use slotmap::SecondaryMap;
 
-use crate::{EconomyModel, FactionId, GalaxyState, SettlementId, SystemId};
+use crate::{EconomyModel, GalaxyState};
 
 /// Tradeable goods. A small starting set; the full 15–30 goods will come
 /// from content.
@@ -196,6 +191,23 @@ impl Market {
     pub fn fill(&self, good: Good) -> f64 {
         self.stock[good] / self.target(good)
     }
+
+    /// What this market would charge for `good` if it held `stock` of it.
+    /// Planned economies always charge the official base price.
+    pub fn price_at(&self, good: Good, stock: f64, model: EconomyModel) -> f64 {
+        match model {
+            EconomyModel::Planned => good.base_price(),
+            EconomyModel::Market => {
+                let scarcity = self.target(good) / (stock.max(0.0) + 1.0);
+                good.base_price() * scarcity.powf(0.6).clamp(0.25, 5.0)
+            }
+        }
+    }
+
+    /// Stock above target: what the market is willing to sell.
+    pub fn surplus(&self, good: Good) -> f64 {
+        (self.stock[good] - self.target(good)).max(0.0)
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -204,8 +216,8 @@ pub struct LocalEconomy {
     pub population: f64,
     pub facilities: Vec<Facility>,
     pub market: Market,
-    /// The settlement's money, in credits. Trade only moves money between
-    /// treasuries; nothing creates or destroys it yet.
+    /// The settlement's money, in credits. Trade only moves money; nothing
+    /// creates or destroys it yet.
     pub treasury: f64,
 }
 
@@ -268,13 +280,7 @@ impl LocalEconomy {
     pub fn update_prices(&mut self, model: EconomyModel) {
         let market = &mut self.market;
         for good in Good::ALL {
-            market.price[good] = match model {
-                EconomyModel::Planned => good.base_price(),
-                EconomyModel::Market => {
-                    let scarcity = market.target(good) / (market.stock[good] + 1.0);
-                    good.base_price() * scarcity.powf(0.6).clamp(0.25, 5.0)
-                }
-            };
+            market.price[good] = market.price_at(good, market.stock[good], model);
         }
     }
 }
@@ -294,176 +300,10 @@ pub fn production(state: &mut GalaxyState) {
     settlements.par_iter_mut().for_each(|s| s.economy.produce());
 }
 
-/// Fraction of a price (or fill) gap closed per link per day.
-const TRADE_RATE: f64 = 0.15;
-/// Transport cost per light-year, as a fraction of the good's base price.
-const TRANSPORT_COST_PER_LY: f64 = 0.01;
-/// What a trip inside one system costs, in light-year equivalents.
-const LOCAL_TRIP_LY: f64 = 0.2;
-/// A settlement never ships out more than this share of a good's stock per
-/// day, split across its links.
-const MAX_EXPORT_SHARE: f64 = 0.5;
-/// A settlement never spends more than this share of its treasury per day,
-/// split across its links and goods.
-const MAX_SPEND_SHARE: f64 = 0.5;
-
-/// Each faction's market center in a system: its most populous settlement
-/// there (the earliest founded wins ties), in order of first settlement.
-pub fn market_centers(state: &GalaxyState, system: SystemId) -> Vec<(FactionId, SettlementId)> {
-    let mut centers: Vec<(FactionId, SettlementId, f64)> = Vec::new();
-    for (id, s) in state.settlements_in(system) {
-        let population = s.economy.population;
-        match centers.iter_mut().find(|c| c.0 == s.owner) {
-            Some(c) if population > c.2 => (c.1, c.2) = (id, population),
-            Some(_) => {}
-            None => centers.push((s.owner, id, population)),
-        }
-    }
-    centers.into_iter().map(|(f, s, _)| (f, s)).collect()
-}
-
-/// A trade route between two settlements, by index into `settlements`
-/// iteration order.
-#[derive(Clone, Copy, Debug)]
-struct Link {
-    a: usize,
-    b: usize,
-    length_ly: f64,
-}
-
-/// Every trade link for this tick, in a deterministic order. Sequential:
-/// the work per system is tiny, so threads would only add overhead.
-fn links(state: &GalaxyState, index: &SecondaryMap<SettlementId, usize>) -> Vec<Link> {
-    let mut centers: Vec<Vec<(FactionId, usize)>> = vec![Vec::new(); state.systems.len()];
-    let mut out = Vec::new();
-    for (i, system) in state.systems.as_slice().iter().enumerate() {
-        if system.settlements.is_empty() {
-            continue;
-        }
-        let here: Vec<(FactionId, usize)> = market_centers(state, SystemId::from_index(i as u32))
-            .into_iter()
-            .map(|(f, s)| (f, index[s]))
-            .collect();
-        // Spokes: each settlement to its own faction's center.
-        for &id in &system.settlements {
-            let owner = state.settlements[id].owner;
-            let me = index[id];
-            if let Some(&(_, c)) = here.iter().find(|(f, _)| *f == owner)
-                && c != me
-            {
-                out.push(Link {
-                    a: me,
-                    b: c,
-                    length_ly: LOCAL_TRIP_LY,
-                });
-            }
-        }
-        // Rival centers in the same system.
-        for (n, &(_, a)) in here.iter().enumerate() {
-            for &(_, b) in &here[n + 1..] {
-                out.push(Link {
-                    a,
-                    b,
-                    length_ly: LOCAL_TRIP_LY,
-                });
-            }
-        }
-        centers[i] = here;
-    }
-
-    // Across each lane, the centers on either side trade pairwise.
-    for lane in state.lanes.as_slice() {
-        for &(_, a) in &centers[lane.a.index()] {
-            for &(_, b) in &centers[lane.b.index()] {
-                out.push(Link {
-                    a,
-                    b,
-                    length_ly: lane.length_ly,
-                });
-            }
-        }
-    }
-    out
-}
-
-/// Trade phase: goods move one link at a time.
-///
-/// - Between two settlements of the same planned faction, the plan moves
-///   goods from the one above target toward the one below it.
-/// - Everywhere else, goods move toward the higher price when the gap beats
-///   transport cost.
-///
-/// The buyer pays for every unit, at the seller's price (the official price
-/// inside a plan), and never spends more than it can afford.
-///
-/// Flows are computed in parallel from a snapshot, then applied in link
-/// order, so the result is deterministic and total stock and money are
-/// conserved.
-pub fn trade(state: &mut GalaxyState) {
+/// Recompute every settlement's prices from its stock.
+pub fn update_all_prices(state: &mut GalaxyState) {
     let models = models(state);
-    let mut index = SecondaryMap::with_capacity(state.settlements.len());
-    for (i, id) in state.settlements.keys().enumerate() {
-        index.insert(id, i);
-    }
-    let links = links(state, &index);
-    let settlements: Vec<&crate::Settlement> = state.settlements.values().collect();
-    let mut degree = vec![0usize; settlements.len()];
-    for link in &links {
-        degree[link.a] += 1;
-        degree[link.b] += 1;
-    }
-
-    // (from, to, good, amount, price paid per unit)
-    let flows: Vec<(usize, usize, Good, f64, f64)> = links
-        .par_iter()
-        .flat_map_iter(|link| {
-            let (ia, ib) = (link.a, link.b);
-            let (a, b) = (settlements[ia], settlements[ib]);
-            let same_plan = a.owner == b.owner && models[ia] == EconomyModel::Planned;
-            let degree = &degree;
-            let settlements = &settlements;
-            Good::ALL.into_iter().filter_map(move |good| {
-                let (ma, mb) = (&a.economy.market, &b.economy.market);
-                // Positive signal: flow a → b.
-                let signal = if same_plan {
-                    ma.fill(good) - mb.fill(good)
-                } else {
-                    let cost = good.base_price() * TRANSPORT_COST_PER_LY * link.length_ly;
-                    let gap = mb.price[good] - ma.price[good];
-                    (gap.abs() - cost).max(0.0).copysign(gap) / good.base_price()
-                };
-                let (from, to, from_market) = if signal > 0.0 {
-                    (ia, ib, ma)
-                } else {
-                    (ib, ia, mb)
-                };
-                // The buyer pays the seller's price; inside a plan, the
-                // official price.
-                let price = if same_plan {
-                    good.base_price()
-                } else {
-                    from_market.price[good]
-                };
-                let buyer = &settlements[to].economy;
-                let budget = buyer.treasury.max(0.0) * MAX_SPEND_SHARE
-                    / (degree[to].max(1) * Good::COUNT) as f64;
-                let available =
-                    from_market.stock[good] * MAX_EXPORT_SHARE / degree[from].max(1) as f64;
-                let wanted = signal.abs() * TRADE_RATE * from_market.target(good);
-                let amount = wanted.min(available).min(budget / price);
-                (amount > 1e-6).then_some((from, to, good, amount, price))
-            })
-        })
-        .collect();
-
-    let mut settlements: Vec<&mut crate::Settlement> = state.settlements.values_mut().collect();
-    for (from, to, good, amount, price) in flows {
-        settlements[from].economy.market.stock[good] -= amount;
-        settlements[to].economy.market.stock[good] += amount;
-        settlements[from].economy.treasury += amount * price;
-        settlements[to].economy.treasury -= amount * price;
-    }
-
+    let mut settlements: Vec<_> = state.settlements.values_mut().collect();
     settlements
         .par_iter_mut()
         .zip(models.par_iter())
@@ -474,8 +314,13 @@ pub fn trade(state: &mut GalaxyState) {
 #[derive(Clone, Debug, Default)]
 pub struct EconomySummary {
     pub population: f64,
-    /// Credits held by all settlements.
+    /// Credits held by all settlements and companies.
     pub money: f64,
+    pub companies: usize,
+    pub ships: u32,
+    pub ships_travelling: u32,
+    /// Goods aboard ships, by good.
+    pub cargo: GoodMap<f64>,
     pub stock: GoodMap<f64>,
     pub demand: GoodMap<f64>,
     pub shortfall: GoodMap<f64>,
@@ -509,6 +354,19 @@ pub fn summarize(state: &GalaxyState) -> EconomySummary {
     for good in Good::ALL {
         if price_n[good] > 0 {
             out.mean_price[good] /= price_n[good] as f64;
+        }
+    }
+    out.companies = state.companies.len();
+    for company in state.companies.values() {
+        out.money += company.credits;
+        for fleet in &company.fleets {
+            out.ships += fleet.ships;
+            if matches!(fleet.at, crate::haul::Location::Travelling { .. }) {
+                out.ships_travelling += fleet.ships;
+            }
+            if let Some(cargo) = fleet.cargo {
+                out.cargo[cargo.good] += cargo.amount;
+            }
         }
     }
     out
