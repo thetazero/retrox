@@ -56,7 +56,7 @@ impl Default for GalaxyConfig {
         Self {
             systems: 5000,
             radius_ly: 260.0,
-            thickness_ly: 8.0,
+            thickness_ly: 40.0,
             arms: 4,
             min_spacing_ly: 2.5,
             max_lane_ly: 18.0,

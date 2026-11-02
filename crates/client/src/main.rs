@@ -168,8 +168,7 @@ impl ApplicationHandler for App {
             stations: Vec::new(),
             system_generation: u64::MAX,
         };
-        let (core, out) = galactic_core(&world);
-        renderer.set_sky(&sky(&world), core, out);
+        renderer.set_sky(&sky(&world));
 
         let egui_ctx = egui::Context::default();
         hud::style(&egui_ctx);
@@ -395,8 +394,7 @@ impl Running {
                 })
                 .collect();
             self.meshes.system_generation = self.world.system_generation;
-            let (core, out) = galactic_core(&self.world);
-            self.renderer.set_sky(&sky(&self.world), core, out);
+            self.renderer.set_sky(&sky(&self.world));
         }
 
         let (mut cam_pos, mut cam_rot) = self.world.camera();
@@ -748,21 +746,16 @@ fn gas_color(seed: u64) -> [f32; 3] {
     COLORS[(seed % COLORS.len() as u64) as usize]
 }
 
-/// The rest of the galaxy as background stars, in their true directions.
-/// The direction to the galaxy's centre from here (in the same axes as
-/// [`sky`]) and how far out we are, 0 at the centre to 1 at the rim.
-fn galactic_core(world: &World) -> (Vec3, f32) {
-    let here = world.galaxy.systems[world.system].position;
-    let rim = world
-        .galaxy
-        .systems
-        .iter()
-        .map(|(_, s)| s.position.x.hypot(s.position.y))
-        .fold(1.0, f64::max);
-    let dir = DVec3::new(-here.x, -here.z, -here.y).normalize_or(DVec3::X);
-    (dir.as_vec3(), (here.x.hypot(here.y) / rim) as f32)
-}
+/// How bright a point of starlight is drawn per unit of flux reaching us
+/// (solar luminosities per square light-year): the camera's sensitivity.
+/// Set so that a star at the naked-eye limit (magnitude ~6.5, the Sun seen
+/// from ~75 ly) is just visible and a magnitude-0 star blooms.
+const STARLIGHT_EXPOSURE: f64 = 150.0;
 
+/// The sky: every other system in the generated galaxy, in its true
+/// direction from here, carrying exactly the light its star sends us:
+/// luminosity over distance squared, in the star's own colour. Nothing else
+/// is drawn behind it; the galaxy's band is just these stars adding up.
 fn sky(world: &World) -> Vec<SkyVertex> {
     let here = world.galaxy.systems[world.system].position;
     world
@@ -770,27 +763,25 @@ fn sky(world: &World) -> Vec<SkyVertex> {
         .systems
         .iter()
         .filter(|(id, _)| *id != world.system)
-        .map(|(_, s)| {
+        .filter_map(|(_, s)| {
             let d = DVec3::new(
                 s.position.x - here.x,
                 s.position.z - here.z,
                 s.position.y - here.y,
             );
             let ly = d.length();
-            let brightness = (120.0 / ly).clamp(0.15, 6.0) as f32;
-            let c = match s.star {
-                StarClass::O | StarClass::B => [0.7, 0.8, 1.0],
-                StarClass::A | StarClass::F | StarClass::WhiteDwarf => [1.0, 1.0, 1.0],
-                StarClass::G => [1.0, 0.92, 0.75],
-                StarClass::K => [1.0, 0.78, 0.55],
-                StarClass::M => [1.0, 0.6, 0.45],
-                StarClass::Neutron => [0.6, 0.9, 1.0],
-                StarClass::BlackHole => [0.3, 0.2, 0.4],
-            };
-            SkyVertex {
-                dir: (d / ly).as_vec3().into(),
-                color: [c[0] * brightness, c[1] * brightness, c[2] * brightness],
+            let flux = s.star.luminosity_suns() / (ly * ly);
+            if flux <= 0.0 {
+                return None; // black holes send us nothing
             }
+            let brightness = (flux * STARLIGHT_EXPOSURE) as f32;
+            let c = star_color(s.star);
+            // Colour only: the flux carries the brightness.
+            let lum = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+            Some(SkyVertex {
+                dir: (d / ly).as_vec3().into(),
+                color: c.map(|x| x / lum * brightness),
+            })
         })
         .collect()
 }
