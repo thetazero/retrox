@@ -4,31 +4,46 @@ use std::collections::BTreeMap;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use retrox_sim::{GalaxyState, GalaxyTime, PIPELINE, tick_profiled};
+use retrox_gen::{GalaxyConfig, generate};
+use retrox_sim::{GalaxyTime, PIPELINE, tick_profiled};
 
-const USAGE: &str = "usage: retrox simulate [--seed N] [--years N]";
+mod map;
+
+const USAGE: &str = "\
+usage:
+  retrox simulate [--seed N] [--years N]   run the sim headless, print timings
+  retrox map [--seed N] > galaxy.svg       render the generated galaxy as SVG
+  retrox stats [--seed N]                  print generation statistics";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    match args.first().map(String::as_str) {
-        Some("simulate") => match parse_simulate(&args[1..]) {
-            Ok((seed, years)) => {
-                simulate(seed, years);
-                ExitCode::SUCCESS
-            }
-            Err(err) => {
-                eprintln!("{err}\n{USAGE}");
-                ExitCode::FAILURE
-            }
-        },
+    let Some(command) = args.first() else {
+        eprintln!("{USAGE}");
+        return ExitCode::FAILURE;
+    };
+    let (seed, years) = match parse_flags(&args[1..]) {
+        Ok(flags) => flags,
+        Err(err) => {
+            eprintln!("{err}\n{USAGE}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match command.as_str() {
+        "simulate" => simulate(seed, years),
+        "map" => {
+            let state = generate(seed, &GalaxyConfig::default());
+            print!("{}", map::svg(&state));
+        }
+        "stats" => stats(seed),
         _ => {
             eprintln!("{USAGE}");
-            ExitCode::FAILURE
+            return ExitCode::FAILURE;
         }
     }
+    ExitCode::SUCCESS
 }
 
-fn parse_simulate(args: &[String]) -> Result<(u64, u64), String> {
+fn parse_flags(args: &[String]) -> Result<(u64, u64), String> {
     let (mut seed, mut years) = (0, 10);
     let mut it = args.iter();
     while let Some(flag) = it.next() {
@@ -47,8 +62,53 @@ fn parse_simulate(args: &[String]) -> Result<(u64, u64), String> {
     Ok((seed, years))
 }
 
+fn stats(seed: u64) {
+    let start = Instant::now();
+    let state = generate(seed, &GalaxyConfig::default());
+    let elapsed = start.elapsed();
+
+    let lanes = state.lanes.as_slice();
+    let mut lengths: Vec<f64> = lanes.iter().map(|l| l.length_ly).collect();
+    lengths.sort_by(f64::total_cmp);
+    let pct = |p: f64| lengths[((lengths.len() - 1) as f64 * p) as usize];
+
+    let mut degrees = [0usize; 8];
+    for (_, s) in state.systems.iter() {
+        degrees[s.lanes.len().min(7)] += 1;
+    }
+
+    println!("seed {seed}: generated in {elapsed:.2?}");
+    println!(
+        "  {} systems, {} lanes, mean degree {:.2}",
+        state.systems.len(),
+        lanes.len(),
+        2.0 * lanes.len() as f64 / state.systems.len() as f64
+    );
+    println!(
+        "  lane length ly: p10 {:.1}  median {:.1}  p90 {:.1}  max {:.1}",
+        pct(0.1),
+        pct(0.5),
+        pct(0.9),
+        pct(1.0)
+    );
+    let degree_line: Vec<String> = degrees
+        .iter()
+        .enumerate()
+        .map(|(d, n)| format!("{d}{}:{n}", if d == 7 { "+" } else { "" }))
+        .collect();
+    println!("  degree histogram: {}", degree_line.join("  "));
+    let sample: Vec<&str> = state
+        .systems
+        .as_slice()
+        .iter()
+        .take(12)
+        .map(|s| s.name.as_str())
+        .collect();
+    println!("  names: {}", sample.join(", "));
+}
+
 fn simulate(seed: u64, years: u64) {
-    let mut state = GalaxyState::empty(seed);
+    let mut state = generate(seed, &GalaxyConfig::default());
     let end = GalaxyTime::from_years(years);
     let mut per_phase: BTreeMap<&'static str, Duration> = BTreeMap::new();
 
