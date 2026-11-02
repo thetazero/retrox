@@ -160,25 +160,37 @@ pub fn key_strip(ctx: &egui::Context, w: &World, captured: bool) {
         keys.push(("TAB", "fly with the mouse"));
     }
     egui::Area::new(egui::Id::unique("key-strip"))
-        .anchor(Align2::LEFT_BOTTOM, [20.0, -14.0])
+        .anchor(Align2::LEFT_BOTTOM, [14.0, -10.0])
         .interactable(false)
         .show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                for (key, what) in keys {
-                    keycap(ui, key);
-                    ui.label(
-                        RichText::new(what.to_uppercase())
-                            .font(mono(12.0))
-                            .color(CREAM_DIM),
-                    );
-                    ui.add_space(10.0);
-                }
-            });
+            // A dark plate: the strip sits over the planet you launch from
+            // (issue #124).
+            egui::Frame::new()
+                .fill(crate::widgets::BACKING)
+                .inner_margin(egui::Margin {
+                    left: 6,
+                    right: 0,
+                    top: 4,
+                    bottom: 4,
+                })
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        for (key, what) in keys {
+                            keycap(ui, key);
+                            ui.label(
+                                RichText::new(what.to_uppercase())
+                                    .font(mono(12.0))
+                                    .color(CREAM_DIM),
+                            );
+                            ui.add_space(10.0);
+                        }
+                    })
+                });
         });
 }
 
 /// The controls card: every key, in three columns, over the view.
-pub fn controls_card(ctx: &egui::Context) {
+pub fn controls_card(ctx: &egui::Context, invert_pitch: bool) {
     let screen = ctx.content_rect();
     let shade = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Middle,
@@ -213,7 +225,7 @@ pub fn controls_card(ctx: &egui::Context) {
                             ui.horizontal_top(|ui| {
                                 ui.spacing_mut().item_spacing.x = 28.0;
                                 for (title, rows) in [
-                                    ("Flight", guide::FLIGHT_KEYS),
+                                    ("Flight", guide::flight_keys(invert_pitch)),
                                     ("Travel", guide::TRAVEL_KEYS),
                                     ("Work & view", guide::WORK_KEYS),
                                 ] {

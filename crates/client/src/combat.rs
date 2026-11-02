@@ -295,10 +295,15 @@ impl Combat {
         }
     }
 
-    /// A peaceful convoy flies on out of the scene.
-    pub fn drop_convoy(&mut self, fleet: FleetKey) {
-        self.raiders
-            .retain(|r| r.hostile || r.trader_fleet() != Some(fleet));
+    /// A convoy the player has left flies on out of the scene: its
+    /// peaceful ships at once, its hostile ones once the player at `me`
+    /// is well past their leash (as for a gang), or all of them when
+    /// `all` (the player isn't flying).
+    pub fn drop_convoy(&mut self, fleet: FleetKey, me: DVec3, all: bool) {
+        self.raiders.retain(|r| {
+            r.trader_fleet() != Some(fleet)
+                || (!all && r.hostile && (r.home - me).length() <= LEASH * 2.0)
+        });
     }
 
     /// The trader fleets in the scene.
@@ -374,6 +379,52 @@ impl Combat {
             None => ids.first(),
         };
         self.target = next.map(|(_, id)| *id);
+    }
+
+    /// The fight's anchor moved: `dpos` and `dvel` are the old anchor's
+    /// position and velocity less the new one's. Carry everything in the
+    /// scene over, so nothing in it moves in the system frame.
+    pub fn rebase(&mut self, dpos: DVec3, dvel: DVec3) {
+        for r in &mut self.raiders {
+            r.craft.pos += dpos;
+            r.craft.vel += dvel;
+            r.home += dpos;
+            if let Some((pos, vel)) = &mut r.slot {
+                *pos += dpos;
+                *vel += dvel;
+            }
+        }
+        for s in &mut self.shots {
+            s.pos += dpos;
+            s.vel += dvel;
+        }
+        for p in &mut self.pulses {
+            p.from += dpos;
+            p.to += dpos;
+        }
+        for f in &mut self.flashes {
+            f.pos += dpos;
+            f.vel += dvel;
+        }
+        for b in &mut self.blasts {
+            b.pos += dpos;
+            b.vel += dvel;
+        }
+        for d in &mut self.debris {
+            d.pos += dpos;
+            d.vel += dvel;
+        }
+        for w in &mut self.wrecks {
+            w.pos += dpos;
+            w.vel += dvel;
+        }
+        for (_, _, point) in &mut self.pending {
+            *point += dpos;
+        }
+        for (pos, vel, ..) in &mut self.dropped {
+            *pos += dpos;
+            *vel += dvel;
+        }
     }
 
     /// The fight is somewhere else now: shells, flashes, wrecks and the

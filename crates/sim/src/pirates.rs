@@ -219,7 +219,7 @@ fn settlement_bits(id: SettlementId) -> u64 {
 }
 
 /// The fields in a system.
-pub fn fields_in(state: &GalaxyState, system: SystemId) -> Vec<FieldId> {
+fn fields_in(state: &GalaxyState, system: SystemId) -> Vec<FieldId> {
     state
         .fields
         .iter()
@@ -229,7 +229,7 @@ pub fn fields_in(state: &GalaxyState, system: SystemId) -> Vec<FieldId> {
 }
 
 /// The gang that lairs in `system`, if any.
-pub fn gang_in(state: &GalaxyState, system: SystemId) -> Option<GangId> {
+fn gang_in(state: &GalaxyState, system: SystemId) -> Option<GangId> {
     state
         .pirates
         .gangs
@@ -516,7 +516,16 @@ fn review_gang(state: &mut GalaxyState, id: GangId) {
         .max_by(|a, b| a.1.total_cmp(&b.1))
         .map(|v| v.0);
     let per_ship = (BOUNTY_BASE + BOUNTY_PER_T * gang.haul_t).min(BOUNTY_MAX);
-    let ships = gang.ships.len() as f64;
+    // What the whole gang would cost, a gunship at its double price.
+    let ships: f64 = (gang.ships.iter())
+        .map(|h| {
+            if is_heavy(&hulls, h) {
+                GUNSHIP_BOUNTY
+            } else {
+                1.0
+            }
+        })
+        .sum();
     let current = gang
         .bounty
         .filter(|b| state.factions.contains_key(b.faction));
@@ -614,7 +623,8 @@ pub(crate) fn coarse_raid(
         return true;
     }
     let ships = g.ships.len() as f64;
-    let p = (if own { 0.05 } else { 0.02 } * ships).min(0.4);
+    // At most 25%: five ships in the lair system.
+    let p = if own { 0.05 } else { 0.02 } * ships;
     let fleet = &state.companies[key].fleets[n];
     let entity = slotmap::Key::data(&key).as_ffi() ^ (u64::from(fleet.id) << 40);
     let mut rng = Rng::stream(state.seed, "raid", state.time.days(), entity);
@@ -632,13 +642,7 @@ fn port_run(state: &GalaxyState, from: SettlementId, to: SettlementId) -> bool {
     let (Some(a), Some(b)) = (state.settlements.get(from), state.settlements.get(to)) else {
         return false;
     };
-    let over = |port: &crate::Settlement, city: &crate::Settlement| match (port.site, city.site) {
-        (crate::Site::Space(orbit), crate::Site::Region(r)) => {
-            orbit.parent == crate::Orbiting::Body(state.regions[r].body)
-        }
-        _ => false,
-    };
-    over(a, b) || over(b, a)
+    state.port_over(a, b) || state.port_over(b, a)
 }
 
 /// `gang` robs fleet `n` of `key`, bound for `to`: takes cargo, and now and
@@ -675,20 +679,7 @@ fn rob(
     let mut alive = true;
     if rng.chance(SHIP_TAKEN) {
         robbery.ships_lost = 1;
-        let fleet = &mut state.companies[key].fleets[n];
-        if fleet.ships > 1 {
-            let share = f64::from(fleet.ships - 1) / f64::from(fleet.ships);
-            fleet.ships -= 1;
-            if let Some(c) = fleet.cargo.as_mut() {
-                let gone = c.amount * (1.0 - share);
-                c.amount -= gone;
-                let good = c.good;
-                state.traffic.add(to, good, -gone);
-            }
-        } else {
-            haul::lose_fleet(state, key, n, to);
-            alive = false;
-        }
+        alive = haul::lose_one_ship(state, key, n, to).1;
     }
     let faction = state
         .companies
@@ -723,9 +714,9 @@ pub fn field_goal(state: &GalaxyState, field: FieldId, t_days: f64) -> Goal {
     }
 }
 
-/// Where a prowl is headed at `t_days`, `t` seconds into a stretch that
-/// began with its prey at `prey` (a hunt), as the sim and the client both
-/// fly it. `None` for a stalk or a fight, which the client flies.
+/// Where a prowl is headed at `t_days`, `t` seconds after its prey was at
+/// `prey` (a hunt; `t` is negative when `prey` is later), as the sim and
+/// the client both fly it. `None` for a stalk or a fight, which the client flies.
 pub fn prowl_goal(
     state: &GalaxyState,
     gang: &Gang,
@@ -819,7 +810,7 @@ pub(crate) fn step(state: &mut GalaxyState) {
                 // The client flies it; give up once the player has gone or
                 // got away.
                 let here = state.pirates.player.is_some_and(|(s, _)| s == lair);
-                if !here || today.days() > prowl.since.days() + HUNT_DAYS {
+                if !here || today.days() >= prowl.since.days() + HUNT_DAYS {
                     next.aim = Aim::Return;
                     next.since = today;
                 }
@@ -844,7 +835,9 @@ pub(crate) fn step(state: &mut GalaxyState) {
                 };
                 // Flown in short stretches, so the day stops where the gang
                 // catches up (the autopilot creeps in tiny steps once it's
-                // on top of a moving goal).
+                // on top of a moving goal). The traders have already flown
+                // today, so `prey` is where it is at the day's end: time is
+                // measured back from there.
                 let gang = &state.pirates.gangs[id];
                 let mut caught = false;
                 let mut t = 0.0;
@@ -858,13 +851,14 @@ pub(crate) fn step(state: &mut GalaxyState) {
                             gang,
                             &prowl,
                             Some(prey),
-                            at,
+                            at - SECONDS_PER_DAY,
                             t0 + at / SECONDS_PER_DAY,
                         )
                         .expect("a hunt has a goal")
                     });
                     t += stretch;
-                    let prey_now = flight::add(prey.pos, flight::scale(prey.vel, t));
+                    let prey_now =
+                        flight::add(prey.pos, flight::scale(prey.vel, t - SECONDS_PER_DAY));
                     caught = arrived.is_some()
                         || flight::length(flight::sub(next.ship.pos, prey_now)) < CATCH_M;
                 }
@@ -883,7 +877,7 @@ pub(crate) fn step(state: &mut GalaxyState) {
                     }
                     next.aim = Aim::Return;
                     next.since = today;
-                } else if today.days() > prowl.since.days() + HUNT_DAYS {
+                } else if today.days() >= prowl.since.days() + HUNT_DAYS {
                     next.aim = Aim::Return;
                     next.since = today;
                 }

@@ -9,8 +9,8 @@ use retrox_sim::{FactionId, SettlementId};
 
 use crate::contracts_ui::card;
 use crate::hud::{
-    ALARM, AMBER, CREAM, CREAM_DIM, Panel, RED, RULE, VFD, credits, display, glow_label, mono,
-    panel, section, tag,
+    ALARM, AMBER, CREAM, CREAM_DIM, Panel, RED, RULE, VFD, count, credits, display, glow_label,
+    jumps_text, mono, panel, section, tag,
 };
 use crate::standing::{HOSTILE, Rank};
 use crate::station_ui::screen_header;
@@ -25,12 +25,12 @@ pub fn wanted(w: &World) -> Vec<(GangId, usize)> {
     pirates::wanted_near(&w.galaxy, w.system, WANTED_JUMPS)
 }
 
-/// A rank's colour: alarm for hostile, amber for wary, teal for trusted
-/// and up, cream otherwise.
+/// A rank's colour (DESIGN §8.4): alarm red for hostile, a dimmer red for
+/// wary, dim cream for neutral, teal for trusted and up.
 pub fn rank_color(rank: Rank) -> Color32 {
     match rank {
         Rank::Hostile => ALARM,
-        Rank::Wary => AMBER,
+        Rank::Wary => ALARM.gamma_multiply(0.7),
         Rank::Neutral => CREAM_DIM,
         Rank::Trusted | Rank::Honoured => VFD,
     }
@@ -72,11 +72,12 @@ pub fn bounty_screen(
                     ui.add_space(8.0);
                     section(ui, "Wanted");
                     ui.label(
-                        RichText::new(
-                            "warrants on pirate gangs within 6 jumps · the faction that posted \
-                             a warrant pays it the moment a ship of the gang is destroyed · \
-                             gunships pay double",
-                        )
+                        RichText::new(format!(
+                            "warrants on pirate gangs within {} · the faction that posted \
+                                 a warrant pays it the moment a ship of the gang is destroyed · \
+                                 gunships pay double",
+                            count(WANTED_JUMPS, "jump")
+                        ))
                         .size(11.0)
                         .color(CREAM_DIM),
                     );
@@ -110,7 +111,7 @@ fn standing_rows(ui: &mut egui::Ui, w: &World, local: FactionId) {
     for f in rows {
         let s = w.player.standing.get(f);
         let rank = Rank::of(s);
-        ui.horizontal(|ui| {
+        let row = ui.horizontal(|ui| {
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
             ui.allocate_ui(Vec2::new(300.0, 26.0), |ui| {
                 ui.set_width(300.0);
@@ -129,6 +130,12 @@ fn standing_rows(ui: &mut egui::Ui, w: &World, local: FactionId) {
                     .color(rank_color(rank)),
             );
         });
+        // A hairline under each, like every other list of rows.
+        let r = row.response.rect;
+        ui.painter().line_segment(
+            [r.left_bottom(), r.right_bottom()],
+            Stroke::new(1.0, RULE.gamma_multiply(0.45)),
+        );
     }
     ui.label(
         RichText::new(
@@ -196,7 +203,8 @@ fn warrant_card(ui: &mut egui::Ui, w: &World, id: GangId, jumps: usize, actions:
     let total: f64 = (0..g.ships.len())
         .map(|i| pirates::ship_bounty(&w.galaxy, g, i))
         .sum();
-    let heavy = g.ships.len() >= 3;
+    // Edged red when it runs a gunship: the warrant pays double for it.
+    let heavy = (0..g.ships.len()).any(|i| pirates::ship_bounty(&w.galaxy, g, i) > b.per_ship);
     card(ui, if heavy { RED } else { RULE }, |ui| {
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
@@ -213,11 +221,7 @@ fn warrant_card(ui: &mut egui::Ui, w: &World, id: GangId, jumps: usize, actions:
                 });
                 let system = &w.galaxy.systems[g.lair].name;
                 let field = &w.galaxy.fields[g.field].name;
-                let where_ = match jumps {
-                    0 => "this system".to_owned(),
-                    1 => "1 jump".to_owned(),
-                    n => format!("{n} jumps"),
-                };
+                let where_ = jumps_text(jumps as u32);
                 ui.label(
                     RichText::new(format!("lair: {field} · {system} · {where_}"))
                         .size(12.0)

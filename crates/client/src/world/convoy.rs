@@ -66,6 +66,7 @@ impl World {
     pub(super) fn convoys(&mut self) {
         let flying = self.mode == Mode::Normal && self.combat.lost.is_none();
         let me = self.ship_position();
+        let me_here = self.combat_position();
         let contacts = self.traffic.contacts.clone();
         for fleet in self.combat.convoys() {
             let near = contacts
@@ -73,7 +74,7 @@ impl World {
                 .find(|c| c.key == fleet)
                 .is_some_and(|c| (c.pos - me).length() < CONVOY_DROP_M);
             if !flying || !near {
-                self.combat.drop_convoy(fleet);
+                self.combat.drop_convoy(fleet, me_here, !flying);
             }
         }
         if !flying {
@@ -131,7 +132,7 @@ impl World {
             standing::SHOT_SHIP
         };
         if let Some(rank) = self.player.standing.change(faction, cost) {
-            self.say(super::prowl::rank_news(&name, rank));
+            self.say(standing::news(&name, rank));
         }
     }
 
@@ -154,7 +155,7 @@ impl World {
         }
         let name = self.faction_name(faction);
         if let Some(rank) = self.player.standing.change(faction, standing::KILLED_SHIP) {
-            said.push(super::prowl::rank_news(&name, rank));
+            said.push(standing::news(&name, rank));
         }
         self.say(said.join(" · "));
     }

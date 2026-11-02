@@ -65,9 +65,34 @@ impl Progress {
 /// A row of a controls table: the keys, and what they do.
 pub type KeyRow = (&'static [&'static str], &'static str);
 
+/// The flight keys, with the arrow-key pitch as the *Invert pitch*
+/// setting has it (issue #128): by default the keys work like a stick,
+/// ↓ pulling the nose up; inverted, ↑ does.
+pub fn flight_keys(invert_pitch: bool) -> &'static [KeyRow] {
+    if invert_pitch {
+        FLIGHT_KEYS_INVERTED
+    } else {
+        FLIGHT_KEYS
+    }
+}
+
 pub const FLIGHT_KEYS: &[KeyRow] = &[
     (&["MOUSE"], "steer (click the view first)"),
-    (&["↑", "↓", "←", "→"], "steer with the keys"),
+    (&["↑", "↓"], "↓ nose up · ↑ nose down"),
+    (&["←", "→"], "turn left / right"),
+    (&["W", "S"], "throttle up / down"),
+    (&["X"], "cut the throttle"),
+    (&["A", "D"], "strafe"),
+    (&["SPACE", "CTRL"], "rise / sink"),
+    (&["Q", "E"], "roll"),
+    (&["SHIFT"], "boost"),
+    (&["Z"], "flight assist on / off"),
+];
+
+const FLIGHT_KEYS_INVERTED: &[KeyRow] = &[
+    (&["MOUSE"], "steer (click the view first)"),
+    (&["↑", "↓"], "↑ nose up · ↓ nose down"),
+    (&["←", "→"], "turn left / right"),
     (&["W", "S"], "throttle up / down"),
     (&["X"], "cut the throttle"),
     (&["A", "D"], "strafe"),
@@ -379,5 +404,19 @@ mod tests {
         assert!(w.player.contracts.is_empty(), "delivered");
         assert!(w.player.credits > before);
         assert!(w.player.progress.earned);
+    }
+
+    /// The inverted flight keys differ from the plain ones only in which
+    /// arrow pulls the nose up (issue #128).
+    #[test]
+    fn inverted_flight_keys_flip_only_the_pitch_row() {
+        let (plain, inverted) = (flight_keys(false), flight_keys(true));
+        assert_eq!(plain.len(), inverted.len());
+        let differ: Vec<_> = (0..plain.len())
+            .filter(|&i| plain[i] != inverted[i])
+            .collect();
+        assert_eq!(differ.len(), 1);
+        assert_eq!(plain[differ[0]].1, "↓ nose up · ↑ nose down");
+        assert_eq!(inverted[differ[0]].1, "↑ nose up · ↓ nose down");
     }
 }

@@ -11,7 +11,7 @@ use crate::hud::{CREAM, CREAM_DIM, RED, RED_DARK, RULE, display, mono, section};
 pub const CHAPTERS: [&str; 3] = ["First steps", "Controls", "Making a living"];
 
 /// The page's contents, below its title band.
-pub fn draw(ui: &mut egui::Ui, chapter: &mut usize, max_h: f32) {
+pub fn draw(ui: &mut egui::Ui, chapter: &mut usize, max_h: f32, invert_pitch: bool) {
     tabs(ui, chapter);
     ui.add_space(12.0);
     egui::ScrollArea::vertical()
@@ -21,7 +21,7 @@ pub fn draw(ui: &mut egui::Ui, chapter: &mut usize, max_h: f32) {
         .auto_shrink([false, true])
         .show(ui, |ui| match *chapter {
             0 => first_steps(ui),
-            1 => controls(ui),
+            1 => controls(ui, invert_pitch),
             _ => living(ui),
         });
 }
@@ -149,7 +149,7 @@ fn first_steps(ui: &mut egui::Ui) {
         ui,
         5,
         "Arrive and get paid",
-        "Pick the station or city in NAVIGATION (or [T]): cities are listed under their planet. \
+        "Pick the station or city in NAVIGATION (or [T]): cities and stations are listed under the planet they belong to. \
          [J] to fast travel there, then [F] to dock or [L] to land. Contracts pay on arrival: \
          your deposit back, plus the fee.",
     );
@@ -171,13 +171,13 @@ fn first_steps(ui: &mut egui::Ui) {
     );
 }
 
-fn controls(ui: &mut egui::Ui) {
+fn controls(ui: &mut egui::Ui, invert_pitch: bool) {
     let col_w = (ui.available_width() - 24.0) / 2.0;
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = 24.0;
         ui.vertical(|ui| {
             ui.set_width(col_w);
-            key_table(ui, "Flight", guide::FLIGHT_KEYS);
+            key_table(ui, "Flight", guide::flight_keys(invert_pitch));
         });
         ui.vertical(|ui| {
             ui.set_width(col_w);
@@ -198,7 +198,7 @@ fn controls(ui: &mut egui::Ui) {
     ui.add_space(6.0);
     rich_hint(
         ui,
-        "Mouse sensitivity and inverted pitch are in SETTINGS.",
+        "Mouse sensitivity and inverted pitch (for the mouse and the arrow keys) are in SETTINGS.",
         CREAM_DIM,
     );
 }

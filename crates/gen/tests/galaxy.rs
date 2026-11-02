@@ -1,6 +1,6 @@
 use std::collections::{HashSet, VecDeque};
 
-use retrox_gen::{GalaxyConfig, generate, is_port};
+use retrox_gen::{GalaxyConfig, generate};
 use retrox_sim::{BodyKind, FactionId, GalaxyState, Orbit, Orbiting, Settlement, Site, SystemId};
 
 fn reachable(state: &GalaxyState) -> usize {
@@ -71,7 +71,7 @@ fn holdings(state: &GalaxyState, faction: FactionId) -> Vec<&Settlement> {
     state
         .settlements
         .values()
-        .filter(|s| s.owner == faction && !is_port(state, s))
+        .filter(|s| s.owner == faction && !state.is_port(s))
         .collect()
 }
 

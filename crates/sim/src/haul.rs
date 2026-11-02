@@ -645,18 +645,30 @@ pub(crate) fn roll_losses(
 /// its share of the cargo with it. Returns what it was carrying.
 pub fn ship_destroyed(state: &mut GalaxyState, company: CompanyId, fleet: u32) -> Option<Cargo> {
     let n = fleet_index(state, company, fleet)?;
-    let f = &state.companies[company].fleets[n];
-    let to = match f.at {
+    let to = match state.companies[company].fleets[n].at {
         Location::Docked(s) => s,
         Location::Travelling { to, .. } | Location::Flying { to } => to,
     };
+    lose_one_ship(state, company, n, to).0
+}
+
+/// One ship of fleet `n`, bound for `to`, is gone with its share of the
+/// cargo (shot down, or taken by pirates). Returns that share, and whether
+/// any of the fleet is left.
+pub(crate) fn lose_one_ship(
+    state: &mut GalaxyState,
+    company: CompanyId,
+    n: usize,
+    to: SettlementId,
+) -> (Option<Cargo>, bool) {
+    let f = &state.companies[company].fleets[n];
     let lost = f.cargo.map(|c| Cargo {
         good: c.good,
         amount: c.amount / f64::from(f.ships.max(1)),
     });
     if f.ships <= 1 {
         lose_fleet(state, company, n, to);
-        return lost;
+        return (lost, false);
     }
     let f = &mut state.companies[company].fleets[n];
     f.ships -= 1;
@@ -664,7 +676,7 @@ pub fn ship_destroyed(state: &mut GalaxyState, company: CompanyId, fleet: u32) -
         c.amount -= l.amount;
         state.traffic.add(to, l.good, -l.amount);
     }
-    lost
+    (lost, true)
 }
 
 /// A fleet bound for `to` is lost with everything aboard.

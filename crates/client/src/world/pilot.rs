@@ -88,14 +88,14 @@ pub fn assist(vel: &mut DVec3, rot: DQuat, local: DVec3, boost: bool, thrust: f6
     }
 }
 
-/// How a ship handles next to the starting ship: thrust and turning
-/// multipliers, within limits so every ship stays flyable.
 /// The fast-travel drive a ship of `stats` has, m/s²: what the player's
 /// own autopilot and a pirate's stalk both fly on.
 pub fn drive_accel_of(stats: &ShipStats) -> f64 {
     DRIVE_ACCEL * handling(stats).0
 }
 
+/// How a ship handles next to the starting ship: thrust and turning
+/// multipliers, within limits so every ship stays flyable.
 pub fn handling(s: &ShipStats) -> (f64, f64) {
     let r = &*REFERENCE;
     let thrust = (s.acceleration() / r.acceleration()).clamp(0.3, 2.5);
@@ -260,9 +260,11 @@ impl World {
             let k = 1.0 - (-4.0 * dt).exp();
             self.ship.rot = self.ship.rot.slerp(look_rotation(thrust), k).normalize();
         }
+        let anchor = self.combat_anchor();
         self.ship.frame = Place::Star;
         self.ship.rel = pos;
         self.ship.vel = vel;
+        self.rebase_fight(anchor);
         match arrived {
             Some(_) => self.arrive_fast_travel(leg),
             None => self.mode = Mode::FastTravel(trip),
@@ -270,13 +272,32 @@ impl World {
     }
 
     /// Switch the ship into `frame`, keeping where it is and how it moves.
+    /// A fight anchored to the ship's frame moves over with it.
     pub(super) fn enter_frame(&mut self, frame: Place) {
         let t = self.t_days();
         let pos = self.ship_position();
         let vel = self.ship.vel + self.velocity_at(self.ship.frame, t);
+        let anchor = self.combat_anchor();
         self.ship.frame = frame;
         self.ship.rel = pos - self.position(frame);
         self.ship.vel = vel - self.velocity_at(frame, t);
+        self.rebase_fight(anchor);
+    }
+
+    /// The fight was anchored at `was`: if its anchor has changed, carry
+    /// everything in it over to the new one, so nothing in the scene jumps.
+    /// `was` must still have a position (a lost convoy's last sighting
+    /// counts).
+    pub(super) fn rebase_fight(&mut self, was: Place) {
+        let now = self.combat_anchor();
+        if now == was {
+            return;
+        }
+        let t = self.t_days();
+        self.combat.rebase(
+            self.position(was) - self.position(now),
+            self.velocity_at(was, t) - self.velocity_at(now, t),
+        );
     }
 
     /// Stop the autopilot mid-trip: the ship carries on from wherever it

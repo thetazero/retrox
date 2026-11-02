@@ -690,6 +690,19 @@ to was always directly behind you.
   churning fireball with secondaries, a white core flash, a shockwave
   ring, flung hull plates and embers, and leave a burnt-out wreck with
   embers in its cracks, tumbling, for three minutes.
+- **The target is never hidden by your own ship** (#123). The chase
+  camera sits above and behind, so a raider a few degrees low, where it
+  usually is as it passes under you, is behind your hull. Where the hull
+  covers the target it is **cut away** round it, like a cutaway on a
+  technical drawing: a clean round hole a little wider than the target
+  (never smaller than its bracket), its edge inked in thin amber, the
+  target's colour. Only the hull in front of the target is cut, so most
+  of the time nothing changes. Chosen over moving the camera (the view
+  would shift just as a fight starts, and a target can pass under any
+  framing) and over fading the whole hull (the ship would vanish, and a
+  dither picks up the film's colour fringing). The target's labels carry
+  the §8.4 drop shadow and its bars a dark edge, since they often land
+  on the hull.
 - **Sounds (§8).** Synthesized like the rest: a thump and crack per
   autocannon round (raiders' quieter and lower), a falling zap for
   lasers, an electric fizz on the shield, a metal clang and hull creak
@@ -721,11 +734,13 @@ somewhere, live somewhere, and fly for real near the player.
   (interceptors, heavy fighters) to start, and a record: tonnes taken,
   last raid, and how much it has taken from each faction's traders.
   Every 80 t taken buys another ship, up to five; the fourth is a gunship.
-  150 days without a raid costs a ship; a gang with none is gone.
+  150 days without a raid costs a ship, and each further 75 another (at
+  the monthly reviews, so about one every three months); a gang with none
+  is gone.
   Founding, breaking up and bounties go in the history record.
 - **Raids, coarse tier.** A trader trip that starts or ends in a lair
   system (or a system next to one) may be robbed on arrival: 5% per gang
-  ship in the lair system, 2% next door, at most 40%. The gang takes up to
+  ship in the lair system, 2% next door, so at most 25%. The gang takes up to
   25 t per ship of the cargo, and one time in twenty a ship (much more
   often and replacement ships outrun the freight: the economy test's
   idle share goes past a fifth).
@@ -777,8 +792,9 @@ somewhere, live somewhere, and fly for real near the player.
 - **Standing** with each faction runs from −100 to +100, read as a rank:
   hostile (−25 and below), wary (below −5), neutral, trusted (15 and
   up), honoured (50 and up). It moves by: +3 for a ship with that
-  faction's warrant on it, +1 for any pirate destroyed in its space
-  (where it has the most people), +1 per delivery, −5 per failed
+  faction's warrant on it (paid or not: a broke treasury is still
+  glad), +1 for any pirate destroyed in its space (where it has the most
+  people; not on top of the +3 when it posted the warrant), +1 per delivery, −5 per failed
   contract; **−20 for opening fire on one of its peaceful ships**, −6 for
   each further hit (at most one per 1.5 s per fleet) and −30 for each of
   its ships destroyed. So one attack and a second burst make a faction
@@ -1202,7 +1218,13 @@ Decided while bringing every screen into one style (issue #77):
   off the body they're on the same way, one step further in. A city row
   carries no range (its planet's row has it). Where the hold's cargo is
   bound, the row is tagged CARGO in amber, as a pirate lair is tagged
-  RAIDERS in red.
+  RAIDERS in red. Under TRAFFIC, trader fleets are teal squares.
+- **Hostiles and standing** (audit 3, #137): anything hostile is alarm
+  red, and anything leaning that way is the same red dimmer: a pirate gang
+  about its own business is a dim red diamond (bright, and doubled, when
+  it's after the player), and a faction that counts you wary reads in dim
+  red. Neutral is dim cream, trusted and honoured teal. Amber stays for
+  paying, buying and selecting, so a rank never borrows it.
 - **Slot plates:** loadout slots carry a stencilled kind plate coloured by
   role (weapons red; engines, power and jump amber; shields, radar and RCS
   teal; radiators and cargo cream).
@@ -1214,7 +1236,38 @@ Decided while bringing every screen into one style (issue #77):
   from screen to screen.
 - **Counts and estimates read as words:** "1 jump", "this system",
   "1 settlement"; an estimated trip is "about 39 d". Never "~": in the
-  mono face it reads as a minus sign.
+  mono face it reads as a minus sign. Nor "≈": the mono face has no such
+  glyph and draws "=" (so "ABOUT 0.6 T PER FRACTURE"). Every count goes
+  through `hud::count` (or `hud::count_as` for "cities"), every jump
+  count through `hud::jumps_text` and every distance through
+  `hud::distance`, so a near target reads in km, not "0.00 AU".
+- **NAVIGATION is a tree of where you go** (#119): the star, then each
+  body with what hangs off it, one step in per level: its cities, the
+  stations in orbit round it, then its moons with theirs. Stations round
+  the star follow under STATIONS; fields come last under FIELDS, since a
+  system can have a dozen and nobody docks at one. In the list and on the
+  markers in space a field or station drops the system's name (the
+  panel's own context) and a field drops "field": *Outer Belt A*. A
+  station under its body drops the body's name too (*Highport*), the
+  bracket says whose it is. Names that still don't fit are cut to the
+  pixel room left by the range and any tag, never to a fixed count.
+- **Text over the scene gets a backing** (#124): blocks of free-floating
+  text (the corner key strip, the readout on the rock under the reticle)
+  sit on a dark plate; single labels on markers and rocks get a dark drop
+  shadow, which keeps a crowded field light. The rock readout stands
+  beside the rock's brackets (which close round the rock as it looks on
+  screen), flipping to its left near the screen's edge, never over it.
+  HUD panels are near opaque, menu pages fully opaque: the surface blends
+  in linear light, so a bright station shows through far more than a
+  panel's alpha suggests.
+- **The message banner fits its text** (#120): one line up to 760 px,
+  wrapped only at spaces past that, centred under the top edge. It is
+  painted straight onto a layer, not laid out in an egui `Area`, whose
+  remembered width otherwise narrows the next message.
+- **Keys painted into a row stay inside it** (#125): a row's push key is
+  placed from the row's own rect, and the rest of the row shares out what
+  is left. Panels never use a centred horizontal layout, which stretches
+  to the panel's previous height and leaves a band of empty panel.
 
 ### 8.5 Sound
 
@@ -1251,6 +1304,25 @@ Decided while building the soundscape (#76):
   dragging. Pausing silences the ship but not the music. Screenshot and
   scripted runs are silent unless `--sound`; `--mute` silences any run.
   No audio device means silence, never an error.
+
+### 8.6 The sky
+
+Decided while fixing nearby stars that drew as blurred discs (issue #121):
+
+- **Every other system is a star in the sky**, carrying the light it really
+  sends us (luminosity over distance squared). Faint ones are a sharp
+  core plus a halo kept under fixed peaks, so they fade smoothly.
+- **The halo never grows past a few pixels** (sigma 2.5 px). A wide soft
+  halo reads as a smudge on the lens, not a star.
+- **Past that, the light is compressed like film's shoulder**
+  (logarithmically), and what's left goes half to the core, which burns
+  over the bloom threshold and glows in the bloom pass (with its red
+  halation), and half to **four thin diffraction spikes** that grow
+  longer with each e-fold of light, never wider or brighter. So a close
+  neighbour is a hard white point with glare and rays, and an O star ten
+  light-years off is a bigger version of the same, not a fog bank.
+- **The spikes lie on the diagonals**, fixed to the frame like a real
+  lens's, so they never line up with the HUD's square-on reticle ticks.
 
 ## 9. Technical architecture
 
@@ -1312,6 +1384,11 @@ retrox/
   fullscreen, interface size) persist in `$XDG_CONFIG_HOME/retrox/
   settings.json`. Development flags (`--seed`, `--station`, …) still skip
   the title; `--menu` and `--keys` drive menus for screenshots and checks.
+- **Arrow-key pitch** (decided in #128): the arrow keys pitch like a
+  stick, as the mouse does by default: ↓ raises the nose, ↑ lowers it.
+  The controls card and handbook say so (“↓ nose up · ↑ nose down”), and
+  *Invert pitch* flips the keys along with the mouse, so one setting
+  covers both ways of steering and the card always shows the keys as set.
 - **Playtests** (decided in #103): `--remote PATH` lets an agent play a
   real game turn by turn. Steps appended to the file (keys, held keys,
   clicks, the mouse wheel, `shot:` for a screenshot, `info:` for a text

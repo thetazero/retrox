@@ -6,12 +6,16 @@
 //!
 //! Development flags skip the title and drop straight into a fresh game:
 //! `--seed N`, `--station`, `--undocked`, `--cities`, `--map`, `--course <jumps>`,
-//! `--ship <hull>`, `--screen <trade|hangar|shipyard|contracts>`,
-//! `--combat` (by a raider band), `--brawl` (in a fight), `--lost <s>`
+//! `--ship <hull>`, `--screen <trade|hangar|shipyard|contracts|bounties>`,
+//! `--combat` (by a raider band), `--brawl` (in a fight), `--behind-hull`
+//! (in a fight, the target hidden by your own hull), `--lost <s>`
 //! (the ship lost that long ago; with `--keys`, it has a checkpoint at a
 //! station to go back to), `--rewind` (rewinding to a checkpoint),
 //! `--arrival` (back at the checkpoint), `--harvesters <gas|ice>` (by a
-//! harvester at work), `--skim` (in a giant's clouds),
+//! harvester at work), `--skim` (in a giant's clouds), `--cities` (over a
+//! planet with two cities), `--interdict` (flying past a gang's lair until
+//! it interdicts), `--convoy` (alongside a trader fleet; with
+//! `--hostile-convoy`, its faction hostile),
 //! `--ship-view <deg>`, `--screenshot <path.ppm>`. `--menu <page>` opens a
 //! menu page instead (`title`, `new`, `load`, `settings`, `handbook[:chapter]`, or `pause` or `quit`
 //! over a fresh game), for screenshots. `--keys` plays a key script
@@ -86,6 +90,7 @@ struct Flags {
     interdict: bool,
     /// Alongside a trader fleet in its frame (and its faction hostile).
     convoy: bool,
+    /// With `convoy`: its faction counts the player hostile.
     hostile_convoy: bool,
     /// Start skimming a gas giant (`--skim`).
     skim: bool,
@@ -95,6 +100,9 @@ struct Flags {
     combat: bool,
     /// With `combat`: the band close in front, battered, fighting at once.
     brawl: bool,
+    /// With `brawl`: the target behind the ship's own hull (#123), and
+    /// held there until a `--screenshot` is taken.
+    behind_hull: bool,
     /// With `brawl`: the ship blown up this many seconds ago.
     lost: Option<f64>,
     /// Show the rewind to a checkpoint, or the arrival back at one (for
@@ -160,7 +168,8 @@ impl Flags {
             skim: has("--skim"),
             harvesters: value("--harvesters").or_else(|| has("--harvesters").then(|| "gas".into())),
             combat: has("--combat") || has("--brawl") || has("--lost") || has("--rewind"),
-            brawl: has("--brawl") || has("--lost") || has("--rewind"),
+            brawl: has("--brawl") || has("--lost") || has("--rewind") || has("--behind-hull"),
+            behind_hull: has("--behind-hull"),
             lost: value("--lost")
                 .and_then(|s| s.parse().ok())
                 .or(has("--rewind").then_some(3.0)),
@@ -198,6 +207,8 @@ impl Flags {
                     || self.station
                     || self.field
                     || self.traffic
+                    || self.interdict
+                    || self.convoy
                     || self.harvesters.is_some()
                     || self.skim
                     || self.combat
@@ -289,6 +300,9 @@ impl Flags {
         }
         if self.brawl {
             world.stage_brawl();
+            if self.behind_hull {
+                world.stage_behind_hull();
+            }
             if let Some(t) = self.lost {
                 world.stage_loss(t);
             }
@@ -657,6 +671,13 @@ impl ApplicationHandler for App {
                 if shoot && r.renderer.capture.is_none() {
                     r.renderer.capture = self.flags.screenshot.clone();
                 }
+                // Held behind the hull until the shot, or it flies off.
+                if self.flags.behind_hull
+                    && self.flags.screenshot.is_some()
+                    && let Some(g) = &mut r.game
+                {
+                    g.world.stage_behind_hull();
+                }
                 r.frame();
                 let shot_done = if self.flags.keys.is_empty() {
                     r.frames == SCREENSHOT_FRAME && self.flags.screenshot.is_some()
@@ -953,7 +974,14 @@ impl Running {
 
         // The virtual stick springs back toward centre.
         self.stick *= (-2.2 * dt).exp();
-        let keys_pitch = axis(KeyCode::ArrowDown, KeyCode::ArrowUp);
+        // Like a stick: ↓ pulls the nose up, unless pitch is inverted, which
+        // flips the keys as well as the mouse (issue #128).
+        let (nose_up, nose_down) = if self.settings.invert_pitch {
+            (KeyCode::ArrowUp, KeyCode::ArrowDown)
+        } else {
+            (KeyCode::ArrowDown, KeyCode::ArrowUp)
+        };
+        let keys_pitch = axis(nose_up, nose_down);
         let keys_yaw = axis(KeyCode::ArrowRight, KeyCode::ArrowLeft);
         let controls = Controls {
             stick: DVec3::new(
@@ -1179,6 +1207,7 @@ impl Running {
                             captured: self.captured,
                             controls_card: self.controls_card,
                             notes: self.settings.first_steps,
+                            invert_pitch: self.settings.invert_pitch,
                         },
                     );
                 }
@@ -1273,6 +1302,7 @@ impl Running {
             time,
             exposure: 1.0,
             instances: &instances,
+            reveal: (self.game.as_ref()).and_then(|g| hull_reveal(&g.world, cam_pos)),
             ui: Some((&ctx, output)),
         });
     }
@@ -1668,7 +1698,8 @@ fn scene(
                 light(pos),
             )
             .with_detail(0.5)
-            .with_scorch(battle_scorch(world.combat.player.hull_left())),
+            .with_scorch(battle_scorch(world.combat.player.hull_left()))
+            .own_hull(),
         ));
         // Engine plumes, growing with the throttle.
         let thrust = world.ship.throttle.max(0.0) as f32;
@@ -2020,6 +2051,19 @@ fn harvest_glow(
 }
 
 /// How scorched a ship looks with this much hull left.
+/// The combat target, where the chase camera has the pilot's own hull
+/// between it and the eye: camera relative, with its radius in metres.
+/// The renderer opens the hull round it (DESIGN §7.2.1, #123).
+fn hull_reveal(world: &World, cam: DVec3) -> Option<(Vec3, f32)> {
+    let c = &world.combat;
+    if world.cockpit || c.lost.is_some() || world.mode != Mode::Normal {
+        return None;
+    }
+    let r = c.raider(c.target?)?;
+    let rel = (world.combat_origin() + r.craft.pos - cam).as_vec3();
+    Some((rel, (r.vessel.stats.length_m * 0.5) as f32))
+}
+
 fn battle_scorch(hull_left: f64) -> f32 {
     (((1.0 - hull_left) * 0.8) as f32).clamp(0.0, 0.8)
 }

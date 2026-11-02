@@ -919,6 +919,108 @@ fn shooting_a_traders_ships_makes_its_faction_hostile() {
 }
 
 #[test]
+fn a_hostile_convoy_left_behind_leaves_the_scene() {
+    let mut world = World::new(1);
+    assert!(world.start_by_traffic(), "seed 1 has traffic");
+    let key = world
+        .traffic
+        .contacts
+        .iter()
+        .max_by_key(|c| c.ships)
+        .unwrap()
+        .key;
+    let faction = world.fleet_faction(key).expect("a faction");
+    world.player.standing.change(faction, -100.0);
+    world.enter_frame(Place::Convoy(key));
+    world.ship.flight_assist = true;
+    world.update(1.0 / 60.0, Controls::default());
+    assert!(
+        world.combat.has_convoy(key),
+        "its ships come into the scene"
+    );
+    assert!(world.combat.raiders.iter().any(|r| r.hostile), "and fight");
+    // Far off, out of their reach: they fly on, and the sim's fleet is
+    // drawn again.
+    world.ship.rel += DVec3::new(0.0, 200e3, 0.0);
+    world.update(1.0 / 60.0, Controls::default());
+    assert!(
+        !world.combat.has_convoy(key),
+        "the convoy is still in the scene"
+    );
+}
+
+#[test]
+fn a_fight_stays_put_when_the_convoy_it_was_framed_in_is_lost() {
+    let mut world = World::new(1);
+    assert!(world.start_by_traffic(), "seed 1 has traffic");
+    let key = world
+        .traffic
+        .contacts
+        .iter()
+        .max_by_key(|c| c.ships)
+        .unwrap()
+        .key;
+    let faction = world.fleet_faction(key).expect("a faction");
+    world.player.standing.change(faction, -100.0);
+    world.enter_frame(Place::Convoy(key));
+    world.ship.flight_assist = true;
+    // A gang is on us too, and fights on when the convoy is gone.
+    let gang = world.galaxy.pirates.gangs.keys().next().expect("a gang");
+    let me = world.combat_position();
+    world.engage(gang, None, me + DVec3::new(4e3, 0.0, 0.0), me);
+    world.update(1.0 / 60.0, Controls::default());
+    assert!(world.combat.has_convoy(key), "its ships are in the scene");
+    let pirate = |r: &&crate::combat::Raider| r.crew == crate::combat::Crew::Pirate;
+    assert!(
+        world.combat.raiders.iter().any(|r| pirate(&r)),
+        "the gang is out"
+    );
+    // Where the pirates and wrecks are, in the system frame.
+    let scene = |w: &World| {
+        let o = w.combat_origin();
+        let ships: Vec<(u32, DVec3)> = (w.combat.raiders.iter())
+            .filter(pirate)
+            .map(|r| (r.id, o + r.craft.pos))
+            .collect();
+        let wrecks: Vec<DVec3> = w.combat.wrecks.iter().map(|x| o + x.pos).collect();
+        (ships, wrecks)
+    };
+    // Shoot down every ship in the convoy, the last one too.
+    let pilot = crate::combat::Pilot {
+        craft: world.player_craft(),
+        burn: 0.0,
+        trigger: false,
+    };
+    let traders: Vec<u32> = (world.combat.raiders.iter())
+        .filter(|r| r.trader_fleet() == Some(key))
+        .map(|r| r.id)
+        .collect();
+    assert!(!traders.is_empty());
+    for id in traders {
+        world.combat.hit_raider(id, 1e6, &pilot);
+    }
+    let mut before = scene(&world);
+    for _ in 0..30 {
+        world.update(1.0 / 60.0, Controls::default());
+        let after = scene(&world);
+        for (id, at) in &after.0 {
+            if let Some((_, was)) = before.0.iter().find(|(i, _)| i == id) {
+                let moved = (*at - *was).length();
+                assert!(moved < 2e3, "raider {id} jumped {moved:.0} m");
+            }
+        }
+        for (was, at) in before.1.iter().zip(&after.1) {
+            let moved = (*at - *was).length();
+            assert!(moved < 2e3, "a wreck jumped {moved:.0} m");
+        }
+        before = after;
+    }
+    assert_eq!(world.ship.frame, Place::Star, "the convoy is gone");
+    assert!(!before.1.is_empty(), "its wrecks are left");
+    assert!(world.hostiles_near() > 0, "the gang fights on, close by");
+}
+
+#[test]
 fn intercept_brings_the_ship_alongside_a_convoy() {
     let mut world = World::new(1);
     assert!(world.start_by_traffic(), "seed 1 has traffic");
@@ -1207,5 +1309,76 @@ fn fast_travel_into_a_field_stops_in_laser_reach_of_a_rock() {
     assert!(
         world.mining.aim.is_some_and(|a| a.distance < reach),
         "the laser is on a rock as the trip ends"
+    );
+}
+
+/// NAVIGATION (issue #119): stations hang under the body they orbit, the
+/// ones round the star come before the fields, and fields read without the
+/// system's name.
+#[test]
+fn navigation_puts_stations_up_top_and_shortens_field_names() {
+    let world = World::new(1);
+    let rows = world.nav_entries();
+    let first_field = rows
+        .iter()
+        .position(|r| matches!(r.0, Place::Field(_)))
+        .expect("seed 1 starts in a system with fields");
+    assert!(
+        rows[first_field..]
+            .iter()
+            .all(|r| matches!(r.0, Place::Field(_))),
+        "fields come last"
+    );
+    let stations: Vec<_> = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| matches!(r.0, Place::Station(_)))
+        .collect();
+    assert!(!stations.is_empty(), "seed 1 starts by a station");
+    for &(i, &row) in &stations {
+        let Place::Station(s) = row.0 else {
+            unreachable!()
+        };
+        assert!(i < first_field, "a station below the fields");
+        match world.station_body(s) {
+            Some(b) => {
+                // Somewhere in its body's block of rows, one step in.
+                let body_row = rows
+                    .iter()
+                    .position(|r| *r == (Place::Body(b), None))
+                    .expect("its body is listed");
+                assert!(body_row < i);
+                assert!(
+                    rows[body_row + 1..i]
+                        .iter()
+                        .all(|&r| world.nav_depth(r) > world.nav_depth(rows[body_row])),
+                    "the station is cut off from its body"
+                );
+                assert_eq!(world.nav_depth(row), world.nav_depth(rows[body_row]) + 1);
+            }
+            None => assert_eq!(world.nav_depth(row), 0),
+        }
+    }
+    // Every place is listed once.
+    let places: std::collections::HashSet<_> =
+        rows.iter().filter(|r| r.1.is_none()).map(|r| r.0).collect();
+    assert_eq!(places.len(), world.nav_places().len());
+
+    let system = &world.galaxy.systems[world.system].name;
+    for r in &rows[first_field..] {
+        let short = world.short_name(r.0);
+        assert!(!short.contains(system.as_str()), "{short}");
+        assert!(!short.contains("field"), "{short}");
+        let letter = world.name(r.0).chars().last().expect("a name");
+        assert!(short.ends_with(letter), "{short} lost its letter");
+    }
+    let shorts: std::collections::HashSet<_> = rows[first_field..]
+        .iter()
+        .map(|r| world.short_name(r.0))
+        .collect();
+    assert_eq!(
+        shorts.len(),
+        rows.len() - first_field,
+        "two fields read the same"
     );
 }

@@ -112,7 +112,7 @@ pub fn deliver(player: &mut Player, galaxy: &mut GalaxyState, here: SettlementId
         let c = player.contracts.remove(i);
         let o = &c.offer;
         let owner = galaxy.settlements[here].owner;
-        player.standing.change(owner, crate::standing::DELIVERED);
+        let rank = player.standing.change(owner, crate::standing::DELIVERED);
         let pay = freight::pay_on(o.fee, o.deadline, today);
         let economy = &mut galaxy.settlements[here].economy;
         economy.market.stock[o.good] += o.amount;
@@ -137,6 +137,9 @@ pub fn deliver(player: &mut Player, galaxy: &mut GalaxyState, here: SettlementId
                 crate::hud::credits(o.fee)
             )
         });
+        if let (Some(rank), Some(f)) = (rank, galaxy.factions.get(owner)) {
+            said.push(crate::standing::news(&f.name, rank));
+        }
     }
     said
 }
@@ -149,18 +152,29 @@ pub fn abandon(player: &mut Player, galaxy: &mut GalaxyState, index: usize) -> O
     }
     let c = player.contracts.remove(index);
     let o = &c.offer;
+    let mut news = None;
     if let Some(to) = galaxy.settlements.get_mut(o.to) {
         to.economy.treasury += o.fee;
         // The faction that posted it remembers (DESIGN §7.2.2).
-        player.standing.change(to.owner, crate::standing::FAILED);
+        let owner = to.owner;
+        if let (Some(rank), Some(f)) = (
+            player.standing.change(owner, crate::standing::FAILED),
+            galaxy.factions.get(owner),
+        ) {
+            news = Some(crate::standing::news(&f.name, rank));
+        }
     }
     player.cargo[o.good] += o.amount;
-    Some(format!(
+    let failed = format!(
         "Contract failed: forfeit the {} deposit, the {:.0} t of {} are yours",
         crate::hud::credits(o.value),
         o.amount,
         o.good.name()
-    ))
+    );
+    Some(match news {
+        Some(news) => format!("{failed} · {news}"),
+        None => failed,
+    })
 }
 
 /// Fail every contract past its grace period, and any whose consignee is

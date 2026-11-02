@@ -36,7 +36,13 @@ pub(crate) const AMBER: Color32 = Color32::from_rgb(255, 178, 76);
 /// Vacuum-fluorescent teal: live instrument readouts.
 pub(crate) const VFD: Color32 = Color32::from_rgb(110, 240, 214);
 pub(crate) const VFD_DIM: Color32 = Color32::from_rgb(22, 58, 56);
-pub(crate) const PANEL: Color32 = Color32::from_rgba_premultiplied(11, 9, 16, 242);
+/// HUD panels. Blending happens in linear light on the sRGB surface, so
+/// a bright scene shows through far more than the alpha suggests: keep it
+/// near opaque.
+pub(crate) const PANEL: Color32 = Color32::from_rgba_premultiplied(11, 9, 16, 248);
+/// Menu pages (handbook, settings, load): opaque, as they're read at length
+/// (issue #124).
+pub(crate) const PAGE_FILL: Color32 = Color32::from_rgb(11, 9, 16);
 pub(crate) const INK: Color32 = Color32::from_rgb(20, 16, 24);
 
 const DISPLAY: &str = "display";
@@ -138,6 +144,8 @@ pub struct HudInput<'a> {
     pub controls_card: bool,
     /// Show the first-steps notes (a setting).
     pub notes: bool,
+    /// The *Invert pitch* setting, for the controls card's arrow keys.
+    pub invert_pitch: bool,
 }
 
 pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
@@ -191,7 +199,7 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
                 targeted,
                 dist,
                 p,
-                format!("{}  {}", w.name(place).to_uppercase(), distance(dist)),
+                format!("{}  {}", w.short_name(place).to_uppercase(), distance(dist)),
                 CREAM_DIM,
             ));
         }
@@ -228,7 +236,12 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
             };
             let dist = (c.pos - me).length();
             let hunting = c.aim == retrox_sim::pirates::Aim::Stalk;
-            let color = if hunting { ALARM } else { RED_HOT };
+            // A gang about its own business is a dimmer red.
+            let color = if hunting {
+                ALARM
+            } else {
+                ALARM.gamma_multiply(0.7)
+            };
             diamond(&painter, p, 4.5, color);
             if hunting {
                 diamond(&painter, p, 8.0, color.gamma_multiply(0.7));
@@ -260,7 +273,7 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
                     Stroke::new(1.0, AMBER.gamma_multiply(0.6)),
                 );
             }
-            painter.galley(rect.min + Vec2::splat(2.0), galley, color);
+            crate::widgets::shadowed_galley(&painter, rect.min + Vec2::splat(2.0), galley);
         }
 
         // Crosshair and stick position.
@@ -346,10 +359,12 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
     let mut lines: Vec<(Option<&str>, String)> = Vec::new();
     let hostiles = w.hostiles_near();
     if hostiles > 0 && w.combat.lost.is_none() {
-        let plural = if hostiles == 1 { "" } else { "s" };
         lines.push((
             Some("Y"),
-            format!("{hostiles} hostile{plural} near · next target · no fast travel or jumps"),
+            format!(
+                "{} near · next target · no fast travel or jumps",
+                count(hostiles, "hostile")
+            ),
         ));
     }
     if w.mode == Mode::Normal && w.combat.lost.is_none() {
@@ -376,10 +391,12 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
             // More than one city down there (issue #116): say how to pick.
             let others = w.cities_on(body).count() - 1;
             if others > 0 {
-                let plural = if others == 1 { "y" } else { "ies" };
                 lines.push((
                     Some("T"),
-                    format!("{others} more cit{plural} here · pick one in NAVIGATION"),
+                    format!(
+                        "{} here · pick one in NAVIGATION",
+                        count_as(others, "more city", "more cities")
+                    ),
                 ));
             }
         }
@@ -396,20 +413,7 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
     }
 
     if let Some((text, _)) = &w.message {
-        egui::Area::new(egui::Id::unique("message"))
-            .anchor(Align2::CENTER_TOP, [0.0, 72.0])
-            .show(ctx, |ui| {
-                egui::Frame::new()
-                    .fill(RED.gamma_multiply(0.9))
-                    .inner_margin(Margin::symmetric(18, 4))
-                    .show(ui, |ui| {
-                        ui.label(
-                            RichText::new(text.to_uppercase())
-                                .font(display(26.0))
-                                .color(CREAM),
-                        );
-                    });
-            });
+        banner(ctx, screen, text);
     }
 
     // Navigation lists.
@@ -517,8 +521,11 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
             let km_s = w.ship.vel.length() / 1000.0;
             let (title, detail) = match trip.leg {
                 Leg::To(place) => {
-                    let au = w.distance_to(place) / AU;
-                    ("Fast travel", format!("{} · {au:.2} AU", w.name(place)))
+                    let d = w.distance_to(place);
+                    (
+                        "Fast travel",
+                        format!("{} · {}", w.name(place), distance(d)),
+                    )
                 }
                 Leg::Intercept(fleet) => {
                     let company = w
@@ -559,11 +566,43 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
     }
     guide::key_strip(ctx, w, h.captured);
     if h.controls_card {
-        guide::controls_card(ctx);
+        guide::controls_card(ctx, h.invert_pitch);
     }
 
     actions
 }
+
+/// The red message banner at the top of the view, sized to its text and
+/// wrapped only at spaces past [`BANNER_MAX_W`] (issue #120). Painted
+/// straight onto a layer rather than in an `Area`, so its width can't
+/// carry over from an earlier, longer or shorter, message.
+fn banner(ctx: &egui::Context, screen: Rect, text: &str) {
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::unique("message-banner"),
+    ));
+    let margin = Vec2::new(18.0, 4.0);
+    let wrap = BANNER_MAX_W.min(screen.width() - 2.0 * (32.0 + margin.x));
+    let mut job = egui::text::LayoutJob::simple(text.to_uppercase(), display(26.0), CREAM, wrap);
+    job.halign = Align2::CENTER_TOP.x();
+    let galley = painter.layout_job(job);
+    let top = Pos2::new(screen.center().x, screen.top() + 72.0);
+    let size = galley.size() + 2.0 * margin;
+    let plate = Rect::from_min_size(top - Vec2::new(size.x / 2.0, 0.0), size);
+    painter.rect_filled(plate, 0.0, RED.gamma_multiply(0.94));
+    painter.rect_filled(
+        Rect::from_min_size(
+            plate.left_bottom() - Vec2::new(0.0, 2.0),
+            Vec2::new(plate.width(), 2.0),
+        ),
+        0.0,
+        RED_DARK,
+    );
+    painter.galley(top + Vec2::new(0.0, margin.y), galley, CREAM);
+}
+
+/// The widest the message banner grows before it wraps.
+const BANNER_MAX_W: f32 = 760.0;
 
 /// The system's places as a list of instrument rows: a glyph for what each
 /// is (moons hang off their planet, and cities off the body they're on),
@@ -571,13 +610,16 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
 fn nav_list(ui: &mut egui::Ui, w: &World, actions: &mut Vec<Action>) {
     ui.spacing_mut().item_spacing.y = 0.0;
     let rows = w.nav_entries();
+    let depths: Vec<usize> = rows.iter().map(|&r| w.nav_depth(r)).collect();
     let selected_row = w.nav_selected();
-    let is_moon =
-        |p: &Place| matches!(p, Place::Body(b) if w.galaxy.bodies[*b].kind == BodyKind::Moon);
     let bound: Vec<SettlementId> = w.player.contracts.iter().map(|c| c.offer.to).collect();
     let mut heading: Option<&str> = None;
     for (i, &(place, city)) in rows.iter().enumerate() {
+        let depth = depths[i];
+        // Stations round a body hang off it; only those round the star
+        // get a heading of their own.
         let group = match place {
+            _ if depth > 0 => heading,
             Place::Star | Place::Body(_) => None,
             Place::Field(_) => Some("Fields"),
             Place::Station(_) => Some("Stations"),
@@ -597,65 +639,59 @@ fn nav_list(ui: &mut egui::Ui, w: &World, actions: &mut Vec<Action>) {
                 None => Action::Target(place),
             });
         }
-        let moon = is_moon(&place);
-        // Moons sit one step in from planets, and cities one step in from
-        // the body they're on.
-        let depth = usize::from(moon) + usize::from(city.is_some());
         let painter = ui.painter();
-        let glyph_x = rect.left() + 16.0 + 16.0 * depth as f32;
+        let column = |d: usize| rect.left() + 16.0 + 16.0 * d as f32;
+        let glyph_x = column(depth);
         let c = Pos2::new(glyph_x, rect.center().y);
         let ink = if look.selected && !look.hot {
             AMBER
         } else {
             CREAM_DIM
         };
+        // The tree's brackets: an elbow from the row's parent, and the
+        // parent's (and grandparent's) line running on through to a later
+        // sibling.
         let stroke = Stroke::new(1.0, RULE);
-        // Is another moon of the same planet listed further down (past any
-        // cities in between)? Then the planet's bracket runs on through.
-        let moon_follows = rows[i + 1..]
-            .iter()
-            .take_while(|r| r.1.is_some() || is_moon(&r.0))
-            .any(|r| r.1.is_none());
-        let x = rect.left() + 16.0;
-        if moon && city.is_none() {
-            let bottom = if moon_follows { rect.bottom() } else { c.y };
-            painter.line_segment([Pos2::new(x, rect.top()), Pos2::new(x, bottom)], stroke);
-            painter.line_segment([Pos2::new(x, c.y), Pos2::new(c.x - 6.0, c.y)], stroke);
-        }
-        if city.is_some() {
-            if moon && moon_follows {
+        let sibling_follows = |d: usize| {
+            depths[i + 1..]
+                .iter()
+                .take_while(|&&e| e >= d)
+                .any(|&e| e == d)
+        };
+        for d in 1..=depth {
+            let x = column(d - 1);
+            let follows = sibling_follows(d);
+            if d == depth {
+                let bottom = if follows { rect.bottom() } else { c.y };
+                painter.line_segment([Pos2::new(x, rect.top()), Pos2::new(x, bottom)], stroke);
+                painter.line_segment([Pos2::new(x, c.y), Pos2::new(c.x - 6.0, c.y)], stroke);
+            } else if follows {
                 painter.line_segment(
                     [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
                     stroke,
                 );
             }
-            // The city's own bracket, back to the body above.
-            let bx = glyph_x - 16.0;
-            // A planet's cities share its bracket with its moons below.
-            let next_city = rows.get(i + 1).is_some_and(|r| r.1.is_some());
-            let bottom = if next_city || (!moon && moon_follows) {
-                rect.bottom()
-            } else {
-                c.y
-            };
-            painter.line_segment([Pos2::new(bx, rect.top()), Pos2::new(bx, bottom)], stroke);
-            painter.line_segment([Pos2::new(bx, c.y), Pos2::new(c.x - 6.0, c.y)], stroke);
         }
         match city {
             Some(_) => city_glyph(painter, c, ink),
             None => place_glyph(painter, w, place, c, ink),
         }
-        let label = match city {
-            Some(c) => w.galaxy.settlements[c].name.clone(),
-            None => w.name(place),
+        let label = match (place, city) {
+            (_, Some(c)) => w.galaxy.settlements[c].name.clone(),
+            // A station under its body: the bracket says whose it is.
+            (Place::Station(s), None) => {
+                let name = w.name(place);
+                w.station_body(s)
+                    .and_then(|b| {
+                        name.strip_prefix(w.galaxy.bodies[b].name.as_str())
+                            .map(str::trim_start)
+                            .filter(|r| !r.is_empty())
+                            .map(str::to_owned)
+                    })
+                    .unwrap_or_else(|| w.short_name(place))
+            }
+            _ => w.short_name(place),
         };
-        let name = painter.text(
-            Pos2::new(glyph_x + 14.0, c.y),
-            Align2::LEFT_CENTER,
-            crate::widgets::truncate(&label, 28 - 2 * depth),
-            mono(14.0),
-            look.text(AMBER),
-        );
         let tag = match (place, city) {
             // Pirates are known where they lair.
             (Place::Field(f), _) if w.gang_reported(f) => Some(("RAIDERS", ALARM)),
@@ -665,31 +701,49 @@ fn nav_list(ui: &mut egui::Ui, w: &World, actions: &mut Vec<Action>) {
             }
             _ => None,
         };
-        if let Some((tag, colour)) = tag {
-            painter.text(
-                Pos2::new(name.right() + 8.0, c.y),
-                Align2::LEFT_CENTER,
+        let tag = tag.map(|(text, colour)| painter.layout_no_wrap(text.into(), mono(11.0), colour));
+        // A city is as far as its planet: the range is on the planet's row.
+        let range = city.is_none().then(|| {
+            let colour = if look.hot {
+                CREAM
+            } else if look.selected {
+                AMBER.gamma_multiply(0.85)
+            } else {
+                VFD.gamma_multiply(0.85)
+            };
+            painter.layout_no_wrap(distance(w.distance_to(place)), mono(13.0), colour)
+        });
+        // The name gets what's left between the glyph and the range.
+        let name_x = glyph_x + 14.0;
+        let room = rect.right()
+            - 6.0
+            - range.as_ref().map_or(0.0, |g| g.size().x + 10.0)
+            - tag.as_ref().map_or(0.0, |g| g.size().x + 8.0)
+            - name_x;
+        let name = painter.text(
+            Pos2::new(name_x, c.y),
+            Align2::LEFT_CENTER,
+            crate::widgets::fit(painter, &label, mono(14.0), room),
+            mono(14.0),
+            look.text(AMBER),
+        );
+        if let Some(tag) = tag {
+            painter.galley(
+                Pos2::new(name.right() + 8.0, c.y - tag.size().y / 2.0),
                 tag,
-                mono(11.0),
-                colour,
+                Color32::PLACEHOLDER,
             );
         }
-        // A city is as far as its planet: the range is on the planet's row.
-        if city.is_some() {
-            continue;
+        if let Some(range) = range {
+            painter.galley(
+                Pos2::new(
+                    rect.right() - 6.0 - range.size().x,
+                    c.y - range.size().y / 2.0,
+                ),
+                range,
+                Color32::PLACEHOLDER,
+            );
         }
-        let range = if look.selected { AMBER } else { VFD };
-        painter.text(
-            Pos2::new(rect.right() - 6.0, c.y),
-            Align2::RIGHT_CENTER,
-            distance(w.distance_to(place)),
-            mono(13.0),
-            if look.hot {
-                CREAM
-            } else {
-                range.gamma_multiply(0.85)
-            },
-        );
     }
 }
 
@@ -802,16 +856,13 @@ fn lanes_list(ui: &mut egui::Ui, w: &World, open_space: bool, actions: &mut Vec<
             ));
         }
         x += 10.0;
-        painter.text(
-            Pos2::new(x, y),
-            Align2::LEFT_CENTER,
-            crate::widgets::truncate(&lane.name, 18),
-            mono(14.0),
-            look.text(AMBER),
+        // The jump key sits inside the row, clear of the panel's edge
+        // (issue #125), and the rest shares out what's left.
+        let key = Rect::from_min_max(
+            Pos2::new(rect.right() - 6.0 - JUMP_KEY_W, rect.top() + 4.0),
+            Pos2::new(rect.right() - 6.0, rect.bottom() - 4.0),
         );
-        painter.text(
-            Pos2::new(rect.right() - 86.0, y),
-            Align2::RIGHT_CENTER,
+        let leg = painter.layout_no_wrap(
             format!("{:.1} LY · {:.0} D", lane.length_ly, lane.days),
             mono(12.0),
             if on_course {
@@ -820,23 +871,28 @@ fn lanes_list(ui: &mut egui::Ui, w: &World, open_space: bool, actions: &mut Vec<
                 VFD.gamma_multiply(0.85)
             },
         );
-        let key = Rect::from_min_size(
-            Pos2::new(rect.right() - 76.0, rect.top() + 4.0),
-            Vec2::new(72.0, rect.height() - 8.0),
+        let leg_x = key.left() - 10.0 - leg.size().x;
+        painter.galley(Pos2::new(leg_x, y - leg.size().y / 2.0), leg, VFD);
+        painter.text(
+            Pos2::new(x, y),
+            Align2::LEFT_CENTER,
+            crate::widgets::fit(painter, &lane.name, mono(14.0), leg_x - 10.0 - x),
+            mono(14.0),
+            look.text(AMBER),
         );
-        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(key));
         let look = if on_course {
             crate::widgets::Look::Primary
         } else {
             crate::widgets::Look::Plain
         };
-        if crate::widgets::push(
-            &mut child,
+        if crate::widgets::push_in(
+            ui,
+            key,
+            egui::Id::unique("jump").with(lane.to),
             "JUMP",
             display(18.0),
             look,
             open_space,
-            key.size(),
         )
         .clicked()
         {
@@ -854,7 +910,10 @@ fn lanes_list(ui: &mut egui::Ui, w: &World, open_space: bool, actions: &mut Vec<
         );
     }
     ui.add_space(8.0);
-    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+    // `horizontal`, not a centred layout: that would stretch to the
+    // panel's height from the frame before and keep a tall empty band
+    // under a short list (issue #125).
+    ui.horizontal(|ui| {
         keycap(ui, "M");
         if crate::widgets::push(
             ui,
@@ -870,6 +929,9 @@ fn lanes_list(ui: &mut egui::Ui, w: &World, open_space: bool, actions: &mut Vec<
         }
     });
 }
+
+/// The width of a lane's JUMP key.
+const JUMP_KEY_W: f32 = 64.0;
 
 /// Key prompts, one per line; a line without a key is a warning.
 fn prompt_lines(ui: &mut egui::Ui, lines: Vec<(Option<&str>, String)>) {
@@ -965,6 +1027,16 @@ pub(crate) struct Panel<'a> {
 }
 
 pub(crate) fn panel(ctx: &egui::Context, p: Panel, add: impl FnOnce(&mut egui::Ui)) {
+    panel_filled(ctx, p, PANEL, add);
+}
+
+/// A [`panel`] on a body of `fill`: menu pages use [`PAGE_FILL`].
+pub(crate) fn panel_filled(
+    ctx: &egui::Context,
+    p: Panel,
+    fill: Color32,
+    add: impl FnOnce(&mut egui::Ui),
+) {
     let id = egui::Id::unique(p.id);
     let mut open = p
         .collapsible
@@ -973,7 +1045,7 @@ pub(crate) fn panel(ctx: &egui::Context, p: Panel, add: impl FnOnce(&mut egui::U
         .anchor(p.anchor, p.offset)
         .show(ctx, |ui| {
             let frame = egui::Frame::new()
-                .fill(PANEL)
+                .fill(fill)
                 .stroke(Stroke::new(1.0, RULE))
                 .show(ui, |ui| {
                     ui.set_width(p.width);
@@ -1185,7 +1257,6 @@ pub(crate) fn segment_bar(ui: &mut egui::Ui, value: f32, width: f32, color: Colo
     }
 }
 
-/// A big centred caption with a red rule and a subtitle, for transitions.
 /// The moment a gang pulls the ship out of fast travel: the view tears
 /// with interference, the edges flash red, and a red band slams across with
 /// INTERDICTED and who did it, then all of it fades.
@@ -1276,6 +1347,7 @@ fn interdicted(ctx: &egui::Context, screen: Rect, t: f32, gang: &str) {
     );
 }
 
+/// A big centred caption with a red rule and a subtitle, for transitions.
 pub(crate) fn title_card(
     painter: &egui::Painter,
     centre: Pos2,
@@ -1308,14 +1380,16 @@ pub(crate) fn title_card(
 }
 
 fn project(view_proj: Mat4, rel: glam::Vec3, screen: egui::Rect) -> Option<Pos2> {
+    project_any(view_proj, rel, screen).filter(|p| screen.contains(*p))
+}
+
+/// Where a point in front of the camera lands, on screen or off it.
+fn project_any(view_proj: Mat4, rel: glam::Vec3, screen: egui::Rect) -> Option<Pos2> {
     let clip = view_proj * Vec4::new(rel.x, rel.y, rel.z, 1.0);
     if clip.w <= 0.0 {
         return None;
     }
     let ndc = clip.truncate() / clip.w;
-    if ndc.x.abs() > 1.0 || ndc.y.abs() > 1.0 {
-        return None;
-    }
     Some(Pos2::new(
         screen.left() + (ndc.x + 1.0) * 0.5 * screen.width(),
         screen.top() + (1.0 - ndc.y) * 0.5 * screen.height(),
@@ -1364,28 +1438,22 @@ fn edge_arrow_dir(view_proj: Mat4, rel: glam::Vec3) -> Vec2 {
     }
 }
 
-/// Credits with thin-space thousands separators.
 /// Fleets nearer than this get a label.
 const TRAFFIC_LABEL_M: f64 = 2.0e9;
 
-/// "KESSA HAULERS · 3× LIGHT TRADER · 120 T FOOD  42 KM"
-fn diamond(painter: &egui::Painter, c: Pos2, r: f32, color: Color32) {
+/// A hostile's marker, here and in the fight's HUD: a red diamond.
+pub(crate) fn diamond(painter: &egui::Painter, c: Pos2, r: f32, color: Color32) {
     let pts = vec![
         c + Vec2::new(0.0, -r),
         c + Vec2::new(r, 0.0),
         c + Vec2::new(0.0, r),
         c + Vec2::new(-r, 0.0),
     ];
-    painter.add(egui::Shape::closed_line(pts, Stroke::new(1.2, color)));
+    painter.add(egui::Shape::closed_line(pts, Stroke::new(1.5, color)));
 }
 
 fn pirate_label(c: &crate::traffic::PirateContact, dist: f64) -> String {
-    let n = c.fits.len();
-    let ships = if n == 1 {
-        "1 SHIP".to_owned()
-    } else {
-        format!("{n} SHIPS")
-    };
+    let ships = count(c.fits.len(), "ship").to_uppercase();
     let wanted = c
         .bounty
         .map(|b| format!(" · WANTED {}", credits(b).to_uppercase()))
@@ -1397,6 +1465,7 @@ fn pirate_label(c: &crate::traffic::PirateContact, dist: f64) -> String {
     )
 }
 
+/// "KESSA HAULERS · 3× LIGHT TRADER · 120 T FOOD  42 KM"
 fn contact_label(c: &crate::traffic::Contact, dist: f64) -> String {
     let class = c.fit.hull().name.to_uppercase();
     let ships = if c.ships > 1 {
@@ -1411,8 +1480,8 @@ fn contact_label(c: &crate::traffic::Contact, dist: f64) -> String {
                 Good::Gas => "SKIMMING GAS",
                 _ => "CUTTING ICE",
             };
-            let days = if w.days_left == 1 { "DAY" } else { "DAYS" };
-            format!("{doing} · {} {days} LEFT", w.days_left)
+            let days = count(w.days_left as usize, "day").to_uppercase();
+            format!("{doing} · {days} LEFT")
         }
         (Some(w), _) => format!("BOUND FOR {}", w.source.to_uppercase()),
         (None, Some((good, t))) => format!("{:.0} T {}", t, good.name().to_uppercase()),
@@ -1427,10 +1496,15 @@ fn contact_label(c: &crate::traffic::Contact, dist: f64) -> String {
 
 /// `n` of `thing`, with the plural `s` when it needs one.
 pub fn count(n: usize, thing: &str) -> String {
+    count_as(n, thing, &format!("{thing}s"))
+}
+
+/// `n` of something whose plural isn't just an `s`: "2 cities".
+pub fn count_as(n: usize, one: &str, many: &str) -> String {
     if n == 1 {
-        format!("1 {thing}")
+        format!("1 {one}")
     } else {
-        format!("{n} {thing}s")
+        format!("{n} {many}")
     }
 }
 
