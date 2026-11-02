@@ -75,28 +75,7 @@ fn fast_travel_reaches_every_place_and_only_climbs_out_of_a_well() {
         let before = world.clock_s;
         world.act(Action::FastTravel);
         assert!(matches!(world.mode, Mode::FastTravel(_)), "{target:?}");
-        // How far off the nose the place was on the trip's last frame: the
-        // turn-over must be done by then, not snapped at the hand-back.
-        let mut last_off = 180.0_f64;
-        for _ in 0..30 * 60 {
-            if world.mode == Mode::Normal {
-                break;
-            }
-            let nose = world.ship.rot * DVec3::NEG_Z;
-            let face = world.arrival_facing(Leg::To(target), world.ship_position(), world.t_days());
-            last_off = nose
-                .dot(face.normalize())
-                .clamp(-1.0, 1.0)
-                .acos()
-                .to_degrees();
-            world.update(1.0 / 60.0, Controls::default());
-        }
-        assert_eq!(world.mode, Mode::Normal, "{target:?}");
-        assert!(
-            last_off < 10.0,
-            "{}: still {last_off:.0}° off just before arriving",
-            world.name(target)
-        );
+        real_seconds_until(&mut world, 30.0, |w| w.mode == Mode::Normal);
         let (d, expected) = (world.distance_to(target), world.arrival_distance(target));
         assert!(
             (d - expected).abs() < expected * 0.05 + 1.0,
@@ -104,14 +83,21 @@ fn fast_travel_reaches_every_place_and_only_climbs_out_of_a_well() {
             world.name(target)
         );
         assert!(world.clock_s > before, "galaxy time must pass");
-        // Arrives nose-on (#118), not braking tail-first.
+        // Then turns nose-on (#118) at the ship's own rates, rather than
+        // sitting tail-first from the braking.
+        let turn = real_seconds_until(&mut world, 8.0, |w| w.turn_over.is_none());
         let nose = world.ship.rot * DVec3::NEG_Z;
         let to = (world.position(target) - world.ship_position()).normalize();
+        let off = nose.angle_between(to).to_degrees();
         assert!(
-            nose.dot(to) > 0.99,
-            "{}: arrived facing {:.0}° off",
-            world.name(target),
-            nose.dot(to).clamp(-1.0, 1.0).acos().to_degrees()
+            off < 1.0,
+            "{}: {off:.1}° off after {turn:.1} s",
+            world.name(target)
+        );
+        assert!(
+            turn > 0.5,
+            "{}: a real turn takes time, not {turn:.2} s",
+            world.name(target)
         );
     }
 }
@@ -1095,4 +1081,79 @@ fn repairs_cost_three_credits_a_point_paid_to_the_settlement() {
     world.repair_docked();
     assert!((world.player.ship.damage.total() - 60.0).abs() < 1e-9);
     assert_eq!(treasury(&world), before);
+}
+
+/// A world in orbit of a body with two cities or more (issue #116), with
+/// cargo bound for the last of them.
+fn above_a_two_city_planet() -> (World, BodyId, Vec<SettlementId>) {
+    let mut world = World::new(1);
+    let body = world
+        .start_by_cities()
+        .expect("a planet with two cities somewhere");
+    let cities = world.cities_on(body).collect();
+    (world, body, cities)
+}
+
+#[test]
+fn every_city_on_a_planet_can_be_landed_at() {
+    let (mut world, body, cities) = above_a_two_city_planet();
+    world.player.contracts.clear();
+    assert_eq!(world.prompts().land, Some((cities[0], body)));
+    for &city in &cities {
+        world.act(Action::TargetCity(city));
+        assert_eq!(world.target, Some(Place::Body(body)));
+        assert_eq!(
+            world.prompts().land,
+            Some((city, body)),
+            "[L] lands where picked"
+        );
+    }
+    let last = *cities.last().unwrap();
+    world.act(Action::Land);
+    assert!(
+        matches!(world.mode, Mode::Landed { city, .. } if city == last),
+        "landed at the city picked: {:?}",
+        world.mode
+    );
+}
+
+#[test]
+fn the_landing_prompt_offers_where_the_cargo_is_bound() {
+    let (mut world, body, cities) = above_a_two_city_planet();
+    let to = *cities.last().unwrap();
+    assert_eq!(world.prompts().land, Some((to, body)));
+    let hint = crate::guide::hint(&world).expect("a hint");
+    let name = world.galaxy.settlements[to].name.clone();
+    assert_eq!(hint, format!("[L] to land at {name}."));
+
+    // From afar, the hint names the planet the city is on, until it's
+    // picked in NAVIGATION.
+    let near = world.ship.clone();
+    open_space(&mut world);
+    let hint = crate::guide::hint(&world).expect("a hint");
+    let planet = world.name(Place::Body(body));
+    assert!(hint.contains(&format!("{name}, on {planet}")), "{hint}");
+    world.act(Action::TargetCity(cities[0]));
+    let hint = crate::guide::hint(&world).expect("a hint");
+    assert!(
+        hint.contains(&format!("on {planet}")),
+        "the wrong city: {hint}"
+    );
+    world.act(Action::TargetCity(to));
+    let hint = crate::guide::hint(&world).expect("a hint");
+    assert!(!hint.contains("NAVIGATION"), "picked: {hint}");
+    world.ship = near;
+    assert_eq!(world.prompts().land, Some((to, body)));
+}
+
+#[test]
+fn t_cycles_through_cities_under_their_planet() {
+    let (mut world, body, cities) = above_a_two_city_planet();
+    world.act(Action::Target(Place::Body(body)));
+    for &city in &cities {
+        world.act(Action::CycleTarget);
+        assert_eq!(world.nav_selected(), Some((Place::Body(body), Some(city))));
+    }
+    world.act(Action::CycleTarget);
+    assert_eq!(world.landing.filter(|c| cities.contains(c)), None);
 }

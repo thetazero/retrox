@@ -149,8 +149,9 @@ fn first_steps(ui: &mut egui::Ui) {
         ui,
         5,
         "Arrive and get paid",
-        "Pick the station or city in NAVIGATION (or [T]), [J] to fast travel there, then [F] to \
-         dock or [L] to land. Contracts pay on arrival: your deposit back, plus the fee.",
+        "Pick the station or city in NAVIGATION (or [T]): cities are listed under their planet. \
+         [J] to fast travel there, then [F] to dock or [L] to land. Contracts pay on arrival: \
+         your deposit back, plus the fee.",
     );
     section(ui, "Other ways in");
     ui.add_space(4.0);

@@ -621,11 +621,14 @@ and the last thing the drive does is brake, so the place you travelled
 to was always directly behind you.
 
 - **The ship turns over at the end of every trip** to face where it was
-  going: the autopilot still brakes the same way (orientation doesn't
-  change the flight), but once the stop is under 1.5 real seconds away
-  the ship swings round, and it finishes the turn as it hands back. The
-  place is the first thing you see. A climb out of a well ends facing the
-  way it's headed next; an intercept ends facing the convoy.
+  going. The autopilot brakes tail-first to a stop as before, then its
+  attitude hold turns the ship round with the ship's own controls: the
+  stick a pilot would hold, through the same turning as hand flight, at
+  the hull's own rates. A nimble ship swings round in a couple of
+  seconds, a heavy one takes longer; no rotation is set by a timer.
+  Touching the stick hands the turn to the pilot. A climb out of a well
+  ends facing the way it's headed next; an intercept ends facing the
+  convoy.
 - **Fast travel to a station stops in docking range**: 1.2 station sizes
   + 200 m from it, inside the [F] dock prompt's reach (1.5 sizes + 400 m)
   and at rest. Arrive, [F] to dock, like [L] at a city planet. It used to
@@ -915,6 +918,14 @@ from a random generator (pillar 5).
   plays an animation and opens the location's UI.
 - Fast travel brings the ship into landing range of a planet's city, and
   [J] climbs back out after launch (§7.1.1).
+- **A planet may have several cities** (issue #116). Each is a row of its
+  own in NAVIGATION, under its planet; picking one (click, or [T], which
+  steps through city rows too) targets the planet and makes that city the
+  one [L] lands at. With none picked, [L] lands where the hold's cargo is
+  bound, else at the first city listed. While more than one city is in
+  reach, the prompts say so and point at NAVIGATION. Hints name a city with
+  its planet ("Kiolgristio, on Mufath Prime III") so the player knows
+  where to fly.
 
 ### 7.7 Death
 
@@ -1141,7 +1152,11 @@ Decided while bringing every screen into one style (issue #77):
   of one action, like a row of switches on a panel.
 - **Chart symbols** in lists of places: a rayed star, ringed gas giants,
   stations as teal diamonds, fields as scattered dots; moons hang off their
-  planet on a bracket.
+  planet on a bracket, and cities (a little skyline of three blocks) hang
+  off the body they're on the same way, one step further in. A city row
+  carries no range (its planet's row has it). Where the hold's cargo is
+  bound, the row is tagged CARGO in amber, as a pirate lair is tagged
+  RAIDERS in red.
 - **Slot plates:** loadout slots carry a stencilled kind plate coloured by
   role (weapons red; engines, power and jump amber; shields, radar and RCS
   teal; radiators and cargo cream).
