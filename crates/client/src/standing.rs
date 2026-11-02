@@ -134,6 +134,11 @@ impl Standing {
     }
 }
 
+/// What the HUD says when standing crosses into a new rank.
+pub fn news(faction: &str, rank: Rank) -> String {
+    format!("The {faction} now count us {}", rank.name().to_lowercase())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

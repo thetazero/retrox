@@ -23,7 +23,7 @@ use retrox_sim::{FactionId, FieldId};
 
 use super::{Mode, Place, World};
 use crate::combat::LEASH;
-use crate::standing::{self, Rank};
+use crate::standing;
 use crate::traffic::{to_client, to_sim};
 
 /// A stalking gang this close to a ship in fast travel pulls it out.
@@ -278,12 +278,12 @@ impl World {
         if let Some(faction) = warrant
             && let Some(rank) = self.player.standing.change(faction, standing::BOUNTY_KILL)
         {
-            said.push(rank_news(&self.faction_name(faction), rank));
+            said.push(crate::standing::news(&self.faction_name(faction), rank));
         }
         if let Some(f) = local.filter(|&f| warrant != Some(f))
             && let Some(rank) = self.player.standing.change(f, standing::PIRATE_KILL)
         {
-            said.push(rank_news(&self.faction_name(f), rank));
+            said.push(crate::standing::news(&self.faction_name(f), rank));
         }
         if !said.is_empty() {
             self.say(said.join(" · "));
@@ -423,9 +423,4 @@ fn segment_to_origin(a: DVec3, b: DVec3) -> f64 {
         0.0
     };
     (a + d * t).length()
-}
-
-/// What the HUD says when standing crosses into a new rank.
-pub fn rank_news(faction: &str, rank: Rank) -> String {
-    format!("The {faction} now count us {}", rank.name().to_lowercase())
 }

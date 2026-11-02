@@ -132,7 +132,7 @@ impl World {
             standing::SHOT_SHIP
         };
         if let Some(rank) = self.player.standing.change(faction, cost) {
-            self.say(super::prowl::rank_news(&name, rank));
+            self.say(standing::news(&name, rank));
         }
     }
 
@@ -155,7 +155,7 @@ impl World {
         }
         let name = self.faction_name(faction);
         if let Some(rank) = self.player.standing.change(faction, standing::KILLED_SHIP) {
-            said.push(super::prowl::rank_news(&name, rank));
+            said.push(standing::news(&name, rank));
         }
         self.say(said.join(" · "));
     }
