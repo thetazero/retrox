@@ -5,6 +5,7 @@
 //! PRNG ([`Rng`]) rather than `rand`, so seeds stay stable across
 //! dependency upgrades.
 
+mod factions;
 mod grid;
 mod lanes;
 mod names;
@@ -34,6 +35,11 @@ pub struct GalaxyConfig {
     /// Chance to keep each "extra" lane beyond the sparse backbone. Higher
     /// means a denser, more forgiving lane network with fewer chokepoints.
     pub extra_lane_chance: f64,
+    /// Number of factions at the start of history.
+    pub factions: usize,
+    /// Share of systems claimed by some faction at the start; the rest is
+    /// unclaimed frontier.
+    pub claimed_fraction: f64,
 }
 
 impl Default for GalaxyConfig {
@@ -46,6 +52,8 @@ impl Default for GalaxyConfig {
             min_spacing_ly: 2.5,
             max_lane_ly: 18.0,
             extra_lane_chance: 0.12,
+            factions: 20,
+            claimed_fraction: 0.6,
         }
     }
 }
@@ -71,6 +79,8 @@ pub fn generate(seed: u64, config: &GalaxyConfig) -> GalaxyState {
     for (a, b) in lanes::build(&mut Rng::derive(seed, "lanes"), &state, config) {
         state.connect(a, b);
     }
+
+    factions::seed(&mut Rng::derive(seed, "factions"), &mut state, config);
 
     state
 }
