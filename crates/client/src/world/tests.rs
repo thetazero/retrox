@@ -1539,3 +1539,44 @@ fn the_ship_stops_at_the_quarry_face_it_sees() {
         }
     }
 }
+
+/// Issue #154: a city founded while the player is in the system is in
+/// NAVIGATION straight away, [T] reaches it and [L] lands there, without
+/// leaving the system and coming back.
+#[test]
+fn a_city_founded_while_here_can_be_targeted_and_landed_at() {
+    let mut world = World::new(1);
+    let body = world.colony_due_here().expect("a free region at the start");
+    let before: Vec<_> = world.cities_on(body).collect();
+    world.act(Action::Wait(1));
+    real_seconds_until(&mut world, 30.0, |w| w.waiting.is_none());
+    let new: Vec<_> = world
+        .cities_on(body)
+        .filter(|c| !before.contains(c))
+        .collect();
+    let [city] = new[..] else {
+        panic!("one new city in NAVIGATION, got {new:?}");
+    };
+    assert!(
+        world
+            .nav_entries()
+            .contains(&(Place::Body(body), Some(city)))
+    );
+
+    world.act(Action::Launch);
+    world.act(Action::Target(Place::Star));
+    for _ in 0..world.nav_entries().len() {
+        if world.landing == Some(city) {
+            break;
+        }
+        world.act(Action::CycleTarget);
+    }
+    assert_eq!(world.nav_selected(), Some((Place::Body(body), Some(city))));
+    assert_eq!(world.prompts().land, Some((city, body)));
+    world.act(Action::Land);
+    assert!(
+        matches!(world.mode, Mode::Landed { city: c, .. } if c == city),
+        "landed at the new city: {:?}",
+        world.mode
+    );
+}

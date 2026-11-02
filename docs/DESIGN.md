@@ -1158,6 +1158,14 @@ from a random generator (pillar 5).
   reach, the prompts say so and point at NAVIGATION. Hints name a city with
   its planet ("Kiolgristio, on Mufath Prime III") so the player knows
   where to fly.
+- **What the sim founds while you're there is there at once** (#154).
+  The system's index (its NAVIGATION rows, [T]'s cycle, [L]'s cities,
+  the station models) is rebuilt after every sim day that passes in it,
+  so a city or station colonists found while the player waits, flies or
+  trades in the system is a row, a target and a landing at once, not on
+  the next visit. It just appears in its place in the tree, with no
+  message of its own: founding is the sim's ordinary business, and a
+  notice for each would be noise.
 
 ### 7.7 Death
 

@@ -43,6 +43,7 @@ and `--menu pause|quit` opens over a fresh game.
 | `--traffic` | start in space alongside a trader fleet |
 | `--skim` | start skimming a gas giant |
 | `--cities` | start in orbit of a planet with two cities, cargo bound for one |
+| `--colony` | start landed, with colonists due to found a city on the same planet as the day turns over |
 | `--interdict` | fly past a pirate gang's lair until it interdicts the ship |
 | `--convoy` | start alongside a trader fleet, in its frame |
 | `--hostile-convoy` | with `--convoy`: its faction counts you hostile |
