@@ -20,7 +20,7 @@ use slotmap::new_key_type;
 
 use crate::economy::{Good, GoodMap};
 use crate::settlement::{SettlementId, Site};
-use crate::{EconomyModel, GalaxyState, GalaxyTime, Id, SystemId};
+use crate::{EconomyModel, GalaxyState, GalaxyTime, Id, Rng, SystemId};
 
 pub type ShipClassId = Id<ShipClass>;
 
@@ -360,17 +360,6 @@ fn best_trip(
     best.or(reposition).map(|(_, plan)| plan)
 }
 
-/// A small deterministic hash, for loss rolls until the sim has proper
-/// RNG streams (#11).
-fn roll(seed: u64, a: u64, b: u64) -> f64 {
-    let mut z =
-        seed ^ a.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ b.wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    z ^= z >> 31;
-    (z >> 11) as f64 / (1u64 << 53) as f64
-}
-
 /// Movement phase: fleets that reach their destination dock there. Some
 /// ships don't make it.
 pub fn movement(state: &mut GalaxyState) {
@@ -385,14 +374,14 @@ pub fn movement(state: &mut GalaxyState) {
             if arrive > now {
                 continue;
             }
+            let mut rng = Rng::stream(
+                seed,
+                "ship-loss",
+                now.days(),
+                company_bits ^ ((n as u64) << 48),
+            );
             let survivors = (0..fleet.ships)
-                .filter(|&i| {
-                    roll(
-                        seed,
-                        company_bits ^ now.days(),
-                        (n as u64) << 32 | u64::from(i),
-                    ) >= LOSS_PER_SHIP_TRIP
-                })
+                .filter(|_| !rng.chance(LOSS_PER_SHIP_TRIP))
                 .count() as u32;
             if survivors < fleet.ships {
                 // Lost ships take their share of the cargo with them.
@@ -577,10 +566,16 @@ fn buy_ship(state: &mut GalaxyState, key: CompanyId, n: usize, here: SettlementI
 fn found_companies(state: &mut GalaxyState) {
     let now = state.time;
     let ids: Vec<SettlementId> = state.settlements.keys().collect();
-    for (i, id) in ids.into_iter().enumerate() {
+    for id in ids {
         let economy = &state.settlements[id].economy;
         if economy.hull_t <= 0.0
-            || roll(state.seed ^ 0xC0DE, now.days(), i as u64) >= FOUND_COMPANY_CHANCE
+            || !Rng::stream(
+                state.seed,
+                "found-company",
+                now.days(),
+                slotmap::Key::data(&id).as_ffi(),
+            )
+            .chance(FOUND_COMPANY_CHANCE)
         {
             continue;
         }
