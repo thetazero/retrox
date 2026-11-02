@@ -84,9 +84,11 @@ fn hub(ctx: &egui::Context, w: &World, here: SettlementId, actions: &mut Vec<Act
                 .iter()
                 .filter(|&&g| economy.market.shortfall[g] > 0.01)
                 .count();
-            let trade_note = match shortages {
-                0 => "buy and sell goods".to_owned(),
-                n => format!("{} here", crate::hud::count(n, "shortage")),
+            let best_run = w.trade_runs(1).first().map(|r| r.profit());
+            let trade_note = match (best_run, shortages) {
+                (Some(p), _) => format!("buy here, sell there · best run +{}", credits(p)),
+                (None, 0) => "buy and sell goods".to_owned(),
+                (None, n) => format!("{} here", crate::hud::count(n, "shortage")),
             };
             if menu_button(ui, "Trade", &trade_note, true) {
                 actions.push(Action::Open(Screen::Trade));
@@ -313,13 +315,15 @@ fn trade_screen(ctx: &egui::Context, w: &World, here: SettlementId, actions: &mu
             segment_bar(ui, fill, ui.available_width(), VFD);
             ui.add_space(8.0);
             section(ui, "Market");
-            ui.label(
-                RichText::new(
-                    "prices rise as you buy and fall as you sell · selling pays 90% of the market price",
-                )
-                .size(11.0)
-                .color(CREAM_DIM),
-            );
+            let planned =
+                w.galaxy.factions[settlement.owner].economy == retrox_sim::EconomyModel::Planned;
+            let note = if planned {
+                "official prices · only the surplus over the plan is for sale · the faction \
+                 adds a premium for goods it's short of"
+            } else {
+                "prices rise as you buy and fall as you sell · selling pays 90% of the market price"
+            };
+            ui.label(RichText::new(note).size(11.0).color(CREAM_DIM));
             ui.add_space(4.0);
             market_table(ui, w, here, capacity, actions);
             ui.add_space(6.0);
@@ -333,6 +337,293 @@ fn trade_screen(ctx: &egui::Context, w: &World, here: SettlementId, actions: &mu
             );
         },
     );
+    runs_panel(ctx, w, here, actions);
+}
+
+/// Beside the market (issue #160): what to buy here and where to take
+/// it, from the prices a pilot hears (this system and one jump out), and
+/// where the hold's own goods sell best.
+fn runs_panel(ctx: &egui::Context, w: &World, here: SettlementId, actions: &mut Vec<Action>) {
+    let runs = w.trade_runs(4);
+    panel(
+        ctx,
+        Panel {
+            id: "trade-runs",
+            title: "Trade runs",
+            anchor: Align2::LEFT_TOP,
+            offset: [760.0, 150.0],
+            width: 470.0,
+            collapsible: None,
+        },
+        |ui| {
+            ui.spacing_mut().item_spacing.y = 6.0;
+            let held: Vec<Good> = Good::ALL
+                .into_iter()
+                .filter(|&g| w.player.cargo[g] >= 1.0)
+                .collect();
+            if !held.is_empty() {
+                section(ui, "Your cargo sells at");
+                for &good in &held {
+                    cargo_row(ui, w, here, good, actions);
+                }
+                ui.add_space(6.0);
+            }
+            section(ui, "Buy here, sell there");
+            ui.label(
+                RichText::new(
+                    "today's prices, heard from this system and one jump out · \
+                     for as much as your hold and purse take",
+                )
+                .size(11.0)
+                .color(CREAM_DIM),
+            );
+            for run in &runs {
+                run_card(ui, w, run, actions);
+            }
+            if runs.is_empty() {
+                no_runs(ui, w, here, actions);
+            }
+        },
+    );
+}
+
+/// Where a port is, for a line under its name: its system unless it's
+/// this one, and how far.
+fn port_line(w: &World, to: SettlementId, jumps: u32) -> String {
+    let s = &w.galaxy.settlements[to];
+    let economy = economy_name(w.galaxy.factions[s.owner].economy);
+    if jumps == 0 {
+        format!("this system · {economy} economy")
+    } else {
+        format!(
+            "{} · {} · {economy} economy",
+            w.galaxy.systems[s.system].name,
+            crate::hud::jumps_text(jumps)
+        )
+    }
+}
+
+/// One run: the good and what it clears, where it goes, both ends' sums,
+/// and a key that buys the lot and sets the course.
+fn run_card(ui: &mut egui::Ui, w: &World, run: &crate::world::Run, actions: &mut Vec<Action>) {
+    let dest = &w.galaxy.settlements[run.to];
+    crate::contracts_ui::card(ui, VFD, |ui| {
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.set_width(300.0);
+                ui.spacing_mut().item_spacing.y = 1.0;
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(run.good.name().to_uppercase())
+                            .font(display(26.0))
+                            .color(CREAM),
+                    );
+                    ui.label(RichText::new("▶").color(CREAM_DIM));
+                    ui.label(
+                        RichText::new(dest.name.to_uppercase())
+                            .font(display(20.0))
+                            .color(CREAM),
+                    );
+                });
+                ui.label(
+                    RichText::new(port_line(w, run.to, run.jumps))
+                        .size(11.0)
+                        .color(CREAM_DIM),
+                );
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    ui.label(
+                        RichText::new(format!("{:.0} t for {}", run.tonnes, credits(run.cost)))
+                            .font(mono(13.0))
+                            .color(AMBER),
+                    );
+                    ui.label(RichText::new("· fetches").size(12.0).color(CREAM_DIM));
+                    ui.label(
+                        RichText::new(credits(run.value))
+                            .font(mono(13.0))
+                            .color(VFD),
+                    );
+                });
+                let premium = w.premium(run.to, run.good, run.tonnes);
+                if premium >= 1.0 {
+                    ui.label(
+                        RichText::new(format!(
+                            "{} of it the faction's premium: they're short",
+                            credits(premium)
+                        ))
+                        .size(11.0)
+                        .color(CREAM_DIM),
+                    );
+                }
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
+                    ui.spacing_mut().item_spacing.y = 4.0;
+                    glow_label(ui, &format!("+{}", credits(run.profit())), mono(20.0), VFD);
+                    if push(
+                        ui,
+                        "BUY & GO",
+                        mono(13.0),
+                        Look::Tint(AMBER),
+                        true,
+                        Vec2::new(96.0, 28.0),
+                    )
+                    .on_hover_text("buy the lot and set course for where it sells")
+                    .clicked()
+                    {
+                        actions.push(Action::TakeRun(*run));
+                    }
+                });
+            });
+        });
+    });
+}
+
+/// A good in the hold: where it fetches most within one jump, and a key
+/// to head there (or word that it's here).
+fn cargo_row(
+    ui: &mut egui::Ui,
+    w: &World,
+    here: SettlementId,
+    good: Good,
+    actions: &mut Vec<Action>,
+) {
+    let have = w.player.cargo[good].floor();
+    let best = w.buyers(good, have, 1).into_iter().next();
+    ui.horizontal(|ui| {
+        ui.set_min_height(30.0);
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+        ui.label(
+            RichText::new(format!("{have:.0} t {}", good.name()))
+                .font(mono(14.0))
+                .color(CREAM),
+        );
+        let Some(b) = best else {
+            ui.label(
+                RichText::new("· nobody in reach can pay for it")
+                    .size(12.0)
+                    .color(CREAM_DIM),
+            );
+            return;
+        };
+        let name = if b.at == here {
+            "here".to_owned()
+        } else {
+            w.galaxy.settlements[b.at].name.clone()
+        };
+        ui.label(RichText::new(format!("· {name}")).size(12.0).color(CREAM));
+        if b.at != here {
+            ui.label(
+                RichText::new(crate::hud::jumps_text(b.jumps))
+                    .size(11.0)
+                    .color(CREAM_DIM),
+            );
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if b.at == here {
+                ui.label(RichText::new("SELL ◀").font(mono(12.0)).color(VFD));
+            } else if w.player.sell_at == Some(b.at) {
+                crate::hud::tag(ui, "COURSE SET", AMBER);
+            } else if push(
+                ui,
+                "GO",
+                mono(13.0),
+                Look::Tint(AMBER),
+                true,
+                Vec2::new(44.0, 26.0),
+            )
+            .on_hover_text("set course for where it sells best")
+            .clicked()
+            {
+                actions.push(Action::Head(b.at));
+            }
+            glow_label(ui, &credits(b.per_t * have), mono(15.0), VFD);
+        });
+    });
+}
+
+/// Why there's no run from here, and where to look instead.
+fn no_runs(ui: &mut egui::Ui, w: &World, here: SettlementId, actions: &mut Vec<Action>) {
+    ui.add_space(6.0);
+    let capacity = w.stats().cargo_t;
+    let free = capacity - w.player.cargo_t();
+    let text = if free < 1.0 {
+        "The hold is full. Sell or deliver what you carry to buy more."
+    } else {
+        "Nothing on sale here fetches enough more within one jump to be worth the trip."
+    };
+    ui.label(RichText::new(text).color(CREAM));
+    let planned = w.galaxy.factions[w.galaxy.settlements[here].owner].economy
+        == retrox_sim::EconomyModel::Planned;
+    if free < 1.0 {
+        return;
+    }
+    if !planned {
+        ui.label(
+            RichText::new("Markets move daily: check back, or try another port.")
+                .size(11.0)
+                .color(CREAM_DIM),
+        );
+        return;
+    }
+    ui.label(
+        RichText::new(
+            "Planned economies hold one price everywhere, so the money is in market space, \
+             where prices float, and across its border.",
+        )
+        .size(12.0)
+        .color(CREAM_DIM),
+    );
+    ui.label(
+        RichText::new("Meanwhile CONTRACTS and mining pay anywhere.")
+            .size(12.0)
+            .color(CREAM_DIM),
+    );
+    let Some((port, jumps)) = w.nearest_market_space() else {
+        return;
+    };
+    let system = w.galaxy.settlements[port].system;
+    ui.add_space(4.0);
+    crate::contracts_ui::card(ui, AMBER, |ui| {
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 1.0;
+                ui.label(
+                    RichText::new("NEAREST MARKET SPACE")
+                        .font(mono(11.0))
+                        .color(AMBER),
+                );
+                ui.label(
+                    RichText::new(w.galaxy.settlements[port].name.to_uppercase())
+                        .font(display(22.0))
+                        .color(CREAM),
+                );
+                ui.label(
+                    RichText::new(port_line(w, port, jumps))
+                        .size(11.0)
+                        .color(CREAM_DIM),
+                );
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let set = w.course == Some(system);
+                if set {
+                    crate::hud::tag(ui, "COURSE SET", AMBER);
+                } else if push(
+                    ui,
+                    "PLOT COURSE",
+                    mono(13.0),
+                    Look::Tint(AMBER),
+                    true,
+                    Vec2::new(110.0, 28.0),
+                )
+                .clicked()
+                {
+                    actions.push(Action::PlotCourse(Some(system)));
+                }
+            });
+        });
+    });
 }
 
 /// Column positions across the market table, from its left edge.
@@ -356,13 +647,18 @@ fn market_table(
     let economy = &w.galaxy.settlements[here].economy;
     let market = &economy.market;
     let model = w.galaxy.factions[w.galaxy.settlements[here].owner].economy;
+    let planned = model == retrox_sim::EconomyModel::Planned;
     let width = ui.available_width();
     let (head, _) = ui.allocate_exact_size(Vec2::new(width, 18.0), Sense::hover());
     let painter = ui.painter();
     let x0 = head.left() + 10.0;
     for (i, (x, text, align)) in [
         (x0, "GOOD", Align2::LEFT_CENTER),
-        (head.left() + COL_STOCK, "STOCK", Align2::RIGHT_CENTER),
+        (
+            head.left() + COL_STOCK,
+            if planned { "FOR SALE" } else { "STOCK" },
+            Align2::RIGHT_CENTER,
+        ),
         (head.left() + COL_BUY, "BUY", Align2::RIGHT_CENTER),
         (head.left() + COL_SELL, "SELL", Align2::RIGHT_CENTER),
         (head.left() + COL_HOLD, "HOLD", Align2::RIGHT_CENTER),
@@ -399,7 +695,8 @@ fn market_table(
     );
     ui.spacing_mut().item_spacing.y = 0.0;
     for (i, good) in Good::ALL.into_iter().enumerate() {
-        let stock = market.stock[good];
+        // A planned market sells only its surplus over the plan.
+        let stock = trade::for_sale(market, model, good);
         let have = w.player.cargo[good];
         let (row, _) = ui.allocate_exact_size(Vec2::new(width, 38.0), Sense::hover());
         let painter = ui.painter();
@@ -421,6 +718,7 @@ fn market_table(
                 if shortage { ALARM } else { VFD },
             );
         }
+        let premium = w.premium(here, good, 1.0);
         let note = if shortage {
             Some(("SHORTAGE", ALARM))
         } else if surplus {
@@ -460,7 +758,25 @@ fn market_table(
         let buy = trade::buy_cost(market, model, good, 1.0);
         let sell = trade::sell_value(market, model, good, 1.0);
         cell(COL_BUY, format!("{buy:.2}"), AMBER);
-        cell(COL_SELL, format!("{sell:.2}"), VFD);
+        if premium >= 0.5 {
+            // What the faction adds for a good it's short of.
+            painter.text(
+                Pos2::new(row.left() + COL_SELL, y - 6.0),
+                Align2::RIGHT_CENTER,
+                format!("{sell:.2}"),
+                mono(15.0),
+                VFD,
+            );
+            painter.text(
+                Pos2::new(row.left() + COL_SELL, y + 10.0),
+                Align2::RIGHT_CENTER,
+                format!("+{premium:.0} PREMIUM"),
+                mono(10.0),
+                VFD,
+            );
+        } else {
+            cell(COL_SELL, format!("{sell:.2}"), VFD);
+        }
         cell(
             COL_HOLD,
             format!("{have:.0} t"),

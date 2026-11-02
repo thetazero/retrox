@@ -159,7 +159,8 @@ fn first_steps(ui: &mut egui::Ui) {
         ui,
         "Mine: fly into an asteroid field (∴ in NAVIGATION), [G] to prospect, hold [LMB] on the \
          veins, and sell the ore. Skim: fast travel to a gas giant, dive into its clouds and \
-         hold [LMB] to scoop gas. Trade: buy what's in surplus, sell where it's short.",
+         hold [LMB] to scoop gas. Trade: open TRADE, and TRADE RUNS beside the market lists \
+         what sells for more within one jump; BUY & GO buys the lot and sets your course.",
         CREAM_DIM,
     );
     ui.add_space(6.0);
@@ -224,8 +225,16 @@ fn living(ui: &mut egui::Ui) {
     topic(
         ui,
         "Trade",
-        "Every market's prices follow its stock. Buy where a good is in SURPLUS, sell where \
-         there's a SHORTAGE. Prices move as you buy and sell, so big loads earn less per tonne.",
+        "Every market's prices follow its stock: cheap where a good is in SURPLUS, dear where \
+         there's a SHORTAGE. You hear today's prices from this system and one jump out, and \
+         TRADE RUNS, beside the market, works them out for you: what to buy here, where it \
+         sells best, what the lot costs and what it should fetch. BUY & GO buys it and sets \
+         your course; the hint and NAVIGATION (tagged CARGO) lead you there, and the teal \
+         SELL keys sell it. Prices move as you buy and sell, and by the time you arrive, so \
+         big loads earn less per tonne and a run can come in under its estimate. Planned \
+         economies hold one price everywhere, so there's nothing to earn between them: the \
+         money is in market space and across its border, and TRADE RUNS names the nearest \
+         market space when nothing pays from where you are.",
     );
     topic(
         ui,

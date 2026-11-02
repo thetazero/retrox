@@ -1270,6 +1270,47 @@ large ship (a trader, a few), which leaves fleets and capital ships
 bench's travel times (#122); whether the ladder needs stretching again
 goes with #149.
 
+#### 7.8.1 Trade runs (#160)
+
+A new player couldn't tell how to trade: the trade screen showed only
+this market. Decided:
+
+- **TRADE RUNS**, a panel beside the market, works out what a pilot
+  can hear (§7.3: this system and one jump out, today's prices): for
+  each good on sale here, the lot the hold, purse and stock allow, and
+  the port in reach that pays most for it, if it clears 5% of the cost
+  and 20 cr. At most four, one per good, best first by profit per trip
+  (a jump counts as 2.5 trips in-system: the climb, the jump, the
+  crossing). Each card shows the lot's cost here, what it fetches
+  there (for the whole lot, since selling moves a market) and the
+  profit. Prices still move on the way, so a run can come in over or
+  under its estimate.
+- **BUY & GO** buys the lot and heads for where it sells: it targets a
+  port in this system or plots the course to another. The hold
+  remembers where it's bound (`Player::sell_at`, saved), so the
+  first-steps hint, NAVIGATION's CARGO tag and the hub lead there as
+  they do for a contract, and the hint at the port says to sell. It's
+  forgotten once the hold's own goods are sold. With goods aboard, the
+  panel lists where each sells best in reach, with GO.
+- **Planned economies.** One price holds everywhere in planned space,
+  so with nothing but official prices there'd be no run from half the
+  starts. §7.8 already gives a planned faction's delivery premium to
+  whoever carries the goods, and NPC haulers were paid it; now the
+  player is too, on any sale to a settlement below target (the same
+  formula: up to 80% of base price at an empty market, nothing at
+  target, reined in by the faction's debt), paid from the faction's
+  treasury. The market table shows it under SELL as "+N PREMIUM". In
+  turn a planned market **sells only its surplus over target**, as NPC
+  haulers buy (the STOCK column reads FOR SALE there), or a trader could
+  buy below target and sell it straight back for the premium. With
+  both, 10 of 12 starts (seeds 1–12) show a run; from the other two,
+  and anywhere else with none, the panel names the **nearest market
+  space** by jumps (which economy a faction runs is public, unlike its
+  prices) with PLOT COURSE, and says contracts and mining pay anywhere.
+- Prices further out than a jump stay unknown: a remembered price
+  list for ports the player has visited is the natural next step for
+  "a trader still learns the rest by going" (§7.3), not built yet.
+
 ## 8. Art direction & audio
 
 **Hopeful Soviet-inspired retro-futurism**, a mix of tones across
@@ -1355,9 +1396,10 @@ player.
   card draw from the same key tables, so they can't disagree.
 - The suggested first run is a freight contract: it pays for sure and
   walks the player through launching, the galaxy map, a jump, fast travel
-  and docking. Mining and trade are offered as the other ways in. On the
-  dispatch board the hint names the nearest job the player can take
-  (#129), the quickest to pay. Delivery says what came back in full: the
+  and docking. Mining and trade are offered as the other ways in (the
+  hub's first hint names all three; trade is led by TRADE RUNS,
+  §7.8.1). On the dispatch board the hint names the nearest job the
+  player can take (#129), the quickest to pay. Delivery says what came back in full: the
   fee and the deposit, so the jump in the purse adds up.
 - **Edge arrows** (#117): a target off screen gets an arrow at the edge
   of the view (amber for the target, red for hostiles) pointing the short
