@@ -7,6 +7,9 @@
 //!   Each phase's time is divided by what it works on, so the numbers
 //!   compare directly with the per-actor aims: settlement phases per
 //!   settlement-day, hauling phases per fleet-day.
+//! - **Bubble:** the same galaxy with the bubble on its busiest system for
+//!   60 days: what a day costs while ships there fly for real, in ms of
+//!   wall time and autopilot steps per flight-day (issue #115).
 //! - **Prehistory:** N years from the cradle, in seconds per simulated year
 //!   (overall, and every 25 years as the galaxy grows), with per-phase
 //!   totals.
@@ -85,6 +88,40 @@ fn ns(d: Duration, per: f64) -> f64 {
     d.as_nanos() as f64 / per.max(1.0)
 }
 
+struct Bubble {
+    flights: f64,
+    ms_per_day: f64,
+    steps_per_flight_day: f64,
+}
+
+/// Centre the bubble on the busiest system (the most-populous capital's,
+/// where the player starts) and time 60 days of it.
+fn bubble(state: &mut GalaxyState) -> Bubble {
+    let centre = state
+        .factions
+        .values()
+        .filter_map(|f| state.settlements.get(f.capital))
+        .max_by(|a, b| a.economy.population.total_cmp(&b.economy.population))
+        .map(|s| s.system);
+    retrox_sim::bubble::set_centre(state, centre);
+    let days = 60;
+    let mut flight_days = 0;
+    let steps = retrox_sim::flight::steps_flown();
+    let start = Instant::now();
+    for _ in 0..days {
+        flight_days += state.bubble.flights.len();
+        retrox_sim::tick(state);
+    }
+    let wall = start.elapsed();
+    let steps = retrox_sim::flight::steps_flown() - steps;
+    retrox_sim::bubble::set_centre(state, None);
+    Bubble {
+        flights: flight_days as f64 / days as f64,
+        ms_per_day: wall.as_secs_f64() * 1000.0 / days as f64,
+        steps_per_flight_day: steps as f64 / flight_days.max(1) as f64,
+    }
+}
+
 pub fn run_bench(seed: u64, years: u64) {
     // Actors, on the static galaxy.
     let mut state = generate(seed, &GalaxyConfig::default());
@@ -112,6 +149,13 @@ pub fn run_bench(seed: u64, years: u64) {
         println!("  {:<12} {:>10.0} ns per {unit}", phase.name, per);
     }
     println!("  settlement books (production + prices): {books:.0} ns per settlement-day");
+
+    // The bubble, on the same galaxy.
+    let bubble = bubble(&mut state);
+    println!(
+        "bubble (busiest system, 60 days): {:.0} flights on average; {:.2} ms per day, {:.0} autopilot steps per flight-day",
+        bubble.flights, bubble.ms_per_day, bubble.steps_per_flight_day
+    );
 
     // Prehistory, from the cradle.
     let mut state = generate_cradle(seed, &GalaxyConfig::default());
@@ -153,7 +197,9 @@ pub fn run_bench(seed: u64, years: u64) {
         })
         .collect();
     println!(
-        "BENCH {{\"seed\":{seed},\"ns_per_settlement_day\":{per_settlement:.0},\"ns_books_per_settlement_day\":{books:.0},\"ns_per_fleet_day\":{per_fleet:.0},\"static_ms_per_day\":{per_day_ms:.3},\"prehistory_years\":{years},\"prehistory_seconds\":{seconds:.2},\"prehistory_settlements\":{},\"prehistory_phases_s\":{{{}}}}}",
+        "BENCH {{\"seed\":{seed},\"ns_per_settlement_day\":{per_settlement:.0},\"ns_books_per_settlement_day\":{books:.0},\"ns_per_fleet_day\":{per_fleet:.0},\"static_ms_per_day\":{per_day_ms:.3},\"bubble_ms_per_day\":{:.3},\"bubble_steps_per_flight_day\":{:.0},\"prehistory_years\":{years},\"prehistory_seconds\":{seconds:.2},\"prehistory_settlements\":{},\"prehistory_phases_s\":{{{}}}}}",
+        bubble.ms_per_day,
+        bubble.steps_per_flight_day,
         state.settlements.len(),
         phases.join(",")
     );
