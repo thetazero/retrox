@@ -5,7 +5,8 @@
 //! the galaxy simulates around you. Esc pauses.
 //!
 //! Development flags skip the title and drop straight into a fresh game:
-//! `--seed N`, `--station`, `--undocked`, `--map`, `--ship <hull>`,
+//! `--seed N`, `--station`, `--undocked`, `--map`, `--course <jumps>`,
+//! `--ship <hull>`,
 //! `--ship-view <deg>`, `--screenshot <path.ppm>`. `--menu <page>` opens a
 //! menu page instead (`title`, `new`, `load`, `settings`, or `pause` or `quit`
 //! over a fresh game), for screenshots. `--keys` plays a key script
@@ -68,6 +69,9 @@ struct Flags {
     take_contract: bool,
     /// Start with the galaxy map open.
     map: bool,
+    /// Plot a course to the nearest system at least this many jumps away
+    /// (for checking the map's course display).
+    course: Option<usize>,
     /// Start in this stock ship instead.
     ship: Option<String>,
     /// With `ship`: put these sections (comma-separated ids) in its mounts,
@@ -102,6 +106,7 @@ impl Flags {
             contracts: has("--contracts") || has("--contract"),
             take_contract: has("--contract"),
             map: has("--map"),
+            course: value("--course").and_then(|s| s.parse().ok()),
             ship: value("--ship"),
             sections: value("--sections"),
             screenshot: value("--screenshot").map(PathBuf::from),
@@ -125,6 +130,7 @@ impl Flags {
                     || self.field
                     || self.contracts
                     || self.map
+                    || self.course.is_some()
                     || self.ship.is_some()
                     || self.ship_view.is_some()
                     || self.screenshot.is_some()
@@ -170,6 +176,22 @@ impl Flags {
             world.act(Action::Scan);
         }
         world.map_open = self.map;
+        if let Some(jumps) = self.course {
+            let here = world.galaxy.systems[world.system].position;
+            let mut systems: Vec<_> = world
+                .galaxy
+                .systems
+                .iter()
+                .map(|(id, s)| (id, s.position))
+                .collect();
+            systems.sort_by(|a, b| here.distance(a.1).total_cmp(&here.distance(b.1)));
+            let dest = systems
+                .into_iter()
+                .find(|&(id, _)| world.route(id).is_some_and(|r| r.len() > jumps));
+            if let Some((dest, _)) = dest {
+                world.act(Action::PlotCourse(Some(dest)));
+            }
+        }
         world
     }
 }
