@@ -1260,9 +1260,9 @@ Decided while bringing every screen into one style (issue #77):
   the text over anything bright.) The rock readout stands
   beside the rock's brackets (which close round the rock as it looks on
   screen), flipping to its left near the screen's edge, never over it.
-  HUD panels are near opaque, menu pages fully opaque: the surface blends
-  in linear light, so a bright station shows through far more than a
-  panel's alpha suggests. Plates are near opaque for the same reason.
+  HUD panels, plates and menu pages are opaque (#156): the surface blends
+  in linear light, so even 248 alpha let a sunlit rock show through a
+  panel.
 - **The HUD fits the window** (#156): it is laid out for 1600 × 960, and
   in a smaller window the whole UI zooms down with it (to no less than
   0.6 of the player's UI scale) rather than letting corner panels pile
@@ -1338,11 +1338,15 @@ Decided while fixing nearby stars that drew as blurred discs (issue #121):
 Decided while making mining in a belt look finished (issue #156):
 
 - **Rock is dark stone**, not painted hull: its own surface, with an
-  albedo of a fifth or so, mottled light and dark, pitted and gritty by a
-  bump map that scales with the rock (a boulder and a quarry are equally
-  rough), and pale flecks close up. It takes a hard key light and only a
-  faint cool fill, so a rock with the sun behind it is a dark shape with
-  a lit edge. Fine detail fades out before it can sparkle.
+  albedo of a fifth or less, each rock leaning umber, slate or rust,
+  mottled light and dark, pitted and gritty by a bump map that scales
+  with the rock (a boulder and a quarry are equally rough), with metre
+  grit and flecks on a quarry seen up close. Fine detail fades out before
+  it can sparkle.
+- **Rock in shade still reads as rock**: its fill is the sky's ambient
+  mostly greyed (bare rock never goes lavender) plus a little light from
+  behind the camera, and with the sun behind it its limb lights up, so a
+  backlit rock shows its facets and pits against the black.
 - **Laser heat glows out of cracks**, dull red going orange, spreading
   over the rock only near the fracture: the rock stays rock.
 - **A breaking rock flashes, it doesn't cover the view**: a soft

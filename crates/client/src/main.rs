@@ -2874,6 +2874,15 @@ fn remote_info(w: &World) -> String {
                 r.damage
             );
         }
+        // The nearest quarry, which may be well past the six nearest rocks.
+        if let Some((d, r)) = near.iter().find(|(_, r)| r.radius > mining::QUARRY_RADIUS) {
+            let (yaw, pitch) = bearing(r.pos - ship);
+            let _ = writeln!(
+                out,
+                "quarry {:?} dist {d:.0} r {:.0} yaw {yaw:.1} pitch {pitch:.1}",
+                r.id, r.radius
+            );
+        }
         if let Some(state) = w.mining.field(*field) {
             let _ = writeln!(out, "nuggets {}", state.nuggets.len());
         }
