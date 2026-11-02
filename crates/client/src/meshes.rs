@@ -196,15 +196,40 @@ pub fn icosphere(subdivisions: u32) -> Mesh {
     }
 }
 
-/// A lumpy, faceted rock of roughly unit radius.
-pub fn rock(seed: u64) -> Mesh {
+/// How finely each level of detail of a rock is cut: an icosphere's
+/// subdivisions. Far specks, rocks across the field, and rocks close up,
+/// fine enough that a quarry's silhouette has no straight edges.
+pub const ROCK_DETAIL: [u32; 3] = [1, 3, 5];
+
+/// A broken rock of roughly unit radius (see [`crate::mining::RockShape`]),
+/// with smooth normals: the shape's own fracture faces and craters give
+/// it its edges, and the shader its grit.
+pub fn rock(seed: u64, subdivisions: u32) -> Mesh {
     let shape = crate::mining::RockShape::new(seed);
-    let mut sphere = icosphere(2);
-    for v in &mut sphere.vertices {
+    let mut m = icosphere(subdivisions);
+    for v in &mut m.vertices {
         let p = Vec3::from(v.pos);
         v.pos = shape.surface(p.normalize_or(Vec3::Y)).into();
     }
-    sphere.flat()
+    smooth_normals(&mut m);
+    m
+}
+
+/// Vertex normals from the faces round each vertex, weighted by area.
+fn smooth_normals(m: &mut Mesh) {
+    let mut sums = vec![Vec3::ZERO; m.vertices.len()];
+    for tri in m.indices.as_chunks::<3>().0 {
+        let [a, b, c] = tri.map(|i| Vec3::from(m.vertices[i as usize].pos));
+        let n = (b - a).cross(c - a);
+        for &i in tri {
+            sums[i as usize] += n;
+        }
+    }
+    for (v, n) in m.vertices.iter_mut().zip(sums) {
+        v.normal = n
+            .normalize_or(Vec3::from(v.pos).normalize_or(Vec3::Y))
+            .into();
+    }
 }
 
 /// A cylinder along +Y from y=0 to y=1, radius 1, capped.

@@ -67,7 +67,7 @@ use winit::window::{CursorGrabMode, Fullscreen, Window, WindowId};
 
 use menu::{Menu, MenuAction, Page};
 use meshes::StationKind;
-use render::{Instance, MeshId, Renderer, SkyVertex, Surface};
+use render::{Instance, MeshId, Renderer, SkyVertex, Surface, VeinKind};
 use save::{GameId, Kind};
 use settings::Settings;
 use world::{Action, Controls, Mode, Place, Screen, World};
@@ -90,6 +90,8 @@ struct Flags {
     /// Start in the field with the biggest sun in its sky, the sun behind
     /// the rock (#156).
     sunward: bool,
+    /// `--quarry [back]`: start by a quarry, front- or backlit.
+    quarry: Option<bool>,
     /// The window's size in logical pixels (`--size 1280x800`).
     size: Option<(f64, f64)>,
     /// Start in space alongside a trader fleet.
@@ -170,8 +172,9 @@ impl Flags {
             cities: has("--cities"),
             colony: has("--colony"),
             station: has("--station"),
-            field: has("--field") || has("--sunward"),
+            field: has("--field") || has("--sunward") || has("--quarry"),
             sunward: has("--sunward"),
+            quarry: has("--quarry").then(|| value("--quarry").as_deref() == Some("back")),
             size: value("--size").and_then(|s| {
                 let (w, h) = s.split_once('x')?;
                 Some((w.parse().ok()?, h.parse().ok()?))
@@ -295,7 +298,9 @@ impl Flags {
         if self.cities && world.start_by_cities().is_none() {
             eprintln!("--cities: no planet with two cities anywhere");
         }
-        let parked = if self.sunward {
+        let parked = if let Some(backlit) = self.quarry {
+            world.start_at_quarry(backlit)
+        } else if self.sunward {
             world.start_sunward()
         } else {
             self.field && world.start_at_field()
@@ -385,7 +390,8 @@ struct Meshes {
     /// shipyard's ships come back without rebuilding.
     ship_cache: std::collections::HashMap<String, (MeshId, meshes::ShipShape)>,
     hangar_bay: MeshId,
-    rocks: Vec<MeshId>,
+    /// Each rock shape at each of [`meshes::ROCK_DETAIL`].
+    rocks: Vec<[MeshId; 3]>,
     /// A unit cube: hull plates flung off in explosions.
     plate: MeshId,
     /// A thin unit ring: shockwaves.
@@ -518,7 +524,10 @@ impl ApplicationHandler for App {
             ship_cache: std::collections::HashMap::new(),
             hangar_bay: renderer.add_mesh(&meshes::hangar_bay()),
             rocks: (0..mining::ROCK_MESHES)
-                .map(|i| renderer.add_mesh(&meshes::rock(mining::rock_mesh_seed(i))))
+                .map(|i| {
+                    meshes::ROCK_DETAIL
+                        .map(|d| renderer.add_mesh(&meshes::rock(mining::rock_mesh_seed(i), d)))
+                })
                 .collect(),
             stations: Vec::new(),
             system_generation: u64::MAX,
@@ -2107,7 +2116,7 @@ fn harvest_glow(
             let rock_r = length * 0.3;
             let bow = q * (Vec3::NEG_Z * length * 0.5);
             let hit = q * (Vec3::NEG_Z * (length * 0.5 + reach));
-            let mesh = meshes.rocks[mining::rock_mesh(seed)];
+            let mesh = meshes.rocks[mining::rock_mesh(seed)][1];
             let spin = Quat::from_rotation_y((clock_s * 0.05 + phase) as f32)
                 * Quat::from_rotation_x(phase as f32);
             out.push((
@@ -2490,6 +2499,30 @@ fn mining_scene(
     let lit = light(center);
     let pulse = (0.6 + 0.4 * (t * 4.0).sin()) as f32;
     let f = &world.galaxy.fields[field];
+    let field_r = f.radius_km * 1000.0;
+    let dust = mining::BELT_DUST as f32;
+    // The belt's dust round the camera, sunlit.
+    let from_centre = cam - center;
+    out.push((
+        meshes.sphere,
+        Instance::new(
+            Mat4::from_scale(Vec3::splat(1.0e6)),
+            [1.0; 3],
+            Surface::Dust,
+            1.0,
+            0.0,
+            lit,
+        )
+        .with_detail(dust)
+        .with_aux([
+            from_centre.x as f32,
+            from_centre.y as f32,
+            from_centre.z as f32,
+            field_r as f32,
+        ]),
+    ));
+    let icy = f.resources.ice > f.resources.ore;
+    rubble_scene(meshes, from_centre, field_r, f.seed, icy, lit, t, out);
     for rock in world.mining.live_rocks(field, f, rocks, t) {
         let pos = center + rock.pos;
         let mut color = match rock.lode.good {
@@ -2502,48 +2535,49 @@ fn mining_scene(
         if rock.worked_out {
             color = color.map(|c| c * 0.6);
         }
-        out.push((
-            meshes.rocks[mining::rock_mesh(rock.seed)],
-            Instance::new(
-                Mat4::from_scale_rotation_translation(
-                    Vec3::splat(rock.radius as f32),
-                    rock.rot.as_quat(),
-                    rel(pos),
-                ),
-                color,
-                Surface::Rock,
-                // Glowing from the laser's work.
-                (rock.damage as f32).powi(2) * 0.25,
-                (rock.seed % 10_000) as f32,
-                lit,
+        let distance = (pos - cam).length();
+        // Veins, once read, on rocks near enough to matter: seams of ore
+        // in the rock (mesh.wgsl).
+        let veins: Vec<Vec3> = if rock.scanned && distance < mining::SCAN_RANGE + rock.radius {
+            rock.vein_marks().collect()
+        } else {
+            Vec::new()
+        };
+        let kind = match (veins.is_empty(), rock.lode.volatile, rock.lode.good) {
+            (true, _, _) => VeinKind::None,
+            (false, true, _) => VeinKind::Volatile,
+            (false, false, retrox_sim::economy::Good::Ice) => VeinKind::Ice,
+            _ => VeinKind::Ore,
+        };
+        let mut instance = Instance::new(
+            Mat4::from_scale_rotation_translation(
+                Vec3::splat(rock.radius as f32),
+                rock.rot.as_quat(),
+                rel(pos),
             ),
-        ));
-        // Veins, once read, on rocks near enough to matter.
-        if rock.scanned && (pos - cam).length() < mining::SCAN_RANGE + rock.radius {
-            let (glow, strength) = if rock.lode.volatile {
-                ([1.0, 0.22, 0.12], 2.0 + 3.0 * pulse)
-            } else {
-                (ore_glow(rock.lode.good), 2.5)
-            };
-            let size = (rock.radius * 0.16).max(0.7) as f32;
-            for v in rock.vein_points() {
-                out.push((
-                    meshes.sphere,
-                    Instance::new(
-                        Mat4::from_scale_rotation_translation(
-                            Vec3::splat(size),
-                            Quat::IDENTITY,
-                            rel(center + v),
-                        ),
-                        glow,
-                        Surface::Star,
-                        strength,
-                        0.0,
-                        [0.0, 1.0, 0.0, 1.0],
-                    ),
-                ));
-            }
+            color,
+            Surface::Rock,
+            // Glowing from the laser's work.
+            (rock.damage as f32).powi(2) * 0.25,
+            (rock.seed % 10_000) as f32,
+            lit,
+        )
+        .with_veins(&veins, kind);
+        // The laser's heat glows round where it cuts. A quarry only glows
+        // there, while it's being cut: its damage is how near the next
+        // boulder is to calving, and lighting the whole face for it read
+        // as a rock on fire.
+        let cut = world
+            .mining
+            .aim
+            .filter(|a| a.rock.id == rock.id)
+            .map(|a| (rock.rot.inverse() * ((a.point - rock.pos) / rock.radius)).as_vec3());
+        if let Some(at) = cut {
+            instance = instance.with_cut(at);
+        } else if rock.radius > mining::QUARRY_RADIUS {
+            instance.params[1] = 0.0;
         }
+        out.push((rock_lod(meshes, rock.seed, rock.radius, distance), instance));
     }
     if let Some(state) = world.mining.field(field) {
         for n in &state.nuggets {
@@ -2551,7 +2585,7 @@ fn mining_scene(
             let spin = Quat::from_rotation_y((t * 0.7 + n.seed as f64 % 6.0) as f32)
                 * Quat::from_rotation_x((t * 0.4) as f32);
             out.push((
-                meshes.rocks[mining::rock_mesh(n.seed)],
+                meshes.rocks[mining::rock_mesh(n.seed)][0],
                 Instance::new(
                     Mat4::from_scale_rotation_translation(
                         Vec3::splat(size),
@@ -2590,6 +2624,129 @@ fn mining_scene(
             ),
         ));
     }
+}
+
+/// Which detail of a rock's mesh to draw, by how big it looks: a speck, a
+/// rock across the field, or one close enough that its outline shows.
+fn rock_lod(meshes: &Meshes, seed: u64, radius: f64, distance: f64) -> MeshId {
+    let looks = radius / distance.max(1.0);
+    let lod = if looks > 0.05 {
+        2
+    } else if looks > 0.006 {
+        1
+    } else {
+        0
+    };
+    meshes.rocks[mining::rock_mesh(seed)][lod]
+}
+
+/// Gravel and boulders between the rocks, too small to work (the
+/// smallest rock worth mining is 8 m across), which make a belt look like
+/// one: dense and deep, thinning toward its edge as the rocks do. Fixed
+/// in the field, so they slide past as the ship flies. Boulders far off
+/// are specks that shrink away before the ship gets near, and gravel
+/// shrinks away from right round the ship, so nothing that can't be mined
+/// looks as if it could be (DESIGN §8.7).
+#[allow(clippy::too_many_arguments)]
+fn rubble_scene(
+    meshes: &Meshes,
+    from_centre: DVec3,
+    field_r: f64,
+    field_seed: u64,
+    icy: bool,
+    lit: [f32; 4],
+    t: f64,
+    out: &mut Vec<(MeshId, Instance)>,
+) {
+    // Cell size, reach, sizes (radius, metres), share of cells with one,
+    // how near it shows, and a salt.
+    let layers = [
+        (110.0, 1400.0, (0.3f64, 1.4f64), 0.5, 120.0, 1u64),
+        (480.0, 7000.0, (2.5, 5.5), 0.6, 1600.0, 2u64),
+    ];
+    let color = if icy {
+        [0.6, 0.66, 0.72]
+    } else {
+        [0.42, 0.37, 0.33]
+    };
+    for (cell, reach, (small, big), share, near, layer) in layers {
+        let lo = ((from_centre - DVec3::splat(reach)) / cell).floor();
+        let hi = ((from_centre + DVec3::splat(reach)) / cell).floor();
+        for x in lo.x as i64..=hi.x as i64 {
+            for y in lo.y as i64..=hi.y as i64 {
+                for z in lo.z as i64..=hi.z as i64 {
+                    let c = DVec3::new(x as f64, y as f64, z as f64) * cell;
+                    // As the rocks lie: flattened, thinning out.
+                    let rr = DVec3::new(c.x, c.y / 0.35, c.z).length() / field_r;
+                    if rr > 1.0 {
+                        continue;
+                    }
+                    let h = cell_hash(x, y, z, layer ^ field_seed);
+                    let thick = share * f64::from(1.0 - smoothstep(0.75, 1.0, rr as f32));
+                    if unit_of(h) > thick {
+                        continue;
+                    }
+                    let h2 = cell_hash(x, y, z, layer.wrapping_mul(977) ^ field_seed);
+                    let jitter = DVec3::new(unit_of(h2), unit_of(h2 >> 21), unit_of(h2 >> 42));
+                    let p = c + jitter * cell;
+                    let d = (p - from_centre).length();
+                    if d > reach {
+                        continue;
+                    }
+                    let fade = smoothstep(reach as f32, reach as f32 * 0.75, d as f32)
+                        * smoothstep(near as f32 * 0.6, near as f32, d as f32);
+                    if fade <= 0.0 {
+                        continue;
+                    }
+                    let size =
+                        small * (big / small).powf(unit_of(h >> 11).powi(2)) * f64::from(fade);
+                    let axis = Vec3::new(
+                        unit_of(h >> 7) as f32 - 0.5,
+                        unit_of(h >> 19) as f32 - 0.5,
+                        unit_of(h >> 31) as f32 - 0.5,
+                    )
+                    .normalize_or(Vec3::Y);
+                    let turn =
+                        (unit_of(h >> 43) * 6.3 + t * 0.2 / size.sqrt()) % std::f64::consts::TAU;
+                    let seed = h % 10_000;
+                    out.push((
+                        rock_lod(meshes, seed, size, d),
+                        Instance::new(
+                            Mat4::from_scale_rotation_translation(
+                                Vec3::splat(size as f32),
+                                Quat::from_axis_angle(axis, turn as f32),
+                                (p - from_centre).as_vec3(),
+                            ),
+                            color,
+                            Surface::Rock,
+                            0.0,
+                            seed as f32,
+                            lit,
+                        )
+                        .with_veins(&[], VeinKind::None),
+                    ));
+                }
+            }
+        }
+    }
+}
+
+/// A well-mixed hash of a lattice cell.
+fn cell_hash(x: i64, y: i64, z: i64, salt: u64) -> u64 {
+    let mut h = (x as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        ^ (y as u64).wrapping_mul(0xc2b2_ae3d_27d4_eb4f)
+        ^ (z as u64).wrapping_mul(0x1656_67b1_9e37_79f9)
+        ^ salt.wrapping_mul(0x27d4_eb2f_1656_67c5);
+    h ^= h >> 31;
+    h = h.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    h ^= h >> 29;
+    h = h.wrapping_mul(0x94d0_49bb_1331_11eb);
+    h ^ (h >> 32)
+}
+
+/// 21 bits of a hash as 0..1.
+fn unit_of(h: u64) -> f64 {
+    (h & 0x1f_ffff) as f64 / 0x1f_ffff as f64
 }
 
 /// Hermite step from 0 at `a` to 1 at `b`.
