@@ -1,10 +1,15 @@
-//! `retrox-client` — the game. For now: fly a placeholder ship around a
+//! `retrox-client` — the game. For now: fly your ship around a
 //! procedurally generated star system, fast travel between planets, dock,
-//! land, and jump along hyperlanes while the galaxy simulates around you.
+//! land, refit or buy ships in the hangar, and jump along hyperlanes while
+//! the galaxy simulates around you.
 
+mod hangar;
+mod hangar_ui;
 mod hud;
 mod meshes;
 mod render;
+mod station_ui;
+mod trade;
 mod world;
 
 use std::collections::HashSet;
@@ -23,7 +28,7 @@ use winit::window::{CursorGrabMode, Window, WindowId};
 
 use meshes::StationKind;
 use render::{Instance, MeshId, Renderer, SkyVertex, Surface};
-use world::{Action, Controls, Mode, Place, World};
+use world::{Action, Controls, Mode, Place, Screen, World};
 
 fn main() {
     let seed = std::env::args()
@@ -35,6 +40,8 @@ fn main() {
     event_loop.set_control_flow(ControlFlow::Poll);
     let undocked = std::env::args().any(|a| a == "--undocked");
     let station = std::env::args().any(|a| a == "--station");
+    // `--ship <hull>`: start in that stock ship instead (for testing).
+    let ship = std::env::args().skip_while(|a| a != "--ship").nth(1);
     // `--screenshot <path.ppm>`: save the 90th frame and quit (for checking
     // visual changes without a person at the window).
     let screenshot = std::env::args()
@@ -45,6 +52,7 @@ fn main() {
         seed,
         undocked,
         station,
+        ship,
         screenshot,
         running: None,
     };
@@ -57,13 +65,20 @@ struct App {
     undocked: bool,
     /// Start docked at a station, in the first system that has one.
     station: bool,
+    ship: Option<String>,
     screenshot: Option<std::path::PathBuf>,
     running: Option<Running>,
 }
 
 struct Meshes {
     sphere: MeshId,
+    /// The player's ship, generated from its fit.
     ship: MeshId,
+    ship_shape: meshes::ShipShape,
+    /// Every ship mesh built so far, by [`fit_key`]: refits and the
+    /// shipyard's ships come back without rebuilding.
+    ship_cache: std::collections::HashMap<String, (MeshId, meshes::ShipShape)>,
+    hangar_bay: MeshId,
     rocks: Vec<MeshId>,
     /// One mesh per station in the current system, aligned with `view.stations`.
     stations: Vec<MeshId>,
@@ -104,6 +119,9 @@ impl ApplicationHandler for App {
         if self.station {
             world.start_at_station();
         }
+        if let Some(fit) = self.ship.as_deref().and_then(retrox_content::ships::stock) {
+            world.player.ship.fit = fit;
+        }
         if self.undocked {
             // Out by a station if there's one here, else in orbit.
             if let (Mode::Landed { .. }, Some(&s)) = (world.mode, world.view.stations.first()) {
@@ -123,7 +141,10 @@ impl ApplicationHandler for App {
 
         let meshes = Meshes {
             sphere: renderer.add_mesh(&meshes::icosphere(5)),
-            ship: renderer.add_mesh(&meshes::placeholder_ship()),
+            ship: MeshId::default(),
+            ship_shape: meshes::ShipShape::default(),
+            ship_cache: std::collections::HashMap::new(),
+            hangar_bay: renderer.add_mesh(&meshes::hangar_bay()),
             rocks: (0..8)
                 .map(|i| renderer.add_mesh(&meshes::rock(i * 7919 + 13)))
                 .collect(),
@@ -286,13 +307,44 @@ impl Running {
                 }
                 KeyCode::Escape => {
                     self.set_captured(false);
-                    None
+                    // Back out of a docked screen to the menu.
+                    (self.world.docked_at().is_some() && self.world.screen != Screen::Hub)
+                        .then_some(Action::Open(Screen::Hub))
                 }
                 _ => None,
             };
             actions.extend(action);
         }
         (controls, actions)
+    }
+
+    /// The ship to show in the hangar bay, if a bay screen is open: yours
+    /// in the hangar and trading, the one being looked at in the shipyard.
+    fn bay_fit(&self) -> Option<retrox_sim::ship::Loadout> {
+        self.world.docked_at()?;
+        match self.world.screen {
+            // Trading happens in the bay too, with your ship being loaded.
+            Screen::Hangar | Screen::Trade => Some(self.world.player.ship.fit.clone()),
+            Screen::Shipyard => Some(
+                self.world
+                    .inspect
+                    .and_then(|h| retrox_content::ships::stock(h.id))
+                    .unwrap_or_else(|| self.world.player.ship.fit.clone()),
+            ),
+            _ => None,
+        }
+    }
+
+    /// A fit's mesh, built on first use.
+    fn ship_mesh(&mut self, fit: &retrox_sim::ship::Loadout) -> (MeshId, meshes::ShipShape) {
+        let key = fit_key(fit);
+        if let Some(found) = self.meshes.ship_cache.get(&key) {
+            return found.clone();
+        }
+        let (mesh, shape) = meshes::ship(fit);
+        let built = (self.renderer.add_mesh(&mesh), shape);
+        self.meshes.ship_cache.insert(key, built.clone());
+        built
     }
 
     fn frame(&mut self) {
@@ -309,6 +361,8 @@ impl Running {
             self.set_captured(false);
         }
 
+        let fit = self.world.player.ship.fit.clone();
+        (self.meshes.ship, self.meshes.ship_shape) = self.ship_mesh(&fit);
         if self.meshes.system_generation != self.world.system_generation {
             self.meshes.stations = self
                 .world
@@ -332,9 +386,19 @@ impl Running {
             w as f32 / h.max(1) as f32,
             0.5,
         );
-        let view = Mat4::from_quat(cam_rot.as_quat().inverse());
-        let view_proj = proj * view;
-        let instances = scene(&self.world, &self.meshes, cam_pos);
+        let (view_proj, instances) = match self.bay_fit() {
+            // In the hangar or shipyard: a ship on the bay floor.
+            Some(fit) => {
+                let (mesh, _) = self.ship_mesh(&fit);
+                let time = self.start.elapsed().as_secs_f32();
+                let (view, instances) = bay_scene(&self.meshes, mesh, &fit, time);
+                (proj * view, instances)
+            }
+            None => {
+                let view = Mat4::from_quat(cam_rot.as_quat().inverse());
+                (proj * view, scene(&self.world, &self.meshes, cam_pos))
+            }
+        };
 
         let raw_input = self.egui_state.take_egui_input(&self.renderer.window);
         let mut ui_actions = Vec::new();
@@ -517,17 +581,17 @@ fn scene(world: &World, meshes: &Meshes, cam: DVec3) -> Vec<(MeshId, Instance)> 
             )
             .with_detail(0.5),
         ));
-        // Engine plume, growing with the throttle.
+        // Engine plumes, growing with the throttle.
         let thrust = world.ship.throttle.max(0.0) as f32;
-        if thrust > 0.01 {
-            let len = 0.8 + 2.5 * thrust;
+        for &(nozzle, r) in meshes.ship_shape.nozzles.iter().filter(|_| thrust > 0.01) {
+            let len = r * (1.0 + 3.0 * thrust);
             out.push((
                 meshes.sphere,
                 Instance::new(
                     Mat4::from_scale_rotation_translation(
-                        Vec3::new(0.7, 0.7, len),
+                        Vec3::new(r * 0.8, r * 0.8, len),
                         rot,
-                        rel(pos) + rot * Vec3::new(0.0, 0.0, 13.0 + len * 0.6),
+                        rel(pos) + rot * (nozzle + Vec3::Z * len * 0.6),
                     ),
                     [0.35, 0.7, 1.0],
                     Surface::Star,
@@ -539,6 +603,76 @@ fn scene(world: &World, meshes: &Meshes, cam: DVec3) -> Vec<(MeshId, Instance)> 
         }
     }
     out
+}
+
+/// A ship on the hangar bay floor, the camera slowly circling it. The bay
+/// is sized to the ship. Returns the view matrix and what to draw.
+fn bay_scene(
+    meshes: &Meshes,
+    ship: MeshId,
+    fit: &retrox_sim::ship::Loadout,
+    time: f32,
+) -> (Mat4, Vec<(MeshId, Instance)>) {
+    let size = (fit.stats().length_m as f32).max(16.0);
+    let angle = time * 0.05 + 0.9;
+    let eye = Vec3::new(angle.sin() * 1.05, 0.16, angle.cos() * 1.05) * size;
+    // Aim a little to the ship's left so it stands clear of the panels on
+    // the left of the screen.
+    let right = (-eye).normalize().cross(Vec3::Y).normalize();
+    let view = glam::camera::rh::view::look_at_mat4(eye, -right * 0.22 * size, Vec3::Y);
+    // Overhead work lights.
+    let light = {
+        let d = Vec3::new(0.35, 0.8, 0.5).normalize();
+        [d.x, d.y, d.z, 1.1]
+    };
+    // Unlike the flight scene this keeps the camera's translation in the
+    // view: the bay is small enough that precision doesn't matter, and its
+    // walls hide the sky.
+    let instances = vec![
+        (
+            meshes.hangar_bay,
+            Instance::new(
+                Mat4::from_scale(Vec3::splat(size)),
+                [0.16, 0.24, 0.23],
+                Surface::Plain,
+                0.0,
+                0.0,
+                light,
+            )
+            .with_detail(5.0),
+        ),
+        (
+            ship,
+            Instance::new(
+                Mat4::IDENTITY,
+                [0.8, 0.75, 0.64],
+                Surface::Plain,
+                0.0,
+                0.0,
+                light,
+            )
+            .with_detail(0.5),
+        ),
+    ];
+    (view, instances)
+}
+
+/// Identifies a fit's parts, to notice when the ship needs rebuilding.
+fn fit_key(fit: &retrox_sim::ship::Loadout) -> String {
+    let mut key = fit.hull().id.to_owned();
+    for (_, section) in fit.mounts() {
+        let Some(section) = section else {
+            key.push_str("|-");
+            continue;
+        };
+        key.push('|');
+        key.push_str(section.section.id);
+        for (_, module) in section.slots() {
+            key.push(',');
+            key.push_str(module.map_or("", |m| m.id));
+        }
+    }
+    key
 }
 
 /// What a station looks like: a habitat ring for populous ones, otherwise
