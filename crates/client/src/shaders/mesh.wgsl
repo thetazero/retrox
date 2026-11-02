@@ -303,16 +303,35 @@ fn rock(i: VOut, n0: vec3<f32>, dox: vec3<f32>, doy: vec3<f32>, dwx: vec3<f32>, 
     let s = i.params.z;
     let p = i.obj * 1.7 + vec3<f32>(s % 13.0, s % 7.0, s % 5.0);
     let w = max(length(dox), length(doy)) * 1.7;
+    // Metres per object unit, and the pixel's footprint in metres: a
+    // quarry hundreds of metres across still needs grit at arm's length.
+    let metres = length(dwx) / max(length(dox), 1e-9);
+    let pm = i.obj * metres * 0.35 + vec3<f32>(s % 11.0);
+    let wm = w / 1.7 * metres * 0.35;
     // Bump: the height's gradient by finite differences in object space,
     // carried to the screen through the position derivatives (surface
     // gradient, Mikkelsen 2010).
     let e = 0.01;
     let h0 = rock_height(p, w);
-    let gobj = vec3<f32>(
+    var gobj = vec3<f32>(
         rock_height(p + vec3<f32>(e, 0.0, 0.0), w) - h0,
         rock_height(p + vec3<f32>(0.0, e, 0.0), w) - h0,
         rock_height(p + vec3<f32>(0.0, 0.0, e), w) - h0,
     ) / e * 1.7;
+    // Metre-scale grit, only where it's bigger than a pixel and smaller
+    // than the rock's own lumps (so boulders don't get it twice).
+    let close = (1.0 - smoothstep(0.25, 0.6, wm)) * smoothstep(40.0, 120.0, metres);
+    if (close > 0.0) {
+        let em = 0.05;
+        let g0 = fbm(pm);
+        let gm = vec3<f32>(
+            fbm(pm + vec3<f32>(em, 0.0, 0.0)) - g0,
+            fbm(pm + vec3<f32>(0.0, em, 0.0)) - g0,
+            fbm(pm + vec3<f32>(0.0, 0.0, em)) - g0,
+        ) / em;
+        // Into per-object-unit terms, scaled so its slopes match the lumps'.
+        gobj = gobj + gm * (metres * 0.35) * close * (0.5 / metres) * 1.7;
+    }
     let dhx = dot(gobj, dox);
     let dhy = dot(gobj, doy);
     let r1 = cross(dwy, n0);
@@ -323,7 +342,6 @@ fn rock(i: VOut, n0: vec3<f32>, dox: vec3<f32>, doy: vec3<f32>, dwx: vec3<f32>, 
         let grad = sign(det) * (dhx * r1 + dhy * r2);
         // Heights scale with the rock (metres per object unit), so a
         // boulder and a quarry are equally rough.
-        let metres = length(dwx) / max(length(dox), 1e-9);
         n = normalize(abs(det) * n0 - grad * 0.06 * metres);
     }
     let mu = max(dot(n, i.view_dir), 0.0);
@@ -331,20 +349,44 @@ fn rock(i: VOut, n0: vec3<f32>, dox: vec3<f32>, doy: vec3<f32>, dwx: vec3<f32>, 
     // Albedo: the rock's tint, mottled light and dark, darker in the pits,
     // with pale flecks of mineral close up.
     let mottle = fbm_aa(p * 1.3 + vec3<f32>(4.0), w * 1.3);
-    // Asteroids are dark: a fifth of the light or less comes back.
-    var base = i.color.rgb * 0.5 * (0.45 + 0.9 * mottle);
-    base = base * (0.6 + 0.7 * smoothstep(-0.1, 0.35, h0));
-    let fleck = step(0.9, noise(p * 30.0)) * (1.0 - smoothstep(0.1, 0.3, w * 30.0));
+    // Asteroids are dark: a fifth of the light or less comes back. Each
+    // rock leans its own way between umber, slate and rust, so a field
+    // isn't one grey.
+    let lean = fract(s * 0.6180339);
+    let umber = vec3<f32>(1.08, 0.92, 0.76);
+    let slate = vec3<f32>(0.9, 0.93, 1.0);
+    let rust = vec3<f32>(1.2, 0.84, 0.62);
+    let hue = select(mix(slate, rust, (lean - 0.5) * 2.0), mix(umber, slate, lean * 2.0), lean < 0.5);
+    var base = i.color.rgb * hue * 0.3 * (0.35 + 1.1 * mottle);
+    base = base * (0.55 + 0.75 * smoothstep(-0.1, 0.35, h0));
+    base = base * mix(1.0, 0.7 + 0.6 * fbm(pm * 0.7 + vec3<f32>(3.0)), close);
+    // Flecks a few tens of centimetres across: per object unit on a
+    // boulder, per metre on anything big enough to be a quarry.
+    let big = step(80.0, metres);
+    let fp = mix(p * 30.0, pm * 2.5, big);
+    let fw = mix(w * 30.0, wm * 2.5, big);
+    let fleck = step(0.9, noise(fp)) * (1.0 - smoothstep(0.1, 0.3, fw));
     base = mix(base, vec3<f32>(0.62, 0.6, 0.55), fleck * 0.45);
 
     let light_color = mix(vec3<f32>(1.0), g.star_color.rgb, 0.4);
     let ndl = dot(n, i.light.xyz);
     let lit = max(ndl, 0.0) * i.light.w;
-    // Faint fill from the sky so the dark side keeps its shape.
-    let fill = ambient_light(n) * 0.9;
-    // Grazing sunlight catches the edges facing it.
-    let edge = pow(1.0 - mu, 3.0) * smoothstep(-0.2, 0.3, ndl) * 0.25;
-    var color = base * (lit * light_color * 1.1 + fill) + edge * light_color * base * 2.0;
+    // Fill: the sky's cool ambient, plus a little light from behind the
+    // camera (the ship's own floods, say), so the dark side of a rock
+    // with the sun behind it still shows its facets and pits.
+    let flood = pow(mu, 1.5) * 0.22;
+    // The sky's teal and violet, mostly greyed: bare rock shouldn't go
+    // lavender in the shade.
+    let sky = ambient_light(n);
+    let fill = mix(sky, vec3<f32>(dot(sky, vec3<f32>(0.33))), 0.65) * 2.2
+        + vec3<f32>(0.75, 0.74, 0.76) * flood * 1.4;
+    // Sun behind the rock: its limb lights up, brightest on the side
+    // facing the sun, so it stands off the black.
+    let behind = clamp(-dot(i.view_dir, i.light.xyz), 0.0, 1.0);
+    let limb = pow(1.0 - mu, 2.5) * (0.35 + 0.65 * behind) * smoothstep(-0.6, 0.2, ndl);
+    // A faint cool rim everywhere, as on the hulls, for the silhouette.
+    let rim = pow(1.0 - mu, 4.0) * vec3<f32>(0.05, 0.08, 0.11);
+    var color = base * (lit * light_color * 0.95 + fill) + limb * light_color * 0.22 + rim;
     // Heat from the laser's work glows out of the cracks first, then
     // spreads, dull red to orange; the rock stays rock.
     let heat = clamp(i.params.y * 4.0, 0.0, 1.0);

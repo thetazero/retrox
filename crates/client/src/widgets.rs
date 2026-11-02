@@ -13,9 +13,9 @@ pub(crate) const CARD_FILL: Color32 = Color32::from_rgba_premultiplied(24, 18, 2
 pub(crate) const READOUT_FILL: Color32 = Color32::from_rgba_premultiplied(9, 7, 14, 205);
 /// The dark plate behind free-floating HUD text (key legend, the rock
 /// readout), so it reads over a bright planet or a pale rock (#124).
-/// Near opaque: the surface blends in linear light, so a bright sun
-/// shows through far more than the alpha suggests (#156).
-pub(crate) const BACKING: Color32 = Color32::from_rgba_premultiplied(9, 7, 14, 250);
+/// Opaque: the surface blends in linear light, so a bright sun shows
+/// through far more than any alpha suggests (#156).
+pub(crate) const BACKING: Color32 = Color32::from_rgb(9, 7, 14);
 /// The plate under a single label over the scene ([`plated_galley`]).
 pub(crate) const LABEL_PLATE: Color32 = Color32::from_rgb(9, 7, 14);
 /// A plain button's face.
