@@ -36,7 +36,13 @@ pub(crate) const AMBER: Color32 = Color32::from_rgb(255, 178, 76);
 /// Vacuum-fluorescent teal: live instrument readouts.
 pub(crate) const VFD: Color32 = Color32::from_rgb(110, 240, 214);
 pub(crate) const VFD_DIM: Color32 = Color32::from_rgb(22, 58, 56);
-pub(crate) const PANEL: Color32 = Color32::from_rgba_premultiplied(11, 9, 16, 242);
+/// HUD panels. Blending happens in linear light on the sRGB surface, so
+/// a bright scene shows through far more than the alpha suggests: keep it
+/// near opaque.
+pub(crate) const PANEL: Color32 = Color32::from_rgba_premultiplied(11, 9, 16, 248);
+/// Menu pages (handbook, settings, load): opaque, as they're read at length
+/// (issue #124).
+pub(crate) const PAGE_FILL: Color32 = Color32::from_rgb(11, 9, 16);
 pub(crate) const INK: Color32 = Color32::from_rgb(20, 16, 24);
 
 const DISPLAY: &str = "display";
@@ -260,7 +266,7 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
                     Stroke::new(1.0, AMBER.gamma_multiply(0.6)),
                 );
             }
-            painter.galley(rect.min + Vec2::splat(2.0), galley, color);
+            crate::widgets::shadowed_galley(&painter, rect.min + Vec2::splat(2.0), galley);
         }
 
         // Crosshair and stick position.
@@ -396,20 +402,7 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
     }
 
     if let Some((text, _)) = &w.message {
-        egui::Area::new(egui::Id::unique("message"))
-            .anchor(Align2::CENTER_TOP, [0.0, 72.0])
-            .show(ctx, |ui| {
-                egui::Frame::new()
-                    .fill(RED.gamma_multiply(0.9))
-                    .inner_margin(Margin::symmetric(18, 4))
-                    .show(ui, |ui| {
-                        ui.label(
-                            RichText::new(text.to_uppercase())
-                                .font(display(26.0))
-                                .color(CREAM),
-                        );
-                    });
-            });
+        banner(ctx, screen, text);
     }
 
     // Navigation lists.
@@ -564,6 +557,35 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
 
     actions
 }
+
+/// The red message banner at the top of the view, sized to its text and
+/// wrapped only at spaces past [`BANNER_MAX_W`] (issue #120). Painted
+/// straight onto a layer rather than in an `Area`, so its width can't
+/// carry over from an earlier, longer or shorter, message.
+fn banner(ctx: &egui::Context, screen: Rect, text: &str) {
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("message-banner"),
+    ));
+    let margin = Vec2::new(18.0, 4.0);
+    let wrap = BANNER_MAX_W.min(screen.width() - 2.0 * (32.0 + margin.x));
+    let mut job = egui::text::LayoutJob::simple(text.to_uppercase(), display(26.0), CREAM, wrap);
+    job.halign = Align2::CENTER_TOP.x();
+    let galley = painter.layout_job(job);
+    let top = Pos2::new(screen.center().x, screen.top() + 72.0);
+    let size = galley.size() + 2.0 * margin;
+    let plate = Rect::from_min_size(top - Vec2::new(size.x / 2.0, 0.0), size);
+    painter.rect_filled(plate, 0.0, RED.gamma_multiply(0.94));
+    painter.rect_filled(
+        Rect::from_min_size(plate.left_bottom() - Vec2::new(0.0, 2.0), Vec2::new(plate.width(), 2.0)),
+        0.0,
+        RED_DARK,
+    );
+    painter.galley(top + Vec2::new(0.0, margin.y), galley, CREAM);
+}
+
+/// The widest the message banner grows before it wraps.
+const BANNER_MAX_W: f32 = 760.0;
 
 /// The system's places as a list of instrument rows: a glyph for what each
 /// is (moons hang off their planet, and cities off the body they're on),
@@ -814,16 +836,13 @@ fn lanes_list(ui: &mut egui::Ui, w: &World, open_space: bool, actions: &mut Vec<
             ));
         }
         x += 10.0;
-        painter.text(
-            Pos2::new(x, y),
-            Align2::LEFT_CENTER,
-            crate::widgets::truncate(&lane.name, 18),
-            mono(14.0),
-            look.text(AMBER),
+        // The jump key sits inside the row, clear of the panel's edge
+        // (issue #125), and the rest shares out what's left.
+        let key = Rect::from_min_max(
+            Pos2::new(rect.right() - 6.0 - JUMP_KEY_W, rect.top() + 4.0),
+            Pos2::new(rect.right() - 6.0, rect.bottom() - 4.0),
         );
-        painter.text(
-            Pos2::new(rect.right() - 86.0, y),
-            Align2::RIGHT_CENTER,
+        let leg = painter.layout_no_wrap(
             format!("{:.1} LY · {:.0} D", lane.length_ly, lane.days),
             mono(12.0),
             if on_course {
@@ -832,23 +851,28 @@ fn lanes_list(ui: &mut egui::Ui, w: &World, open_space: bool, actions: &mut Vec<
                 VFD.gamma_multiply(0.85)
             },
         );
-        let key = Rect::from_min_size(
-            Pos2::new(rect.right() - 76.0, rect.top() + 4.0),
-            Vec2::new(72.0, rect.height() - 8.0),
+        let leg_x = key.left() - 10.0 - leg.size().x;
+        painter.galley(Pos2::new(leg_x, y - leg.size().y / 2.0), leg, VFD);
+        painter.text(
+            Pos2::new(x, y),
+            Align2::LEFT_CENTER,
+            crate::widgets::fit(painter, &lane.name, mono(14.0), leg_x - 10.0 - x),
+            mono(14.0),
+            look.text(AMBER),
         );
-        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(key));
         let look = if on_course {
             crate::widgets::Look::Primary
         } else {
             crate::widgets::Look::Plain
         };
-        if crate::widgets::push(
-            &mut child,
+        if crate::widgets::push_in(
+            ui,
+            key,
+            egui::Id::new(("jump", lane.to)),
             "JUMP",
             display(18.0),
             look,
             open_space,
-            key.size(),
         )
         .clicked()
         {
@@ -866,7 +890,10 @@ fn lanes_list(ui: &mut egui::Ui, w: &World, open_space: bool, actions: &mut Vec<
         );
     }
     ui.add_space(8.0);
-    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+    // `horizontal`, not a centred layout: that would stretch to the
+    // panel's height from the frame before and keep a tall empty band
+    // under a short list (issue #125).
+    ui.horizontal(|ui| {
         keycap(ui, "M");
         if crate::widgets::push(
             ui,
@@ -882,6 +909,9 @@ fn lanes_list(ui: &mut egui::Ui, w: &World, open_space: bool, actions: &mut Vec<
         }
     });
 }
+
+/// The width of a lane's JUMP key.
+const JUMP_KEY_W: f32 = 64.0;
 
 /// Key prompts, one per line; a line without a key is a warning.
 fn prompt_lines(ui: &mut egui::Ui, lines: Vec<(Option<&str>, String)>) {
@@ -977,6 +1007,16 @@ pub(crate) struct Panel<'a> {
 }
 
 pub(crate) fn panel(ctx: &egui::Context, p: Panel, add: impl FnOnce(&mut egui::Ui)) {
+    panel_filled(ctx, p, PANEL, add);
+}
+
+/// A [`panel`] on a body of `fill`: menu pages use [`PAGE_FILL`].
+pub(crate) fn panel_filled(
+    ctx: &egui::Context,
+    p: Panel,
+    fill: Color32,
+    add: impl FnOnce(&mut egui::Ui),
+) {
     let id = egui::Id::unique(p.id);
     let mut open = p
         .collapsible
@@ -985,7 +1025,7 @@ pub(crate) fn panel(ctx: &egui::Context, p: Panel, add: impl FnOnce(&mut egui::U
         .anchor(p.anchor, p.offset)
         .show(ctx, |ui| {
             let frame = egui::Frame::new()
-                .fill(PANEL)
+                .fill(fill)
                 .stroke(Stroke::new(1.0, RULE))
                 .show(ui, |ui| {
                     ui.set_width(p.width);
@@ -1320,14 +1360,16 @@ pub(crate) fn title_card(
 }
 
 fn project(view_proj: Mat4, rel: glam::Vec3, screen: egui::Rect) -> Option<Pos2> {
+    project_any(view_proj, rel, screen).filter(|p| screen.contains(*p))
+}
+
+/// Where a point in front of the camera lands, on screen or off it.
+fn project_any(view_proj: Mat4, rel: glam::Vec3, screen: egui::Rect) -> Option<Pos2> {
     let clip = view_proj * Vec4::new(rel.x, rel.y, rel.z, 1.0);
     if clip.w <= 0.0 {
         return None;
     }
     let ndc = clip.truncate() / clip.w;
-    if ndc.x.abs() > 1.0 || ndc.y.abs() > 1.0 {
-        return None;
-    }
     Some(Pos2::new(
         screen.left() + (ndc.x + 1.0) * 0.5 * screen.width(),
         screen.top() + (1.0 - ndc.y) * 0.5 * screen.height(),

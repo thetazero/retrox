@@ -10,7 +10,7 @@ use egui::{Align2, Color32, Pos2, Rect, RichText, Sense, Stroke, Vec2};
 
 use crate::hud::{
     ALARM, AMBER, CREAM, CREAM_DIM, INK, Panel, RED, RED_DARK, RULE, VFD, VFD_DIM, credits,
-    display, glow_label, mono, panel, section, title_card,
+    display, glow_label, mono, panel_filled, section, title_card,
 };
 use crate::save::{self, Entry, GameId, Kind};
 use crate::settings::{SENSITIVITY_RANGE, Settings, UI_SCALE_RANGE};
@@ -226,7 +226,7 @@ impl Menu {
             Page::Handbook => {
                 let max_h = (screen.bottom() - page_pos[1] - 150.0).max(240.0);
                 let chapter = &mut self.chapter;
-                panel(
+                panel_filled(
                     ctx,
                     Panel {
                         id: "handbook",
@@ -236,6 +236,7 @@ impl Menu {
                         width: HANDBOOK_W,
                         collapsible: None,
                     },
+                    crate::hud::PAGE_FILL,
                     |ui| crate::handbook::draw(ui, chapter, max_h),
                 );
             }
@@ -883,7 +884,7 @@ fn page_panel(
     pos: [f32; 2],
     add: impl FnOnce(&mut egui::Ui),
 ) {
-    panel(
+    panel_filled(
         ctx,
         Panel {
             id,
@@ -893,6 +894,7 @@ fn page_panel(
             width: PAGE_W,
             collapsible: None,
         },
+        crate::hud::PAGE_FILL,
         add,
     );
 }

@@ -11,6 +11,9 @@ use crate::hud::{CREAM, CREAM_DIM, INK, RED, RED_DARK, RED_HOT, RULE, mono};
 pub(crate) const CARD_FILL: Color32 = Color32::from_rgba_premultiplied(24, 18, 28, 200);
 /// The dark backing behind a block of live VFD readouts.
 pub(crate) const READOUT_FILL: Color32 = Color32::from_rgba_premultiplied(9, 7, 14, 205);
+/// The dark plate behind free-floating HUD text (key legend, the rock
+/// readout), so it reads over a bright planet or a pale rock (#124).
+pub(crate) const BACKING: Color32 = Color32::from_rgba_premultiplied(9, 7, 14, 232);
 /// A plain button's face.
 pub(crate) const FACE: Color32 = Color32::from_rgb(30, 24, 34);
 
@@ -113,6 +116,34 @@ pub(crate) fn push(
         Sense::hover()
     };
     let (rect, response) = ui.allocate_exact_size(size, sense);
+    paint_push(ui.painter(), rect, &galley, look, enabled, &response);
+    if enabled {
+        response.on_hover_cursor(egui::CursorIcon::PointingHand)
+    } else {
+        response
+    }
+}
+
+/// A push button filling `rect`, for one painted into a row rather than
+/// laid out.
+pub(crate) fn push_in(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    id: egui::Id,
+    text: &str,
+    font: FontId,
+    look: Look,
+    enabled: bool,
+) -> Response {
+    let galley = ui
+        .painter()
+        .layout_no_wrap(text.to_owned(), font, Color32::WHITE);
+    let sense = if enabled {
+        Sense::click()
+    } else {
+        Sense::hover()
+    };
+    let response = ui.interact(rect, id, sense);
     paint_push(ui.painter(), rect, &galley, look, enabled, &response);
     if enabled {
         response.on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -307,6 +338,33 @@ pub(crate) fn truncate(s: &str, n: usize) -> String {
     } else {
         s.chars().take(n.saturating_sub(1)).chain(['…']).collect()
     }
+}
+
+/// Text with a dark drop shadow, for labels floating over the scene.
+pub(crate) fn shadowed_text(
+    painter: &egui::Painter,
+    pos: Pos2,
+    align: Align2,
+    text: String,
+    font: FontId,
+    color: Color32,
+) {
+    let galley = painter.layout_no_wrap(text, font, color);
+    let rect = align.anchor_size(pos, galley.size());
+    shadowed_galley(painter, rect.min, galley);
+}
+
+/// A laid-out label with a dark drop shadow under it.
+pub(crate) fn shadowed_galley(
+    painter: &egui::Painter,
+    at: Pos2,
+    galley: std::sync::Arc<egui::Galley>,
+) {
+    let shadow = Color32::from_black_alpha(220);
+    for d in [Vec2::new(1.0, 1.0), Vec2::new(0.0, 1.0), Vec2::new(1.0, 0.0), Vec2::new(-1.0, 0.0)] {
+        painter.galley_with_override_text_color(at + d, galley.clone(), shadow);
+    }
+    painter.galley(at, galley, CREAM);
 }
 
 /// `s` cut from the end to fit `width` pixels in `font`, ending in an
