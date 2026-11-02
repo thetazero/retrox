@@ -1145,16 +1145,19 @@ pub fn loading(ctx: &egui::Context, title: &str, subtitle: &str, time: f32) {
     }
 }
 
-/// A short note in the bottom right, fading out.
+/// A short note in the bottom right, fading out. Drawn after everything
+/// else, so it can stack above whatever panel holds that corner (#177).
 pub fn toast(ctx: &egui::Context, text: &str, ok: bool, age: f32) {
     let alpha = ((TOAST_SECONDS - age) / 0.5).clamp(0.0, 1.0);
     if alpha <= 0.0 {
         return;
     }
     let color = if ok { VFD } else { ALARM };
-    egui::Area::new(egui::Id::unique("toast"))
+    let id = egui::Id::unique("toast");
+    let offset = toast_offset(ctx, id);
+    egui::Area::new(id)
         .order(egui::Order::Foreground)
-        .anchor(Align2::RIGHT_BOTTOM, [-24.0, -22.0])
+        .anchor(Align2::RIGHT_BOTTOM, offset)
         .interactable(false)
         .show(ctx, |ui| {
             egui::Frame::new()
@@ -1174,6 +1177,33 @@ pub fn toast(ctx: &egui::Context, text: &str, ok: bool, age: f32) {
                     });
                 });
         });
+}
+
+/// Where the toast sits, from the bottom-right corner: its own spot when
+/// that corner is free, else just above the panels stacked there (FIRST
+/// STEPS beside the station menu, HYPERLANES in flight), right edges lined
+/// up.
+fn toast_offset(ctx: &egui::Context, toast: egui::Id) -> [f32; 2] {
+    /// How near the edges a panel's corner must come to hold the corner.
+    const CORNER: f32 = 64.0;
+    /// Room above a panel for its corner brackets.
+    const GAP: f32 = 10.0;
+    let screen = ctx.content_rect();
+    let held = ctx.memory(|m| {
+        m.areas()
+            .visible_layer_ids()
+            .into_iter()
+            .filter(|l| l.id != toast && l.order != egui::Order::Background)
+            .filter_map(|l| m.area_rect(l.id))
+            .filter(|r| {
+                r.right() >= screen.right() - CORNER && r.bottom() >= screen.bottom() - CORNER
+            })
+            .reduce(|a, b| a.union(b))
+    });
+    match held {
+        Some(r) => [r.right() - screen.right(), r.top() - screen.bottom() - GAP],
+        None => [-24.0, -22.0],
+    }
 }
 
 /// A left-to-right fade.

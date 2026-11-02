@@ -1614,6 +1614,13 @@ Decided while bringing every screen into one style (issue #77):
   onto each other. A new window that comes out bigger than its monitor
   is shrunk to fit, since a window past the screen's edges loses the
   corner panels with them.
+- **Toasts never cover a panel** (#177): the short note ("CHECKPOINT
+  SAVED", "GAME SAVED") keeps the bottom-right corner when it is free,
+  and otherwise stacks just above whatever panels hold that corner
+  (FIRST STEPS when docked, HYPERLANES in flight), with its right edge
+  lined up with theirs. It is placed from where those panels are this
+  frame, not from fixed offsets, so a new panel in that corner needs
+  no change to it.
 - **The message banner fits its text** (#120): one line up to 760 px,
   wrapped only at spaces past that, centred under the top edge. It is
   painted straight onto a layer, not laid out in an egui `Area`, whose
