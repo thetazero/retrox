@@ -210,7 +210,7 @@ pub fn snapshot(
     let state = PlayerState {
         system: world.system,
         clock_s: world.clock_s,
-        ship: world.ship.clone(),
+        ship: world.saved_ship(),
         mode,
         target: world.target,
         course: world.course,

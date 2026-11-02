@@ -71,6 +71,8 @@ pub struct Traffic {
     /// Gangs' flights as last predicted, and what they were doing then.
     pirate_tracks: HashMap<GangId, (Aim, Track)>,
     pub pirates: Vec<PirateContact>,
+    /// The galaxy clock the contacts are for.
+    pub at_s: f64,
     /// Stock fits by hull id, built once.
     fits: HashMap<String, Loadout>,
     pub contacts: Vec<Contact>,
@@ -150,6 +152,7 @@ impl Traffic {
         }
         self.tracks.retain(|k, _| live.contains(k));
         self.contacts = contacts;
+        self.at_s = clock_s;
         self.update_pirates(galaxy, system, clock_s);
     }
 

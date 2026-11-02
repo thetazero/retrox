@@ -30,7 +30,9 @@ const FORGET_PER_DAY: f64 = 0.05;
 pub const BOUNTY_KILL: f64 = 3.0;
 /// For destroying a pirate in a faction's space.
 pub const PIRATE_KILL: f64 = 1.0;
-/// For a hit on a faction's ship, and for destroying one.
+/// For opening fire on a faction's peaceful ship, for each further hit,
+/// and for destroying one.
+pub const ATTACKED: f64 = -20.0;
 pub const SHOT_SHIP: f64 = -6.0;
 pub const KILLED_SHIP: f64 = -30.0;
 /// For delivering a faction's freight, and failing it.

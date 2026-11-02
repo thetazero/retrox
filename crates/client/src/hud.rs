@@ -552,6 +552,7 @@ fn nav_list(ui: &mut egui::Ui, w: &World, actions: &mut Vec<Action>) {
             Place::Star | Place::Body(_) => None,
             Place::Field(_) => Some("Fields"),
             Place::Station(_) => Some("Stations"),
+            Place::Convoy(_) => Some("Traffic"),
         };
         if group.is_some() && group != heading {
             ui.add_space(8.0);
@@ -658,6 +659,14 @@ fn place_glyph(painter: &egui::Painter, w: &World, place: Place, c: Pos2, ink: C
             ] {
                 painter.circle_filled(c + d, 1.6, ink);
             }
+        }
+        Place::Convoy(_) => {
+            painter.rect_stroke(
+                Rect::from_center_size(c, Vec2::splat(6.0)),
+                0.0,
+                Stroke::new(1.2, VFD),
+                egui::StrokeKind::Middle,
+            );
         }
         Place::Station(_) => {
             let r = 5.0;

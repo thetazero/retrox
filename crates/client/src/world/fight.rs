@@ -87,13 +87,21 @@ impl World {
                 // Fight in the field's frame, as the gang does.
                 self.enter_frame(Place::Field(f));
                 self.combat.field = Some(f);
+                // A gang is at home if it's lurking there, or flying close
+                // by, and not resting after a fight with us.
                 let today = self.galaxy.time;
+                let centre = self.position(Place::Field(f));
+                let reach = self.place_radius(Place::Field(f)) + 30e3;
                 let home = pirates::gang_at(&self.galaxy, f).filter(|g| {
-                    self.galaxy
-                        .pirates
-                        .prowls
-                        .get(g)
-                        .is_some_and(|p| p.aim == Aim::Lurk && today >= p.rest_until)
+                    let near = self
+                        .traffic
+                        .pirate(*g)
+                        .is_some_and(|c| (c.pos - centre).length() < reach);
+                    self.galaxy.pirates.prowls.get(g).is_some_and(|p| {
+                        p.aim != Aim::Engaged
+                            && today >= p.rest_until
+                            && (p.aim == Aim::Lurk || near)
+                    })
                 });
                 if let Some(g) = home {
                     self.engage(g, Some(f), DVec3::ZERO, DVec3::ZERO);
@@ -126,8 +134,8 @@ impl World {
         let out = self.combat.update(dt, pilot, &solids);
         self.player.ship.damage = self.combat.player.damage.clone();
         let mut complaints = std::mem::take(&mut self.complaints);
-        for id in out.hits {
-            self.ship_hit(id, &mut complaints);
+        for (id, peaceful) in out.hits {
+            self.ship_hit(id, peaceful, &mut complaints);
         }
         self.complaints = complaints;
         self.complaints
@@ -187,6 +195,15 @@ impl World {
         };
         if system != self.system {
             self.arrive_jump(system);
+        }
+        // At home, and spoiling for a fight.
+        let today = self.galaxy.time;
+        if let Some(g) = pirates::gang_at(&self.galaxy, field)
+            && let Some(p) = self.galaxy.pirates.prowls.get_mut(&g)
+        {
+            p.aim = Aim::Lurk;
+            p.since = today;
+            p.rest_until = retrox_sim::GalaxyTime::ZERO;
         }
         self.park_in(field)
     }

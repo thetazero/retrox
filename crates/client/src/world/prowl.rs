@@ -89,6 +89,11 @@ impl World {
                     if today < prowl.rest_until || self.combat.gang.is_some() {
                         continue;
                     }
+                    // Coming to their own field, we meet them there.
+                    let field = self.galaxy.pirates.gangs[id].field;
+                    if self.field_rocks.as_ref().is_some_and(|(f, _)| *f == field) {
+                        continue;
+                    }
                     let Some(at) = self.traffic.pirate(id) else {
                         continue;
                     };
@@ -133,16 +138,24 @@ impl World {
         if elapsed > 0.0 {
             let dt = elapsed / STALK_SLICES as f64;
             for k in 0..STALK_SLICES {
+                let u0 = k as f64 / STALK_SLICES as f64;
                 let u = (k + 1) as f64 / STALK_SLICES as f64;
                 let target = from + (to - from) * u;
+                // Close along the line of sight while matching the ship's
+                // velocity across it, so the line doesn't swing: no
+                // braking, since meeting it is the point.
                 let rel = target - pos;
-                // Burn at where the ship will be, given how fast we close.
-                let closing = (v - vel).length().max((accel * rel.length()).sqrt());
-                let lead = target + vel * (rel.length() / closing.max(1.0)).min(3600.0 * 6.0);
-                let dir = (lead - pos).normalize_or(DVec3::X);
+                let los = rel.normalize_or(DVec3::X);
+                let want = vel + los * (2.0 * accel * rel.length()).sqrt();
+                let dir = (want - v).normalize_or(los);
+                let p0 = pos;
                 v += dir * accel * dt;
                 pos += v * dt;
-                closest = closest.min((target - pos).length());
+                // How close the two came over the slice, both moving
+                // straight: at warp a slice is thousands of km.
+                let r0 = from + (to - from) * u0 - p0;
+                let r1 = target - pos;
+                closest = closest.min(segment_to_origin(r0, r1));
             }
         }
         ship.pos = to_sim(pos);
@@ -342,6 +355,18 @@ impl World {
     pub fn welcome(&self, faction: FactionId) -> bool {
         !self.player.standing.hostile(faction)
     }
+}
+
+/// The least distance from the origin to the segment `a`–`b`.
+fn segment_to_origin(a: DVec3, b: DVec3) -> f64 {
+    let d = b - a;
+    let len2 = d.length_squared();
+    let t = if len2 > 0.0 {
+        (-a.dot(d) / len2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    (a + d * t).length()
 }
 
 /// What the HUD says when standing crosses into a new rank.

@@ -636,9 +636,10 @@ pub struct Outcome {
     /// Loose cargo thrown from wrecks: where, how it drifts, what, tonnes.
     pub salvage: Vec<(DVec3, DVec3, Good, f64, u64)>,
     pub player_destroyed: bool,
-    /// Ships destroyed this frame, by id and whose, and hit by the player.
+    /// Ships destroyed this frame, by id and whose; ships the player hit,
+    /// and whether they were peaceful until then.
     pub kills: Vec<(u32, Crew)>,
-    pub hits: Vec<u32>,
+    pub hits: Vec<(u32, bool)>,
 }
 
 /// Everything fighting near the player.
@@ -677,7 +678,7 @@ pub struct Combat {
     pub tally: Tally,
     rng: Rng,
     kills: Vec<(u32, Crew)>,
-    hits: Vec<u32>,
+    hits: Vec<(u32, bool)>,
     next_trader: u32,
     /// Laser hits waiting to land this frame: who, how hard, where, which
     /// way.
@@ -1188,7 +1189,8 @@ impl Combat {
             Side::Raider(id) => {
                 // Only the player's guns hit anyone else; a trader they
                 // hit turns on them, with all its fleet.
-                self.hits.push(id);
+                let peaceful = self.raider(id).is_some_and(|r| !r.hostile);
+                self.hits.push((id, peaceful));
                 if let Some(fleet) = self.raider(id).and_then(|r| r.trader_fleet()) {
                     self.provoke(fleet);
                 }

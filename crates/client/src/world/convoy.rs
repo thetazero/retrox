@@ -21,7 +21,7 @@ use glam::{DQuat, DVec3};
 use retrox_sim::bubble::FleetKey;
 use retrox_sim::{FactionId, haul};
 
-use super::{Leg, Mode, World};
+use super::{Leg, Mode, Place, World};
 use crate::combat::{Crew, TRADER_IDS};
 use crate::standing;
 use crate::traffic::{Contact, formation};
@@ -105,7 +105,13 @@ impl World {
     }
 
     /// The player hit raider `id`: if it's a trader, its faction counts it.
-    pub(super) fn ship_hit(&mut self, id: u32, complaints: &mut HashMap<FleetKey, f64>) {
+    /// Opening fire on a peaceful ship is an attack on its faction.
+    pub(super) fn ship_hit(
+        &mut self,
+        id: u32,
+        peaceful: bool,
+        complaints: &mut HashMap<FleetKey, f64>,
+    ) {
         if id < TRADER_IDS {
             return;
         }
@@ -113,15 +119,21 @@ impl World {
             return;
         };
         let now = self.clock_s;
-        if complaints
-            .get(&fleet)
-            .is_some_and(|&t| now - t < COMPLAINT_S)
+        if !peaceful
+            && complaints
+                .get(&fleet)
+                .is_some_and(|&t| now - t < COMPLAINT_S)
         {
             return;
         }
         complaints.insert(fleet, now);
         let name = self.faction_name(faction);
-        if let Some(rank) = self.player.standing.change(faction, standing::SHOT_SHIP) {
+        let cost = if peaceful {
+            standing::ATTACKED
+        } else {
+            standing::SHOT_SHIP
+        };
+        if let Some(rank) = self.player.standing.change(faction, cost) {
             self.say(super::prowl::rank_news(&name, rank));
         }
     }
@@ -148,6 +160,37 @@ impl World {
             said.push(super::prowl::rank_news(&name, rank));
         }
         self.say(said.join(" · "));
+    }
+
+    /// The ship as saved: a convoy's frame isn't (it's rebuilt from the
+    /// traffic, which a load doesn't have yet), so it's saved in the
+    /// star's.
+    pub fn saved_ship(&self) -> super::Ship {
+        let mut ship = self.ship.clone();
+        if let Place::Convoy(_) = ship.frame {
+            let t = self.t_days();
+            ship.rel = self.ship_position() - self.position(Place::Star);
+            ship.vel = self.ship.vel + self.velocity_at(ship.frame, t);
+            ship.frame = Place::Star;
+        }
+        ship
+    }
+
+    /// Flying in a convoy's frame: remember where it is, and if it's gone
+    /// (docked, jumped, destroyed) carry on in the star's frame from where
+    /// it was last seen.
+    pub(super) fn keep_convoy_frame(&mut self) {
+        let Place::Convoy(fleet) = self.ship.frame else {
+            self.convoy_seen = None;
+            return;
+        };
+        match self.traffic.contacts.iter().find(|c| c.key == fleet) {
+            Some(c) => self.convoy_seen = Some((fleet, c.pos, c.vel, self.traffic.at_s)),
+            None => {
+                self.enter_frame(Place::Star);
+                self.convoy_seen = None;
+            }
+        }
     }
 
     /// Fast travel to the trader fleet nearest the crosshair (or, if none

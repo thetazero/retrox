@@ -94,6 +94,9 @@ pub enum Place {
     Field(FieldId),
     /// A settlement in space.
     Station(SettlementId),
+    /// A trader fleet flying in the system: a frame that moves with it,
+    /// for flying alongside after an intercept (DESIGN §7.2.2).
+    Convoy(retrox_sim::bubble::FleetKey),
 }
 
 /// The current system's contents, indexed once on arrival.
@@ -175,7 +178,7 @@ impl Leg {
     pub fn frame(self) -> Place {
         match self {
             Leg::To(place) | Leg::Climb { well: place, .. } => place,
-            Leg::Intercept(_) => Place::Star,
+            Leg::Intercept(fleet) => Place::Convoy(fleet),
         }
     }
 }
@@ -347,6 +350,9 @@ pub struct World {
     /// Seconds since a gang pulled us out of fast travel, while that's
     /// news.
     pub interdicted: Option<f64>,
+    /// The convoy the ship flies alongside, as last seen: where, how fast,
+    /// and the galaxy clock then.
+    convoy_seen: Option<(retrox_sim::bubble::FleetKey, DVec3, DVec3, f64)>,
     /// When each trader fleet last took offence at our shots.
     complaints: std::collections::HashMap<retrox_sim::bubble::FleetKey, f64>,
 }
@@ -449,6 +455,7 @@ impl World {
             burn: 0.0,
             interdicted: None,
             complaints: Default::default(),
+            convoy_seen: None,
             player,
         };
         // Traders near the player are ships (DESIGN §5.2).
@@ -492,6 +499,20 @@ impl World {
                 }
                 _ => DVec3::ZERO,
             },
+            Place::Convoy(fleet) => {
+                // Where the traffic last had it, carried on straight.
+                let seen = self
+                    .traffic
+                    .contacts
+                    .iter()
+                    .find(|c| c.key == fleet)
+                    .map(|c| (c.pos, c.vel, self.traffic.at_s))
+                    .or(self.convoy_seen.filter(|s| s.0 == fleet).map(|s| (s.1, s.2, s.3)));
+                match seen {
+                    Some((pos, vel, at_s)) => pos + vel * (t * SECONDS_PER_DAY - at_s),
+                    None => DVec3::ZERO,
+                }
+            }
         }
     }
 
@@ -512,6 +533,11 @@ impl World {
                 .settlements
                 .get(s)
                 .map_or("(gone)".into(), |s| s.name.clone()),
+            Place::Convoy(fleet) => self
+                .galaxy
+                .companies
+                .get(fleet.0)
+                .map_or("a convoy".into(), |c| format!("{} convoy", c.name)),
         }
     }
 
@@ -562,6 +588,7 @@ impl World {
             Place::Body(b) => self.galaxy.bodies[b].radius_km * 1000.0,
             Place::Field(f) => self.galaxy.fields[f].radius_km * 1000.0,
             Place::Station(s) => self.station_size_m(s) * 0.5,
+            Place::Convoy(_) => 200.0,
         }
     }
 
@@ -585,6 +612,7 @@ impl World {
             Place::Star | Place::Body(_) => self.well_radius(place) * 1.05,
             Place::Field(_) => self.place_radius(place) + 10e3,
             Place::Station(_) => 20e3,
+            Place::Convoy(_) => 2.5e3,
         }
     }
 
@@ -1020,6 +1048,7 @@ impl World {
         self.wait_some();
 
         self.traffic.update(&self.galaxy, self.system, self.clock_s);
+        self.keep_convoy_frame();
         self.prowl(from, clock0);
         self.player.standing.drift(self.galaxy.time.days());
         self.settle_contracts();
