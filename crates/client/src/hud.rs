@@ -628,8 +628,13 @@ fn nav_list(ui: &mut egui::Ui, w: &World, actions: &mut Vec<Action>) {
             }
             // The city's own bracket, back to the body above.
             let bx = glyph_x - 16.0;
+            // A planet's cities share its bracket with its moons below.
             let next_city = rows.get(i + 1).is_some_and(|r| r.1.is_some());
-            let bottom = if next_city { rect.bottom() } else { c.y };
+            let bottom = if next_city || (!moon && moon_follows) {
+                rect.bottom()
+            } else {
+                c.y
+            };
             painter.line_segment([Pos2::new(bx, rect.top()), Pos2::new(bx, bottom)], stroke);
             painter.line_segment([Pos2::new(bx, c.y), Pos2::new(c.x - 6.0, c.y)], stroke);
         }
