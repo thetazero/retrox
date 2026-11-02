@@ -29,3 +29,4 @@ egui-winit = "0.37"
 bytemuck = { version = "1.25", features = ["derive"] }
 pollster = "1"
 slotmap.workspace = true
+kira = { version = "0.12.6", default-features = false, features = ["cpal"] }

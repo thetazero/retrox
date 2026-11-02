@@ -12,6 +12,7 @@
 //! over a fresh game), for screenshots. `--keys` plays a key script
 //! (see [`Flags::keys`]).
 
+mod audio;
 mod contracts;
 mod contracts_ui;
 mod hangar;
@@ -90,6 +91,8 @@ struct Flags {
     /// being started is ready). Quits when done, unless `--screenshot`
     /// does first. For checking menu flows end to end without a person.
     keys: Vec<String>,
+    /// No sound. Screenshot and scripted runs are silent unless `--sound`.
+    mute: bool,
 }
 
 impl Flags {
@@ -115,6 +118,8 @@ impl Flags {
             keys: value("--keys")
                 .map(|k| k.split(',').map(|s| s.trim().to_lowercase()).collect())
                 .unwrap_or_default(),
+            mute: has("--mute")
+                || (!has("--sound") && (has("--screenshot") || has("--keys"))),
         }
     }
 
@@ -309,6 +314,7 @@ struct Running {
     script_wait: u32,
     /// A short note in the corner: "checkpoint saved".
     toast: Option<(String, bool, Instant)>,
+    audio: audio::Audio,
     quit: bool,
 }
 
@@ -387,6 +393,7 @@ impl ApplicationHandler for App {
             written_rx,
             writers: Vec::new(),
             toast: None,
+            audio: audio::Audio::new(&settings, self.flags.mute),
             quit: false,
             script: self.flags.keys.iter().cloned().collect(),
             script_wait: 0,
@@ -640,6 +647,7 @@ impl Running {
 
     fn toast(&mut self, text: impl Into<String>, ok: bool) {
         self.toast = Some((text.into(), ok, Instant::now()));
+        self.audio.saved(ok);
     }
 
     /// Pick up finished background work: a game ready to play, saves
@@ -851,20 +859,31 @@ impl Running {
         let keys = std::mem::take(&mut self.just_pressed);
         let mut menu_actions = Vec::new();
         let mut nav = Vec::new();
+        let mut frame_controls = None;
         if self.pending.is_some() {
             // Starting a game: nothing to do but wait.
         } else if self.game.is_none() || self.paused {
             for key in &keys {
                 match key {
-                    KeyCode::Escape => menu_actions.extend(self.menu.back(self.game.is_some())),
+                    KeyCode::Escape => {
+                        self.audio.play(audio::Cue::Back);
+                        menu_actions.extend(self.menu.back(self.game.is_some()));
+                    }
                     KeyCode::ArrowUp => nav.push(menu::Nav::Up),
                     KeyCode::ArrowDown => nav.push(menu::Nav::Down),
                     KeyCode::Enter | KeyCode::NumpadEnter => nav.push(menu::Nav::Enter),
                     _ => {}
                 }
             }
+            for n in &nav {
+                match n {
+                    menu::Nav::Enter => self.audio.ui_click(),
+                    _ => self.audio.ui_nav(),
+                }
+            }
         } else {
             let (controls, actions, pause) = self.controls(dt, keys);
+            frame_controls = Some(controls);
             let game = self.game.as_mut().expect("playing");
             for a in actions {
                 game.world.act(a);
@@ -952,6 +971,18 @@ impl Running {
                 menu::toast(ctx, text, *ok, at.elapsed().as_secs_f32());
             }
         });
+        // Interface clicks: egui's own widgets report them; the menus'
+        // hand-drawn ones show the pointing hand.
+        let pointer_click = self.egui_ctx.input(|i| i.pointer.primary_clicked());
+        let out = &output.platform_output;
+        if out
+            .events
+            .iter()
+            .any(|e| matches!(e, egui::output::OutputEvent::Clicked(_)))
+            || (pointer_click && out.cursor_icon == egui::CursorIcon::PointingHand)
+        {
+            self.audio.ui_click();
+        }
         self.egui_state
             .handle_platform_output(&self.renderer.window, output.platform_output.clone());
         if let Some(game) = &mut self.game {
@@ -962,6 +993,15 @@ impl Running {
         for a in menu_actions {
             self.apply(a);
         }
+        self.audio.set_volumes(&self.settings);
+        self.audio.update(
+            audio::View {
+                world: self.game.as_ref().map(|g| &g.world),
+                paused: self.paused || self.pending.is_some(),
+                controls: frame_controls.as_ref(),
+            },
+            dt as f32,
+        );
         if self
             .toast
             .as_ref()

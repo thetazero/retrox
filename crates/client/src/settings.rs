@@ -17,6 +17,10 @@ pub struct Settings {
     pub fullscreen: bool,
     /// Size of the interface, 1.0 as designed.
     pub ui_scale: f32,
+    /// Loudness of everything, the music, and the sound effects: 0..1.
+    pub master_volume: f32,
+    pub music_volume: f32,
+    pub effects_volume: f32,
 }
 
 impl Default for Settings {
@@ -26,6 +30,9 @@ impl Default for Settings {
             invert_pitch: false,
             fullscreen: false,
             ui_scale: 1.0,
+            master_volume: 0.8,
+            music_volume: 0.6,
+            effects_volume: 0.8,
         }
     }
 }
@@ -48,6 +55,13 @@ impl Settings {
         } else {
             1.0
         };
+        for v in [
+            &mut self.master_volume,
+            &mut self.music_volume,
+            &mut self.effects_volume,
+        ] {
+            *v = if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.8 };
+        }
         self
     }
 
@@ -95,6 +109,9 @@ mod tests {
             invert_pitch: true,
             fullscreen: true,
             ui_scale: 1.25,
+            master_volume: 0.5,
+            music_volume: 0.0,
+            effects_volume: 1.0,
         };
         changed.save(&path).unwrap();
         assert_eq!(Settings::load(&path), changed);
@@ -107,6 +124,10 @@ mod tests {
 
         std::fs::write(&path, r#"{"mouse_sensitivity": 99}"#).unwrap();
         assert_eq!(Settings::load(&path).mouse_sensitivity, 3.0);
+
+        std::fs::write(&path, r#"{"music_volume": 7, "effects_volume": -1}"#).unwrap();
+        let loaded = Settings::load(&path);
+        assert_eq!((loaded.music_volume, loaded.effects_volume), (1.0, 0.0));
 
         std::fs::write(&path, "not json").unwrap();
         assert_eq!(Settings::load(&path), Settings::default());
