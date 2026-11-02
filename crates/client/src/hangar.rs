@@ -64,6 +64,9 @@ pub struct Player {
     /// What the player has done, for the first-steps notes.
     #[serde(default)]
     pub progress: crate::guide::Progress,
+    /// Standing with each faction (DESIGN §7.2.2).
+    #[serde(default)]
+    pub standing: crate::standing::Standing,
 }
 
 impl Player {
@@ -80,6 +83,7 @@ impl Player {
             cargo: GoodMap::default(),
             contracts: Vec::new(),
             bought: 1,
+            standing: Default::default(),
             progress: Default::default(),
         }
     }

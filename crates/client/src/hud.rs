@@ -561,9 +561,9 @@ fn nav_list(ui: &mut egui::Ui, w: &World, actions: &mut Vec<Action>) {
             mono(14.0),
             look.text(AMBER),
         );
-        // Raider bands are reported where they lurk.
+        // Pirates are known where they lair.
         if let Place::Field(f) = place
-            && w.raiders_reported(f)
+            && w.gang_reported(f)
         {
             painter.text(
                 Pos2::new(name.right() + 8.0, c.y),

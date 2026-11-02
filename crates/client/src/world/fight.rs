@@ -1,9 +1,11 @@
-//! The fight around the ship (see [`crate::combat`]): raider bands come
-//! out when the ship enters their field, and the ship's own guns, shields
-//! and hull run every frame. Damage is repaired, at a price, on docking or
-//! landing.
+//! The fight around the ship (see [`crate::combat`]): a pirate gang comes
+//! out when the ship enters its field or the gang intercepts it (see
+//! [`super::prowl`]), and the ship's own guns, shields and hull run every
+//! frame. Damage is repaired, at a price, on docking or landing.
 
 use glam::DVec3;
+
+use retrox_sim::pirates::{self, Aim};
 
 use super::{Mode, Place, World, rock_offset};
 use crate::combat::{Combat, Craft, HOSTILE_RANGE, Pilot, REPAIR_PER_POINT};
@@ -38,17 +40,9 @@ impl World {
             .hostiles_within(self.combat_position(), HOSTILE_RANGE)
     }
 
-    /// Whether a raider band is out at `field` now, as far as anyone
-    /// here knows: one has gathered there this stretch of the calendar,
-    /// and the player hasn't broken it.
-    pub fn raiders_reported(&self, field: retrox_sim::FieldId) -> bool {
-        let epoch = (self.t_days() / crate::combat::BAND_DAYS) as u64;
-        let band = crate::combat::band(&self.galaxy, self.system, field, epoch);
-        let killed = match self.combat.bands.0.get(&field) {
-            Some(b) if b.epoch == epoch => b.killed,
-            _ => 0,
-        };
-        (0..band.len()).any(|i| killed & (1 << i) == 0)
+    /// Whether a pirate gang is known to lair at `field`.
+    pub fn gang_reported(&self, field: retrox_sim::FieldId) -> bool {
+        pirates::gang_at(&self.galaxy, field).is_some()
     }
 
     /// The ship as the fight sees it.
@@ -71,46 +65,49 @@ impl World {
     pub(super) fn fight(&mut self, dt: f64, trigger: bool) {
         // Refits change the guns, shields and sections.
         if self.combat.player.fit != self.player.ship.fit {
+            self.end_fight();
             let lost = self.combat.lost;
-            let bands = std::mem::take(&mut self.combat.bands);
             self.combat = Combat::new(
                 self.player.ship.fit.clone(),
                 self.player.ship.damage.clone(),
             );
-            self.combat.bands = bands;
             self.combat.lost = lost;
         }
 
-        // A field's band comes out when we arrive, and stays behind when
-        // we go.
+        // A gang at home in its field comes out when we arrive; the fight
+        // stays behind when we go.
         let field = match self.mode {
             Mode::Normal => self.field_rocks.as_ref().map(|f| f.0),
             _ => None,
         };
         if field != self.combat.field {
-            match field {
-                Some(f) => {
-                    // Fight in the field's frame, as the band does.
-                    self.enter_frame(Place::Field(f));
-                    let craft = Craft {
-                        pos: self.ship.rel,
-                        vel: self.ship.vel,
-                        rot: self.ship.rot,
-                        spin: self.ship.spin,
-                    };
-                    let day = self.t_days();
-                    let alert = self
-                        .combat
-                        .arrive(&self.galaxy, self.system, f, day, &craft);
-                    if let Some(text) = alert {
-                        self.say(text);
-                    }
+            self.end_fight();
+            self.combat.leave();
+            if let Some(f) = field {
+                // Fight in the field's frame, as the gang does.
+                self.enter_frame(Place::Field(f));
+                self.combat.field = Some(f);
+                let today = self.galaxy.time;
+                let home = pirates::gang_at(&self.galaxy, f).filter(|g| {
+                    self.galaxy
+                        .pirates
+                        .prowls
+                        .get(g)
+                        .is_some_and(|p| p.aim == Aim::Lurk && today >= p.rest_until)
+                });
+                if let Some(g) = home {
+                    self.engage(g, Some(f), DVec3::ZERO, DVec3::ZERO);
                 }
-                None => self.combat.leave(),
             }
+        }
+        // Everyone dead, fled or gone home: the fight is over.
+        if self.fight_left_behind() || (self.mode != Mode::Normal && self.combat.gang.is_some())
+        {
+            self.end_fight();
         }
 
         if self.docked_at().is_some() {
+            self.end_fight();
             self.combat
                 .rest(&self.player.ship.fit, &self.player.ship.damage);
             return;
@@ -128,6 +125,9 @@ impl World {
         let solids = self.combat_solids(pilot.craft.pos);
         let out = self.combat.update(dt, pilot, &solids);
         self.player.ship.damage = self.combat.player.damage.clone();
+        for id in out.kills {
+            self.raider_killed(id);
+        }
         if let Some(f) = self.combat.field {
             for (pos, vel, good, tonnes, seed) in out.salvage {
                 self.mining.drop_loose(f, pos, vel, good, tonnes, seed);
@@ -158,26 +158,19 @@ impl World {
         out
     }
 
-    /// Go to the nearest asteroid field with a raider band and park there,
-    /// for the band to find (for testing). Returns whether there was one.
+    /// Go to the nearest asteroid field with a pirate gang at home and
+    /// park there, for the gang to find (for testing). Returns whether
+    /// there was one.
     pub fn start_by_raiders(&mut self) -> bool {
         let here = self.galaxy.systems[self.system].position;
-        let mut systems: Vec<_> = self
+        let found = self
             .galaxy
-            .systems
-            .iter()
-            .map(|(id, s)| (id, here.distance(s.position)))
-            .collect();
-        systems.sort_by(|a, b| a.1.total_cmp(&b.1));
-        let epoch = (self.t_days() / crate::combat::BAND_DAYS) as u64;
-        let found = systems.into_iter().find_map(|(id, _)| {
-            let fields = super::SystemView::new(&self.galaxy, id).fields;
-            fields
-                .into_iter()
-                .find(|&f| !crate::combat::band(&self.galaxy, id, f, epoch).is_empty())
-                .map(|f| (id, f))
-        });
-        let Some((system, field)) = found else {
+            .pirates
+            .gangs
+            .values()
+            .map(|g| (g.lair, g.field, here.distance(self.galaxy.systems[g.lair].position)))
+            .min_by(|a, b| a.2.total_cmp(&b.2));
+        let Some((system, field, _)) = found else {
             return false;
         };
         if system != self.system {
@@ -255,15 +248,10 @@ impl World {
         if share >= 1.0 {
             *d = Default::default();
         }
-        self.combat = {
-            let bands = std::mem::take(&mut self.combat.bands);
-            let mut c = Combat::new(
-                self.player.ship.fit.clone(),
-                self.player.ship.damage.clone(),
-            );
-            c.bands = bands;
-            c
-        };
+        self.combat = Combat::new(
+            self.player.ship.fit.clone(),
+            self.player.ship.damage.clone(),
+        );
         let what = if share >= 1.0 {
             "Hull repaired"
         } else {

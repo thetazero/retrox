@@ -30,6 +30,7 @@
 mod field;
 mod fight;
 mod pilot;
+mod prowl;
 mod routing;
 #[cfg(test)]
 mod tests;
@@ -335,6 +336,9 @@ pub struct World {
     pub combat: Combat,
     /// How hard the ship's engines burned this frame, 0..1.
     pub burn: f64,
+    /// Seconds since a gang pulled us out of fast travel, while that's
+    /// news.
+    pub interdicted: Option<f64>,
 }
 
 /// A wait in progress (DESIGN §3): docked or landed only, a day at a time,
@@ -433,10 +437,12 @@ impl World {
             traffic: Traffic::default(),
             combat: Combat::new(player.ship.fit.clone(), player.ship.damage.clone()),
             burn: 0.0,
+            interdicted: None,
             player,
         };
         // Traders near the player are ships (DESIGN §5.2).
         bubble::set_centre(&mut world.galaxy, Some(system));
+        world.settle_prowls();
         world.update_field();
         world.refresh_board();
         world
@@ -677,7 +683,7 @@ impl World {
                 }
             }
             Action::Dock => {
-                if let Some(s) = prompts.dock {
+                if let Some(s) = prompts.dock.filter(|&s| self.cleared(s)) {
                     self.mining.haul = Default::default();
                     self.mode = Mode::Docked(s);
                     self.screen = Screen::Hub;
@@ -701,7 +707,7 @@ impl World {
                 }
             }
             Action::Land => {
-                if let Some((city, body)) = prompts.land {
+                if let Some((city, body)) = prompts.land.filter(|&(c, _)| self.cleared(c)) {
                     self.mode = Mode::Landed {
                         city,
                         body,
@@ -952,6 +958,14 @@ impl World {
 
     pub fn update(&mut self, dt: f64, controls: Controls) {
         self.bump = 0.0;
+        let from = self.ship_position();
+        let clock0 = self.clock_s;
+        if let Some(t) = &mut self.interdicted {
+            *t += dt;
+            if *t > 6.0 {
+                self.interdicted = None;
+            }
+        }
         if let Some((_, t)) = &mut self.message {
             *t -= dt as f32;
             if *t <= 0.0 {
@@ -994,6 +1008,8 @@ impl World {
         self.wait_some();
 
         self.traffic.update(&self.galaxy, self.system, self.clock_s);
+        self.prowl(from, clock0);
+        self.player.standing.drift(self.galaxy.time.days());
         self.settle_contracts();
         self.refresh_board();
         self.update_field();

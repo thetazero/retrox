@@ -36,6 +36,7 @@ mod settings;
 mod station_ui;
 mod title;
 mod trade;
+mod standing;
 mod traffic;
 mod widgets;
 mod world;

@@ -23,27 +23,25 @@
 //! the end of it; a framed ship's further hits there go to the frame, and
 //! the ship is lost when the frame gives out or every section is gone.
 //!
-//! **Raiders.** Pirate bands lurk at asteroid fields, preying on miners,
-//! away from faction capitals and more often where no one has settled.
-//! Each field has a band or not for each [`BAND_DAYS`] stretch of the
-//! calendar, decided from the field and the date (so a restored checkpoint
-//! meets the same band). They wait until a ship comes, then close in.
-//! Raiders fly the same arcade flight model the player does, with stock
-//! fits, under the same budgets. Ships killed stay dead until the band
-//! regroups. Until raiders are agents of the sim's bubble (DESIGN §5.2),
-//! bands are kept here, like the mining laser's work on a field.
+//! **Raiders.** The ships of a pirate gang from the sim (DESIGN §7.2.2,
+//! [`retrox_sim::pirates`]), brought out when the player meets the gang:
+//! at its lair field, or wherever it intercepts them. Raiders fly the same
+//! arcade flight model the player does, with stock fits, under the same
+//! budgets, and guard a *home* point (the field, or where the fight
+//! began). Who dies is reported back to the world, which pays the bounty
+//! and tells the sim.
 //!
 //! Positions are relative to the fight's *anchor*: the field (or, outside
 //! one, wherever the player's ship is framed). Metres, y up.
 
-use std::collections::HashMap;
 use std::f64::consts::{PI, TAU};
 
 use glam::{DQuat, DVec3};
 use retrox_gen::Rng;
 use retrox_sim::economy::Good;
 use retrox_sim::ship::{Function, Loadout, ShipStats};
-use retrox_sim::{FieldId, GalaxyState, SystemId};
+use retrox_sim::FieldId;
+use retrox_sim::pirates::GangId;
 use serde::{Deserialize, Serialize};
 
 use crate::world::{STRAFE_SPEED, assist, handling, look_rotation, steer};
@@ -59,12 +57,10 @@ pub const HOSTILE_RANGE: f64 = 20e3;
 pub const SHIELD_DELAY: f64 = 3.0;
 /// Locked-out guns come back once heat falls to this share of capacity.
 const UNLOCK_HEAT: f64 = 0.5;
-/// Galaxy days a field's band lasts before another takes its place.
-pub const BAND_DAYS: f64 = 20.0;
 /// How long a wreck drifts before it's lost from view, seconds.
 const WRECK_LIFE: f64 = 180.0;
-/// Raiders give up the chase once the player is this far from their field.
-const LEASH: f64 = 16e3;
+/// Raiders give up the chase once the player is this far from their home.
+pub const LEASH: f64 = 16e3;
 /// Raiders spawn this far from the ship that comes to their field.
 const AMBUSH_RANGE: f64 = 7000.0;
 /// Credits per point of structure repaired.
@@ -488,6 +484,8 @@ pub struct Raider {
     jink_t: f64,
     /// Seconds left in the current burst of fire (negative: pause).
     burst: f64,
+    /// What it guards and comes back to, anchor-relative.
+    pub home: DVec3,
 }
 
 /// A shell in flight.
@@ -583,19 +581,6 @@ impl Wreck {
     }
 }
 
-/// Which raiders of a field's band are dead, for one stretch of the
-/// calendar. Saved with the game.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct Band {
-    pub epoch: u64,
-    /// Bit `i` set: the band's ship `i` is dead.
-    pub killed: u32,
-}
-
-/// The bands the player has fought, by field.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct Bands(#[serde(with = "crate::save::pairs")] pub HashMap<FieldId, Band>);
-
 /// Running counts of events (see [`Combat::tally`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Tally {
@@ -622,13 +607,20 @@ pub struct Outcome {
     /// Loose cargo thrown from wrecks: where, how it drifts, what, tonnes.
     pub salvage: Vec<(DVec3, DVec3, Good, f64, u64)>,
     pub player_destroyed: bool,
+    /// Raiders destroyed this frame, by id.
+    pub kills: Vec<u32>,
 }
 
 /// Everything fighting near the player.
 #[derive(Clone, Debug)]
 pub struct Combat {
-    /// The field whose band is out, if any.
+    /// The field the fight is at, if any.
     pub field: Option<FieldId>,
+    /// The gang whose ships are out, if any.
+    pub gang: Option<GangId>,
+    /// Raiders of the gang destroyed in this fight, by id (the ship's
+    /// place in the gang).
+    pub killed: Vec<u32>,
     pub raiders: Vec<Raider>,
     pub shots: Vec<Shot>,
     pub pulses: Vec<Pulse>,
@@ -642,7 +634,6 @@ pub struct Combat {
     pub target: Option<u32>,
     /// Seconds since the player's ship was destroyed, if it was.
     pub lost: Option<f64>,
-    pub bands: Bands,
     /// Seconds since the player's guns last hit something, and since the
     /// player's shield and hull were last hit (for the HUD).
     pub since_scored: f64,
@@ -654,9 +645,8 @@ pub struct Combat {
     /// player's shells and pulses, everyone else's, hits on the player's
     /// shield and hull, and ships blown up.
     pub tally: Tally,
-    /// Raiders of the field's band, by index, and the epoch they're from.
-    band_epoch: u64,
     rng: Rng,
+    kills: Vec<u32>,
     /// Laser hits waiting to land this frame: who, how hard, where, which
     /// way.
     pending: Vec<(Side, f64, DVec3, DVec3)>,
@@ -671,6 +661,8 @@ impl Combat {
     pub fn new(fit: Loadout, damage: Damage) -> Self {
         Self {
             field: None,
+            gang: None,
+            killed: Vec::new(),
             raiders: Vec::new(),
             shots: Vec::new(),
             pulses: Vec::new(),
@@ -681,14 +673,13 @@ impl Combat {
             player: Vessel::new(fit, damage),
             target: None,
             lost: None,
-            bands: Bands::default(),
             since_scored: 10.0,
             since_shield_hit: 10.0,
             since_hull_hit: 10.0,
             hit_from: DVec3::NEG_Z,
             tally: Tally::default(),
-            band_epoch: 0,
             rng: Rng::new(0x636f_6d62),
+            kills: Vec::new(),
             pending: Vec::new(),
             said: Vec::new(),
             dropped: Vec::new(),
@@ -699,13 +690,12 @@ impl Combat {
     /// The ship at rest in a dock or a city: cool, shields up, guns ready,
     /// nothing in flight. That is just how a loaded checkpoint has it, so
     /// the game after a checkpoint plays the same whether it was restored
-    /// or not (DESIGN §7.7). The bands fought are remembered.
+    /// or not (DESIGN §7.7).
     pub fn rest(&mut self, fit: &Loadout, damage: &Damage) {
         if self.fresh && self.player.fit == *fit && self.player.damage == *damage {
             return;
         }
         let mut c = Combat::new(fit.clone(), damage.clone());
-        c.bands = std::mem::take(&mut self.bands);
         // The sound follows these counts; they only go up.
         c.tally = self.tally;
         *self = c;
@@ -763,10 +753,12 @@ impl Combat {
         self.target = next.map(|(_, id)| *id);
     }
 
-    /// The fight is somewhere else now: shells, flashes and the band go.
-    /// Wrecks and the bands' records stay.
+    /// The fight is somewhere else now: shells, flashes and the gang go.
+    /// (The world reports the fight to the sim first.)
     pub fn leave(&mut self) {
         self.field = None;
+        self.gang = None;
+        self.killed.clear();
         self.raiders.clear();
         self.shots.clear();
         self.pulses.clear();
@@ -777,57 +769,50 @@ impl Combat {
         self.target = None;
     }
 
-    /// Bring out the band of `field`, if it has one and any of it is
-    /// alive, waiting for a ship at `player` (field-relative).
+    /// Bring out `gang`'s ships (`hulls`, by their place in the gang)
+    /// near a ship at `player`: they come in from `from` and guard `home`
+    /// (both anchor-relative). `seed` decides the fight's dice, so a
+    /// restored checkpoint meets the same fight (DESIGN §7.7).
     #[allow(clippy::too_many_arguments)]
-    pub fn arrive(
+    pub fn bring_out(
         &mut self,
-        galaxy: &GalaxyState,
-        system: SystemId,
-        field: FieldId,
-        day: f64,
+        gang: GangId,
+        name: &str,
+        hulls: &[(u32, String)],
+        seed: u64,
+        field: Option<FieldId>,
         player: &Craft,
+        from: DVec3,
+        home: DVec3,
     ) -> Option<String> {
         self.leave();
-        self.field = Some(field);
-        let epoch = (day / BAND_DAYS) as u64;
-        self.band_epoch = epoch;
-        let band = band(galaxy, system, field, epoch);
-        let record = self.bands.0.get(&field).copied().unwrap_or_default();
-        let killed = if record.epoch == epoch {
-            record.killed
-        } else {
-            0
-        };
-        let mut rng = Rng::new((field.index() as u64) ^ epoch.wrapping_mul(0x9e37_79b9_7f4a_7c15));
+        self.field = field;
+        self.gang = Some(gang);
+        let mut rng = Rng::new(seed);
         // The fight's own dice (shot scatter, wreckage) start over too, from
-        // the band and who of it is left: what came before (guns fired at
-        // nothing, an earlier fight) isn't saved, and a restored checkpoint
-        // has to meet the same fight (DESIGN §7.7).
-        self.rng = Rng::new(rng.next_u64() ^ u64::from(killed).wrapping_mul(0xd6e8_feb8_6659_fd93));
-        // They come from deeper in the field, toward the ship.
-        let inward = (-player.pos).normalize_or(DVec3::X);
+        // the gang and who of it is left: what came before (guns fired at
+        // nothing, an earlier fight) isn't saved.
+        self.rng = Rng::new(rng.next_u64());
+        // They come from where the gang was, toward the ship.
+        let inward = (from - player.pos).normalize_or(DVec3::X);
         let side = inward.cross(DVec3::Y).normalize_or(DVec3::Z);
         let mut out = 0;
-        for (i, hull) in band.into_iter().enumerate() {
-            if killed & (1 << i) != 0 {
-                continue;
-            }
+        for (k, (id, hull)) in hulls.iter().enumerate() {
             let Some(fit) = retrox_content::ships::stock(hull) else {
                 continue;
             };
-            let spread = (i as f64 - 1.0) * 350.0;
+            let spread = (k as f64 - 1.0) * 350.0;
             let pos = player.pos
                 + inward * (AMBUSH_RANGE + rng.range(-800.0, 800.0))
                 + side * spread
                 + DVec3::Y * rng.range(-300.0, 300.0);
             let to_player = (player.pos - pos).normalize_or(DVec3::Z);
             self.raiders.push(Raider {
-                id: i as u32,
+                id: *id,
                 vessel: Vessel::new(fit, Damage::default()),
                 craft: Craft {
                     pos,
-                    vel: to_player * 150.0,
+                    vel: player.vel + to_player * 150.0,
                     rot: look_rotation(to_player),
                     spin: DVec3::ZERO,
                 },
@@ -839,12 +824,13 @@ impl Combat {
                 jink: DVec3::ZERO,
                 jink_t: 0.0,
                 burst: rng.range(-1.0, 0.5),
+                home,
             });
             out += 1;
         }
         (out > 0).then(|| {
             let ships = if out == 1 { "ship" } else { "ships" };
-            format!("Raiders! {out} {ships} closing")
+            format!("Raiders! The {name}: {out} {ships} closing")
         })
     }
 
@@ -917,6 +903,7 @@ impl Combat {
         out.player_destroyed = self.lost == Some(0.0);
         out.messages.append(&mut self.said);
         out.salvage.append(&mut self.dropped);
+        out.kills.append(&mut self.kills);
         out
     }
 
@@ -1139,19 +1126,11 @@ impl Combat {
                     }
                     Side::Raider(id) => {
                         self.raiders.retain(|r| r.id != id);
-                        if let Some(field) = self.field {
-                            let band = self.bands.0.entry(field).or_default();
-                            if band.epoch != self.band_epoch {
-                                *band = Band {
-                                    epoch: self.band_epoch,
-                                    killed: 0,
-                                };
-                            }
-                            band.killed |= 1 << id;
-                        }
+                        self.killed.push(id);
+                        self.kills.push(id);
                         let left = self.raiders.len();
                         self.said.push(if left == 0 {
-                            "Raider destroyed · the band is broken".to_owned()
+                            "Raider destroyed · the gang is broken".to_owned()
                         } else {
                             format!("Raider destroyed · {left} left")
                         });
@@ -1296,16 +1275,16 @@ impl Raider {
         let (dir, speed) = match (self.tactic, target) {
             (_, None) => {
                 self.tactic = Tactic::Return;
-                (-c.pos, 120.0)
+                (self.home - c.pos, 120.0)
             }
             (Tactic::Return, Some(t)) => {
-                if t.pos.length() < LEASH * 0.8 {
+                if (t.pos - self.home).length() < LEASH * 0.8 {
                     self.tactic = Tactic::Attack;
                 }
-                if c.pos.length() < 3000.0 {
+                if (c.pos - self.home).length() < 3000.0 {
                     (t.pos - c.pos, 60.0)
                 } else {
-                    (-c.pos, 350.0)
+                    (self.home - c.pos, 350.0)
                 }
             }
             (Tactic::Flee, Some(t)) => (c.pos - t.pos, 600.0),
@@ -1319,7 +1298,7 @@ impl Raider {
             (Tactic::Attack, Some(t)) => {
                 let to = t.pos - c.pos;
                 let dist = to.length();
-                if t.pos.length() > LEASH {
+                if (t.pos - self.home).length() > LEASH {
                     self.tactic = Tactic::Return;
                 } else if self.vessel.hull_left() < 0.3 && self.rng.chance(dt * (1.2 - self.skill))
                 {
@@ -1442,59 +1421,6 @@ impl Raider {
                 (gun, muzzle, dir)
             })
             .collect()
-    }
-}
-
-/// Which hulls a field's band flies this epoch (empty: no band).
-pub fn band(
-    galaxy: &GalaxyState,
-    system: SystemId,
-    field: FieldId,
-    epoch: u64,
-) -> Vec<&'static str> {
-    let chance = band_chance(galaxy, system);
-    let mut rng = Rng::new(
-        (field.index() as u64).rotate_left(17) ^ epoch.wrapping_mul(0x2545_f491_4f6c_dd1d),
-    );
-    if !rng.chance(chance) {
-        return Vec::new();
-    }
-    let frontier = chance > 0.6;
-    let n = if frontier {
-        2 + rng.below(2)
-    } else {
-        1 + rng.below(2)
-    };
-    (0..n)
-        .map(|i| {
-            let roll = rng.f64();
-            if frontier && i == 0 && roll < 0.35 {
-                "gunship"
-            } else if roll < 0.65 {
-                "interceptor"
-            } else {
-                "heavy-fighter"
-            }
-        })
-        .collect()
-}
-
-/// How likely a field in this system is to have raiders: never where a
-/// faction keeps its capital, sometimes where people live, mostly where
-/// no one does.
-pub fn band_chance(galaxy: &GalaxyState, system: SystemId) -> f64 {
-    let capital = galaxy.factions.values().any(|f| {
-        galaxy
-            .settlements
-            .get(f.capital)
-            .is_some_and(|s| s.system == system)
-    });
-    if capital {
-        0.0
-    } else if galaxy.settlements_in(system).next().is_some() {
-        0.45
-    } else {
-        0.85
     }
 }
 
