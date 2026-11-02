@@ -120,6 +120,12 @@ fn print_fit(fit: &Loadout) {
         "  weapons     {:.0} dps, {:.1} km",
         s.dps, s.weapon_range_km
     );
+    if s.mining_cut > 0.0 {
+        println!(
+            "  mining      {:.1} cut/s, {:.0} m",
+            s.mining_cut, s.mining_range_m
+        );
+    }
     println!("  radar       {:.0} km", s.radar_range_km);
     println!("  cargo       {:.0} t", s.cargo_t);
     println!(

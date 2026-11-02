@@ -12,6 +12,8 @@ pub static MODULES: &[Module] = &[
     AUTOCANNON,
     LASER,
     HEAVY_CANNON,
+    LIGHT_MINING_LASER,
+    MINING_LASER,
     LIGHT_DRIVE,
     INTERCEPTOR_DRIVE,
     SPRINT_DRIVE,
@@ -68,6 +70,10 @@ const fn weapon(damage: f64, fire_rate_hz: f64, range_km: f64) -> Function {
     }
 }
 
+const fn mining(cut_rate: f64, range_m: f64) -> Function {
+    Function::MiningLaser { cut_rate, range_m }
+}
+
 const fn engine(thrust_kn: f64) -> Function {
     Function::Engine { thrust_kn }
 }
@@ -121,6 +127,13 @@ pub const AUTOCANNON: Module = module("autocannon", "Autocannon", M, 5.0, 5.0, 8
 pub const LASER: Module = module("laser", "Laser", M, 4.0, 10.0, 15.0, weapon(150.0, 2.0, 6.0));
 #[rustfmt::skip]
 pub const HEAVY_CANNON: Module = module("heavy-cannon", "Heavy cannon", L, 20.0, 15.0, 25.0, weapon(500.0, 1.5, 8.0));
+
+// Mining lasers, for weapon slots. Cut rock, not hulls: a slow, hot beam
+// that fractures asteroids.
+#[rustfmt::skip]
+pub const LIGHT_MINING_LASER: Module = module("light-mining-laser", "Light mining laser", S, 1.0, 3.0, 5.0, mining(3.0, 500.0));
+#[rustfmt::skip]
+pub const MINING_LASER: Module = module("mining-laser", "Mining laser", M, 4.5, 8.0, 12.0, mining(8.0, 800.0));
 
 // Engines. The interceptor drive is a compact high-output unit that fits
 // a medium slot on a small ship; sprint drives push hard and run hot,
