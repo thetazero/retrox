@@ -120,6 +120,7 @@ impl Hyperlane {
 pub struct Faction {
     pub name: String,
     pub economy: EconomyModel,
+    pub capital: SystemId,
     pub founded: GalaxyTime,
 }
 

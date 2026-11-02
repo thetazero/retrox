@@ -2,7 +2,9 @@
 
 use std::fmt::Write;
 
-use retrox_sim::{GalaxyState, StarClass};
+use std::collections::HashMap;
+
+use retrox_sim::{FactionId, GalaxyState};
 
 pub fn svg(state: &GalaxyState) -> String {
     let systems = state.systems.as_slice();
@@ -37,16 +39,18 @@ pub fn svg(state: &GalaxyState) -> String {
         );
     }
     out.push_str("</g>\n<g>\n");
+
+    // Spread faction hues around the colour wheel by the golden angle.
+    let colors: HashMap<FactionId, String> = state
+        .factions
+        .keys()
+        .enumerate()
+        .map(|(i, id)| (id, hsl((i as f64 * 137.508) % 360.0, 0.65, 0.6)))
+        .collect();
     for s in systems {
-        let (color, r) = match s.star {
-            StarClass::O | StarClass::B => ("#9fc4ff", 3.2),
-            StarClass::A | StarClass::F => ("#f1efe6", 2.6),
-            StarClass::G => ("#f4d37a", 2.4),
-            StarClass::K => ("#f0a35e", 2.2),
-            StarClass::M => ("#e0715a", 1.8),
-            StarClass::WhiteDwarf => ("#ffffff", 1.6),
-            StarClass::Neutron => ("#7df0e8", 2.0),
-            StarClass::BlackHole => ("#b07cff", 3.0),
+        let (color, r) = match s.owner {
+            Some(owner) => (colors[&owner].as_str(), 2.6),
+            None => ("#5c606b", 1.8),
         };
         let _ = writeln!(
             out,
@@ -55,6 +59,33 @@ pub fn svg(state: &GalaxyState) -> String {
             px(s.position.y)
         );
     }
+    out.push_str("</g>\n<g font-family=\"monospace\" font-size=\"18\" fill=\"#f1efe6\" text-anchor=\"middle\">\n");
+    for faction in state.factions.values() {
+        let p = state.systems[faction.capital].position;
+        let (x, y) = (px(p.x), px(p.y));
+        let _ = writeln!(
+            out,
+            r##"<circle cx="{x:.1}" cy="{y:.1}" r="6" fill="none" stroke="#f1efe6" stroke-width="2"/><text x="{x:.1}" y="{:.1}">{}</text>"##,
+            y - 12.0,
+            faction.name
+        );
+    }
     out.push_str("</g>\n</svg>\n");
     out
+}
+
+fn hsl(h: f64, s: f64, l: f64) -> String {
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+    let m = l - c / 2.0;
+    let (r, g, b) = match (h / 60.0) as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let to = |v: f64| ((v + m) * 255.0).round() as u8;
+    format!("#{:02x}{:02x}{:02x}", to(r), to(g), to(b))
 }

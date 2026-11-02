@@ -8,6 +8,7 @@ fn small_galaxy() -> GalaxyState {
     let faction = state.factions.insert(Faction {
         name: "Union of Free Stations".into(),
         economy: EconomyModel::Planned,
+        capital: retrox_sim::SystemId::from_index(0),
         founded: GalaxyTime::ZERO,
     });
     state

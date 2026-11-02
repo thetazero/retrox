@@ -105,6 +105,22 @@ fn stats(seed: u64) {
         .map(|s| s.name.as_str())
         .collect();
     println!("  names: {}", sample.join(", "));
+    println!("  factions:");
+    for faction in state.factions.values() {
+        let systems = state
+            .systems
+            .as_slice()
+            .iter()
+            .filter(|s| {
+                s.owner
+                    .is_some_and(|o| state.factions[o].capital == faction.capital)
+            })
+            .count();
+        println!(
+            "    {:<32} {:?}  {systems} systems",
+            faction.name, faction.economy
+        );
+    }
 }
 
 fn simulate(seed: u64, years: u64) {

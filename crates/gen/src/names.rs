@@ -14,7 +14,7 @@ const SUFFIXES: &[&str] = &[
     "", "", "", "", "", "", " Prime", " Major", " Minor", " Gate", " Reach", " Deep",
 ];
 
-fn word(rng: &mut Rng) -> String {
+pub fn word(rng: &mut Rng) -> String {
     let syllables = if rng.chance(0.7) { 2 } else { 3 };
     let mut w = String::new();
     for i in 0..syllables {
