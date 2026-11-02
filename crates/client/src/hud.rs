@@ -36,10 +36,9 @@ pub(crate) const AMBER: Color32 = Color32::from_rgb(255, 178, 76);
 /// Vacuum-fluorescent teal: live instrument readouts.
 pub(crate) const VFD: Color32 = Color32::from_rgb(110, 240, 214);
 pub(crate) const VFD_DIM: Color32 = Color32::from_rgb(22, 58, 56);
-/// HUD panels. Blending happens in linear light on the sRGB surface, so
-/// a bright scene shows through far more than the alpha suggests: keep it
-/// near opaque.
-pub(crate) const PANEL: Color32 = Color32::from_rgba_premultiplied(11, 9, 16, 248);
+/// HUD panels: opaque. Blending happens in linear light on the sRGB
+/// surface, so even 248 alpha let a sunlit rock show through (#156).
+pub(crate) const PANEL: Color32 = Color32::from_rgb(11, 9, 16);
 /// Menu pages (handbook, settings, load): opaque, as they're read at length
 /// (issue #124).
 pub(crate) const PAGE_FILL: Color32 = Color32::from_rgb(11, 9, 16);
@@ -301,7 +300,7 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
         .show(ctx, |ui| {
             // A faint backing keeps it legible over bright planets.
             let frame = egui::Frame::new()
-                .fill(crate::widgets::READOUT_FILL)
+                .fill(crate::widgets::BACKING)
                 .inner_margin(Margin {
                     left: 18,
                     right: 14,
