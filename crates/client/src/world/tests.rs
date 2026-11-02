@@ -684,6 +684,254 @@ fn climbing_out_is_a_real_flight_toward_the_next_target() {
     assert_eq!(world.prompts().fast_travel, Some(Place::Star));
 }
 
+/// A gang in a system of its own, at home, with the player arriving there
+/// (DESIGN §7.2.2).
+fn by_a_gang(world: &mut World) -> (retrox_sim::pirates::GangId, FieldId) {
+    let (id, lair, field) = world
+        .galaxy
+        .pirates
+        .gangs
+        .iter()
+        .map(|(id, g)| (id, g.lair, g.field))
+        .next()
+        .expect("seed 1 has gangs");
+    if world.system != lair {
+        world.arrive_jump(lair);
+    }
+    let today = world.galaxy.time;
+    let p = world
+        .galaxy
+        .pirates
+        .prowls
+        .get_mut(&id)
+        .expect("a gang in the bubble flies");
+    p.aim = retrox_sim::pirates::Aim::Lurk;
+    p.since = today;
+    (id, field)
+}
+
+#[test]
+fn pirates_pull_a_ship_out_of_fast_travel() {
+    let mut world = World::new(1);
+    let (id, field) = by_a_gang(&mut world);
+    // A third of an AU out from their field, heading for it.
+    let centre = world.position(Place::Field(field));
+    world.mode = Mode::Normal;
+    world.ship.frame = Place::Star;
+    world.ship.rel = centre + DVec3::new(0.3 * AU, 0.02 * AU, 0.0) - world.position(Place::Star);
+    world.ship.vel = DVec3::ZERO;
+    if world.current_well().is_some() {
+        world.ship.rel = centre + DVec3::new(-0.3 * AU, 0.02 * AU, 0.0);
+    }
+    world.target = Some(Place::Field(field));
+    world.update(1.0 / 60.0, Controls::default());
+    world.act(Action::FastTravel);
+    assert!(
+        matches!(world.mode, Mode::FastTravel(_)),
+        "{:?}",
+        world.message
+    );
+    let mut frames = 0;
+    while matches!(world.mode, Mode::FastTravel(_)) && frames < 60 * 20 {
+        world.update(1.0 / 60.0, Controls::default());
+        frames += 1;
+    }
+    assert!(
+        world.interdicted.is_some(),
+        "not interdicted: {:?}, {:?}",
+        world.message,
+        world.galaxy.pirates.prowls[&id]
+    );
+    assert_eq!(world.mode, Mode::Normal);
+    assert_eq!(world.combat.gang, Some(id));
+    assert!(world.hostiles_near() > 0, "the gang comes in");
+    assert!(
+        world.ship.vel.length() < 1000.0,
+        "dragged down to fighting speed"
+    );
+    assert_eq!(
+        world.galaxy.pirates.prowls[&id].aim,
+        retrox_sim::pirates::Aim::Engaged
+    );
+}
+
+#[test]
+fn a_bounty_pays_on_the_kill_and_the_sim_hears_of_it() {
+    let mut world = World::new(1);
+    assert!(world.start_by_raiders());
+    world.update(0.02, Controls::default());
+    let id = world.combat.gang.expect("the gang comes out");
+    let faction = world.galaxy.factions.keys().next().unwrap();
+    world.galaxy.pirates.gangs[id].bounty = Some(retrox_sim::pirates::Bounty {
+        faction,
+        per_ship: 3000.0,
+        posted: world.galaxy.time,
+    });
+    let ships = world.galaxy.pirates.gangs[id].ships.len();
+    let credits = world.player.credits;
+    let pilot = crate::combat::Pilot {
+        craft: world.player_craft(),
+        burn: 0.0,
+        trigger: false,
+    };
+    let first = world.combat.raiders[0].id;
+    world.combat.hit_raider(first, 1e6, &pilot);
+    world.update(0.02, Controls::default());
+    let paid = world.player.credits - credits;
+    assert!(paid >= 3000.0 - 1e-6, "paid {paid}");
+    assert!(world.player.standing.get(faction) > 0.0);
+    // The rest go down too: the gang is gone from the galaxy.
+    for r in world
+        .combat
+        .raiders
+        .iter()
+        .map(|r| r.id)
+        .collect::<Vec<_>>()
+    {
+        world.combat.hit_raider(r, 1e6, &pilot);
+    }
+    world.update(0.02, Controls::default());
+    assert!(world.combat.gang.is_none(), "the fight is over");
+    assert!(
+        world.galaxy.pirates.gangs.get(id).is_none(),
+        "all {ships} ships lost: the gang is broken"
+    );
+}
+
+#[test]
+fn shooting_a_traders_ships_makes_its_faction_hostile() {
+    let mut world = World::new(1);
+    assert!(world.start_by_traffic(), "seed 1 has traffic");
+    // Alongside, as an intercept leaves us: flying in the convoy's frame.
+    let key = world
+        .traffic
+        .contacts
+        .iter()
+        .max_by_key(|c| c.ships)
+        .unwrap()
+        .key;
+    world.enter_frame(Place::Convoy(key));
+    world.ship.flight_assist = true;
+    world.update(1.0 / 60.0, Controls::default());
+    let trader = world
+        .combat
+        .raiders
+        .iter()
+        .find(|r| r.trader_fleet().is_some())
+        .map(|r| (r.id, r.crew))
+        .expect("the fleet's ships are in the scene");
+    let crate::combat::Crew::Trader { fleet, faction } = trader.1 else {
+        unreachable!()
+    };
+    assert!(
+        !world.combat.raiders.iter().any(|r| r.hostile),
+        "peaceful at first"
+    );
+    assert_eq!(world.hostiles_near(), 0);
+    let ships = world
+        .galaxy
+        .companies
+        .get(fleet.0)
+        .and_then(|c| c.fleets.iter().find(|f| f.id == fleet.1))
+        .map_or(0, |f| f.ships);
+    // A few bursts, seconds apart.
+    for _ in 0..6 {
+        let pilot = crate::combat::Pilot {
+            craft: world.player_craft(),
+            burn: 0.0,
+            trigger: false,
+        };
+        if world.combat.raider(trader.0).is_some() {
+            world.combat.hit_raider(trader.0, 1.0, &pilot);
+        }
+        run(&mut world, 1.6);
+    }
+    assert!(
+        world.player.standing.hostile(faction),
+        "{}",
+        world.player.standing.get(faction)
+    );
+    // Destroyed, it's gone from the sim's fleet too.
+    let pilot = crate::combat::Pilot {
+        craft: world.player_craft(),
+        burn: 0.0,
+        trigger: false,
+    };
+    if world.combat.raider(trader.0).is_some() {
+        world.combat.hit_raider(trader.0, 1e6, &pilot);
+        world.update(1.0 / 60.0, Controls::default());
+        let left = world
+            .galaxy
+            .companies
+            .get(fleet.0)
+            .and_then(|c| c.fleets.iter().find(|f| f.id == fleet.1))
+            .map_or(0, |f| f.ships);
+        assert_eq!(left + 1, ships, "one ship fewer");
+    }
+    // Its stations turn us away.
+    let station = world
+        .galaxy
+        .settlements
+        .iter()
+        .find(|(_, s)| s.owner == faction)
+        .map(|(id, _)| id)
+        .expect("the faction has settlements");
+    assert!(!world.cleared(station));
+}
+
+#[test]
+fn intercept_brings_the_ship_alongside_a_convoy() {
+    let mut world = World::new(1);
+    assert!(world.start_by_traffic(), "seed 1 has traffic");
+    let c = world
+        .traffic
+        .contacts
+        .iter()
+        .max_by_key(|c| c.ships)
+        .unwrap()
+        .clone();
+    // Well off from it, at rest in the star's frame, looking at it.
+    let off = c.pos + DVec3::new(0.0, 0.02 * AU, 0.01 * AU);
+    world.ship.frame = Place::Star;
+    world.ship.rel = off;
+    world.ship.vel = DVec3::ZERO;
+    world.ship.flight_assist = true;
+    world.ship.rot = look_rotation(c.pos - off);
+    world.cam_rot = world.ship.rot;
+    world.update(1.0 / 60.0, Controls::default());
+    world.act(Action::Intercept);
+    assert!(
+        matches!(world.mode, Mode::FastTravel(FastTravel { leg: Leg::Intercept(k), .. }) if k == c.key),
+        "{:?}",
+        world.message
+    );
+    let mut frames = 0;
+    while matches!(world.mode, Mode::FastTravel(_)) && frames < 60 * 30 {
+        world.update(1.0 / 60.0, Controls::default());
+        frames += 1;
+    }
+    assert_eq!(world.mode, Mode::Normal, "{:?}", world.message);
+    if world.ship.frame != Place::Convoy(c.key) {
+        // The fleet reached port or a jump point first: fair, but rare.
+        eprintln!("lost the convoy: {:?}", world.message);
+        return;
+    }
+    run(&mut world, 1.0);
+    assert!(world.combat.has_convoy(c.key), "its ships are alongside");
+    let me = world.player_craft();
+    let near = world
+        .combat
+        .raiders
+        .iter()
+        .filter(|r| r.trader_fleet() == Some(c.key))
+        .map(|r| (r.craft.pos - me.pos).length())
+        .fold(f64::INFINITY, f64::min);
+    assert!(near < 5e3, "{near:.0} m off");
+    // In its frame, flight assist holds us with it.
+    let rel = world.ship.vel.length();
+    assert!(rel < 200.0, "{rel:.0} m/s relative");
+}
+
 #[test]
 fn skimming_a_gas_giant_fills_the_hold_with_gas() {
     use retrox_sim::harvest::{self, Source};

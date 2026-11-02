@@ -17,6 +17,7 @@ pub fn production(state: &mut GalaxyState) {
 pub fn planning(state: &mut GalaxyState) {
     crate::construction::review(state);
     crate::colonize::launch(state);
+    crate::pirates::review(state);
 }
 
 /// Docked fleets sell their cargo and pick their next trip.

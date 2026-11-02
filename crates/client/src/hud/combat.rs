@@ -99,30 +99,32 @@ pub fn draw(ctx: &egui::Context, h: &HudInput) {
     // how far, its shield and hull, and where to aim.
     for r in &c.raiders {
         let targeted = c.target == Some(r.id);
+        // Hostiles red; peaceful traders in the VFD's teal.
+        let ink = if r.hostile { ALARM } else { VFD };
         let rel = (origin + r.craft.pos - h.camera).as_vec3();
         let Some(p) = to_screen(r.craft.pos) else {
             if targeted {
-                super::edge_arrow_color(&painter, h.view_proj, rel, screen, ALARM);
+                super::edge_arrow_color(&painter, h.view_proj, rel, screen, ink);
             }
             continue;
         };
         let dist = (r.craft.pos - me.pos).length();
         if !targeted {
-            diamond(&painter, p, 5.0, ALARM);
+            diamond(&painter, p, 5.0, ink);
             if dist < 8000.0 {
                 painter.text(
                     p + Vec2::new(10.0, 0.0),
                     Align2::LEFT_CENTER,
                     distance(dist),
                     mono(11.0),
-                    ALARM.gamma_multiply(0.8),
+                    ink.gamma_multiply(0.8),
                 );
             }
             continue;
         }
         let size = 30.0;
         let rect = Rect::from_center_size(p, Vec2::splat(size));
-        brackets(&painter, rect, 7.0, ALARM);
+        brackets(&painter, rect, 7.0, ink);
         let x = rect.right() + 10.0;
         let mut y = rect.top() - 4.0;
         let status = match r.tactic {
@@ -130,15 +132,21 @@ pub fn draw(ctx: &egui::Context, h: &HudInput) {
             Tactic::Return => " · BREAKING OFF",
             _ => "",
         };
+        let who = match r.crew {
+            crate::combat::Crew::Pirate => "RAIDER".to_owned(),
+            crate::combat::Crew::Trader { faction, .. } => {
+                format!("TRADER · {}", w.faction_name(faction).to_uppercase())
+            }
+        };
         painter.text(
             Pos2::new(x, y),
             Align2::LEFT_TOP,
             format!(
-                "RAIDER · {}{status}",
+                "{who} · {}{status}",
                 r.vessel.fit.hull().name.to_uppercase()
             ),
             mono(12.0),
-            ALARM,
+            ink,
         );
         y += 15.0;
         let closing = -(r.craft.vel - me.vel).dot((r.craft.pos - me.pos).normalize_or(DVec3::Z));
@@ -172,9 +180,9 @@ pub fn draw(ctx: &egui::Context, h: &HudInput) {
             && let Some(q) = to_screen(lead)
             && (q - p).length() > 2.0
         {
-            painter.line_segment([p, q], Stroke::new(1.0, ALARM.gamma_multiply(0.35)));
-            painter.circle_stroke(q, 6.0, Stroke::new(1.5, ALARM));
-            painter.circle_filled(q, 1.5, ALARM);
+            painter.line_segment([p, q], Stroke::new(1.0, ink.gamma_multiply(0.35)));
+            painter.circle_stroke(q, 6.0, Stroke::new(1.5, ink));
+            painter.circle_filled(q, 1.5, ink);
         }
     }
 

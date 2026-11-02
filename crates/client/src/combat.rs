@@ -23,27 +23,27 @@
 //! the end of it; a framed ship's further hits there go to the frame, and
 //! the ship is lost when the frame gives out or every section is gone.
 //!
-//! **Raiders.** Pirate bands lurk at asteroid fields, preying on miners,
-//! away from faction capitals and more often where no one has settled.
-//! Each field has a band or not for each [`BAND_DAYS`] stretch of the
-//! calendar, decided from the field and the date (so a restored checkpoint
-//! meets the same band). They wait until a ship comes, then close in.
-//! Raiders fly the same arcade flight model the player does, with stock
-//! fits, under the same budgets. Ships killed stay dead until the band
-//! regroups. Until raiders are agents of the sim's bubble (DESIGN §5.2),
-//! bands are kept here, like the mining laser's work on a field.
+//! **Raiders.** The ships of a pirate gang from the sim (DESIGN §7.2.2,
+//! [`retrox_sim::pirates`]), brought out when the player meets the gang:
+//! at its lair field, or wherever it intercepts them. Raiders fly the same
+//! arcade flight model the player does, with stock fits, under the same
+//! budgets, and guard a *home* point (the field, or where the fight
+//! began). Who dies is reported back to the world, which pays the bounty
+//! and tells the sim.
 //!
 //! Positions are relative to the fight's *anchor*: the field (or, outside
 //! one, wherever the player's ship is framed). Metres, y up.
 
-use std::collections::HashMap;
 use std::f64::consts::{PI, TAU};
 
 use glam::{DQuat, DVec3};
 use retrox_gen::Rng;
+use retrox_sim::FactionId;
+use retrox_sim::FieldId;
+use retrox_sim::bubble::FleetKey;
 use retrox_sim::economy::Good;
+use retrox_sim::pirates::GangId;
 use retrox_sim::ship::{Function, Loadout, ShipStats};
-use retrox_sim::{FieldId, GalaxyState, SystemId};
 use serde::{Deserialize, Serialize};
 
 use crate::world::{STRAFE_SPEED, assist, handling, look_rotation, steer};
@@ -59,12 +59,10 @@ pub const HOSTILE_RANGE: f64 = 20e3;
 pub const SHIELD_DELAY: f64 = 3.0;
 /// Locked-out guns come back once heat falls to this share of capacity.
 const UNLOCK_HEAT: f64 = 0.5;
-/// Galaxy days a field's band lasts before another takes its place.
-pub const BAND_DAYS: f64 = 20.0;
 /// How long a wreck drifts before it's lost from view, seconds.
 const WRECK_LIFE: f64 = 180.0;
-/// Raiders give up the chase once the player is this far from their field.
-const LEASH: f64 = 16e3;
+/// Raiders give up the chase once the player is this far from their home.
+pub const LEASH: f64 = 16e3;
 /// Raiders spawn this far from the ship that comes to their field.
 const AMBUSH_RANGE: f64 = 7000.0;
 /// Credits per point of structure repaired.
@@ -469,7 +467,20 @@ pub enum Tactic {
     Return,
 }
 
-/// A pirate ship.
+/// Whose a ship in the fight is.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Crew {
+    /// One of the gang's.
+    Pirate,
+    /// One of a trader fleet's, flying for `faction`.
+    Trader { fleet: FleetKey, faction: FactionId },
+}
+
+/// Ids from here up are traders' ships; below, the gang's.
+pub const TRADER_IDS: u32 = 1000;
+
+/// A ship in the fight other than the player's: a pirate, or a trader
+/// caught up in it.
 #[derive(Clone, Debug)]
 pub struct Raider {
     pub id: u32,
@@ -487,6 +498,22 @@ pub struct Raider {
     jink_t: f64,
     /// Seconds left in the current burst of fire (negative: pause).
     burst: f64,
+    /// What it guards and comes back to, anchor-relative.
+    pub home: DVec3,
+    pub crew: Crew,
+    /// Fighting the player. A peaceful ship holds its place in its convoy.
+    pub hostile: bool,
+    /// A peaceful trader's place in its convoy: where, and how fast.
+    pub slot: Option<(DVec3, DVec3)>,
+}
+
+impl Raider {
+    pub fn trader_fleet(&self) -> Option<FleetKey> {
+        match self.crew {
+            Crew::Trader { fleet, .. } => Some(fleet),
+            Crew::Pirate => None,
+        }
+    }
 }
 
 /// A shell in flight.
@@ -582,19 +609,6 @@ impl Wreck {
     }
 }
 
-/// Which raiders of a field's band are dead, for one stretch of the
-/// calendar. Saved with the game.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct Band {
-    pub epoch: u64,
-    /// Bit `i` set: the band's ship `i` is dead.
-    pub killed: u32,
-}
-
-/// The bands the player has fought, by field.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct Bands(#[serde(with = "crate::save::pairs")] pub HashMap<FieldId, Band>);
-
 /// Running counts of events (see [`Combat::tally`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Tally {
@@ -621,13 +635,22 @@ pub struct Outcome {
     /// Loose cargo thrown from wrecks: where, how it drifts, what, tonnes.
     pub salvage: Vec<(DVec3, DVec3, Good, f64, u64)>,
     pub player_destroyed: bool,
+    /// Ships destroyed this frame, by id and whose; ships the player hit,
+    /// and whether they were peaceful until then.
+    pub kills: Vec<(u32, Crew)>,
+    pub hits: Vec<(u32, bool)>,
 }
 
 /// Everything fighting near the player.
 #[derive(Clone, Debug)]
 pub struct Combat {
-    /// The field whose band is out, if any.
+    /// The field the fight is at, if any.
     pub field: Option<FieldId>,
+    /// The gang whose ships are out, if any.
+    pub gang: Option<GangId>,
+    /// Raiders of the gang destroyed in this fight, by id (the ship's
+    /// place in the gang).
+    pub killed: Vec<u32>,
     pub raiders: Vec<Raider>,
     pub shots: Vec<Shot>,
     pub pulses: Vec<Pulse>,
@@ -641,7 +664,6 @@ pub struct Combat {
     pub target: Option<u32>,
     /// Seconds since the player's ship was destroyed, if it was.
     pub lost: Option<f64>,
-    pub bands: Bands,
     /// Seconds since the player's guns last hit something, and since the
     /// player's shield and hull were last hit (for the HUD).
     pub since_scored: f64,
@@ -651,9 +673,10 @@ pub struct Combat {
     /// player's shells and pulses, everyone else's, hits on the player's
     /// shield and hull, and ships blown up.
     pub tally: Tally,
-    /// Raiders of the field's band, by index, and the epoch they're from.
-    band_epoch: u64,
     rng: Rng,
+    kills: Vec<(u32, Crew)>,
+    hits: Vec<(u32, bool)>,
+    next_trader: u32,
     /// Laser hits waiting to land this frame: who, how hard, where.
     pending: Vec<(Side, f64, DVec3)>,
     said: Vec<String>,
@@ -667,6 +690,8 @@ impl Combat {
     pub fn new(fit: Loadout, damage: Damage) -> Self {
         Self {
             field: None,
+            gang: None,
+            killed: Vec::new(),
             raiders: Vec::new(),
             shots: Vec::new(),
             pulses: Vec::new(),
@@ -677,13 +702,14 @@ impl Combat {
             player: Vessel::new(fit, damage),
             target: None,
             lost: None,
-            bands: Bands::default(),
             since_scored: 10.0,
             since_shield_hit: 10.0,
             since_hull_hit: 10.0,
             tally: Tally::default(),
-            band_epoch: 0,
             rng: Rng::new(0x636f_6d62),
+            kills: Vec::new(),
+            hits: Vec::new(),
+            next_trader: TRADER_IDS,
             pending: Vec::new(),
             said: Vec::new(),
             dropped: Vec::new(),
@@ -694,7 +720,7 @@ impl Combat {
     /// The ship at rest in a dock or a city: cool, shields up, guns ready,
     /// nothing in flight. That is just how a loaded checkpoint has it, so
     /// the game after a checkpoint plays the same whether it was restored
-    /// or not (DESIGN §7.7). The bands fought are remembered.
+    /// or not (DESIGN §7.7).
     pub fn rest(&mut self, fit: &Loadout, damage: &Damage) {
         if self.fresh && self.player.fit == *fit && self.player.damage == *damage {
             return;
@@ -703,21 +729,120 @@ impl Combat {
     }
 
     /// A fresh fight for a changed ship (a refit, a repair, a rest). The
-    /// bands' records stay, and so does the tally: the sound follows those
-    /// counts, so they only go up.
+    /// tally stays: the sound follows those counts, so they only go up.
     pub fn rebuild(&mut self, fit: Loadout, damage: Damage) {
         let mut c = Combat::new(fit, damage);
-        c.bands = std::mem::take(&mut self.bands);
         c.tally = self.tally;
         *self = c;
     }
 
-    /// Raiders within `range` of `pos`.
+    /// Hostile ships within `range` of `pos`.
     pub fn hostiles_within(&self, pos: DVec3, range: f64) -> usize {
         self.raiders
             .iter()
-            .filter(|r| r.tactic != Tactic::Flee && (r.craft.pos - pos).length() < range)
+            .filter(|r| {
+                r.hostile && r.tactic != Tactic::Flee && (r.craft.pos - pos).length() < range
+            })
             .count()
+    }
+
+    /// Whether a trader fleet's ships are in the fight.
+    pub fn has_convoy(&self, fleet: FleetKey) -> bool {
+        self.raiders.iter().any(|r| r.trader_fleet() == Some(fleet))
+    }
+
+    /// A trader fleet's ships join the scene, at `slots` (anchor-relative
+    /// position, velocity and heading), hostile or not.
+    pub fn join_convoy(
+        &mut self,
+        fleet: FleetKey,
+        faction: FactionId,
+        fit: &Loadout,
+        slots: &[(DVec3, DVec3, DQuat)],
+        hostile: bool,
+    ) {
+        let mut rng = Rng::new(
+            slotmap::Key::data(&fleet.0).as_ffi() ^ u64::from(fleet.1).wrapping_mul(0x9e37),
+        );
+        for &(pos, vel, rot) in slots {
+            let id = self.next_trader;
+            self.next_trader += 1;
+            let armed = !Vessel::new(fit.clone(), Damage::default()).guns.is_empty();
+            self.raiders.push(Raider {
+                id,
+                vessel: Vessel::new(fit.clone(), Damage::default()),
+                craft: Craft {
+                    pos,
+                    vel,
+                    rot,
+                    spin: DVec3::ZERO,
+                },
+                burn: 0.0,
+                tactic: if hostile && !armed {
+                    Tactic::Flee
+                } else {
+                    Tactic::Attack
+                },
+                timer: 0.0,
+                skill: rng.range(0.25, 0.55),
+                rng: Rng::new(rng.next_u64()),
+                jink: DVec3::ZERO,
+                jink_t: 0.0,
+                burst: rng.range(-1.0, 0.5),
+                home: pos,
+                crew: Crew::Trader { fleet, faction },
+                hostile,
+                slot: (!hostile).then_some((pos, vel)),
+            });
+        }
+    }
+
+    /// Where a peaceful convoy's ships should be now, in fleet order.
+    pub fn set_slots(&mut self, fleet: FleetKey, slots: &[(DVec3, DVec3, DQuat)]) {
+        let ships = self
+            .raiders
+            .iter_mut()
+            .filter(|r| r.trader_fleet() == Some(fleet));
+        for (r, &(pos, vel, _)) in ships.zip(slots) {
+            if !r.hostile {
+                r.slot = Some((pos, vel));
+            }
+        }
+    }
+
+    /// A peaceful convoy flies on out of the scene.
+    pub fn drop_convoy(&mut self, fleet: FleetKey) {
+        self.raiders
+            .retain(|r| r.hostile || r.trader_fleet() != Some(fleet));
+    }
+
+    /// The trader fleets in the scene.
+    pub fn convoys(&self) -> Vec<FleetKey> {
+        let mut v: Vec<FleetKey> = self
+            .raiders
+            .iter()
+            .filter_map(|r| r.trader_fleet())
+            .collect();
+        v.dedup();
+        v
+    }
+
+    /// A trader fleet turns on the player: the armed fight, the rest run.
+    fn provoke(&mut self, fleet: FleetKey) {
+        for r in self
+            .raiders
+            .iter_mut()
+            .filter(|r| r.trader_fleet() == Some(fleet) && !r.hostile)
+        {
+            r.hostile = true;
+            r.slot = None;
+            r.home = r.craft.pos;
+            r.tactic = if r.vessel.guns.is_empty() {
+                Tactic::Flee
+            } else {
+                Tactic::Attack
+            };
+        }
     }
 
     pub fn raider(&self, id: u32) -> Option<&Raider> {
@@ -748,12 +873,14 @@ impl Combat {
 
     /// Target the next raider, nearest first from the current one.
     pub fn cycle_target(&mut self, from: DVec3) {
-        let mut ids: Vec<(f64, u32)> = self
+        // Hostiles first, nearest first; peaceful ships after them.
+        let mut ids: Vec<(bool, f64, u32)> = self
             .raiders
             .iter()
-            .map(|r| ((r.craft.pos - from).length(), r.id))
+            .map(|r| (!r.hostile, (r.craft.pos - from).length(), r.id))
             .collect();
-        ids.sort_by(|a, b| a.0.total_cmp(&b.0));
+        ids.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+        let ids: Vec<(f64, u32)> = ids.into_iter().map(|(_, d, id)| (d, id)).collect();
         let next = match self
             .target
             .and_then(|t| ids.iter().position(|(_, id)| *id == t))
@@ -765,10 +892,12 @@ impl Combat {
     }
 
     /// The fight is somewhere else now: shells, flashes, wrecks and the
-    /// band go (their positions are relative to the field). The bands'
-    /// records stay.
+    /// gang go (their positions are relative to the anchor). The world
+    /// reports the fight to the sim first.
     pub fn leave(&mut self) {
         self.field = None;
+        self.gang = None;
+        self.killed.clear();
         self.raiders.clear();
         self.shots.clear();
         self.pulses.clear();
@@ -779,56 +908,50 @@ impl Combat {
         self.target = None;
     }
 
-    /// Bring out the band of `field`, if it has one and any of it is
-    /// alive, waiting for a ship at `player` (field-relative).
-    pub fn arrive(
+    /// Bring out `gang`'s ships (`hulls`, by their place in the gang)
+    /// near a ship at `player`: they come in from `from` and guard `home`
+    /// (both anchor-relative). `seed` decides the fight's dice, so a
+    /// restored checkpoint meets the same fight (DESIGN §7.7).
+    #[allow(clippy::too_many_arguments)]
+    pub fn bring_out(
         &mut self,
-        galaxy: &GalaxyState,
-        system: SystemId,
-        field: FieldId,
-        day: f64,
+        gang: GangId,
+        name: &str,
+        hulls: &[(u32, String)],
+        seed: u64,
+        field: Option<FieldId>,
         player: &Craft,
+        from: DVec3,
+        home: DVec3,
     ) -> Option<String> {
         self.leave();
-        self.field = Some(field);
-        let epoch = (day / BAND_DAYS) as u64;
-        self.band_epoch = epoch;
-        let band = band(galaxy, system, field, epoch);
-        let record = self.bands.0.get(&field).copied().unwrap_or_default();
-        let killed = if record.epoch == epoch {
-            record.killed
-        } else {
-            0
-        };
-        let mut rng = Rng::new((field.index() as u64) ^ epoch.wrapping_mul(0x9e37_79b9_7f4a_7c15));
+        self.field = field;
+        self.gang = Some(gang);
+        let mut rng = Rng::new(seed);
         // The fight's own dice (shot scatter, wreckage) start over too, from
-        // the band and who of it is left: what came before (guns fired at
-        // nothing, an earlier fight) isn't saved, and a restored checkpoint
-        // has to meet the same fight (DESIGN §7.7).
-        self.rng = Rng::new(rng.next_u64() ^ u64::from(killed).wrapping_mul(0xd6e8_feb8_6659_fd93));
-        // They come from deeper in the field, toward the ship.
-        let inward = (-player.pos).normalize_or(DVec3::X);
+        // the gang and who of it is left: what came before (guns fired at
+        // nothing, an earlier fight) isn't saved.
+        self.rng = Rng::new(rng.next_u64());
+        // They come from where the gang was, toward the ship.
+        let inward = (from - player.pos).normalize_or(DVec3::X);
         let side = inward.cross(DVec3::Y).normalize_or(DVec3::Z);
         let mut out = 0;
-        for (i, hull) in band.into_iter().enumerate() {
-            if killed & (1 << i) != 0 {
-                continue;
-            }
+        for (k, (id, hull)) in hulls.iter().enumerate() {
             let Some(fit) = retrox_content::ships::stock(hull) else {
                 continue;
             };
-            let spread = (i as f64 - 1.0) * 350.0;
+            let spread = (k as f64 - 1.0) * 350.0;
             let pos = player.pos
                 + inward * (AMBUSH_RANGE + rng.range(-800.0, 800.0))
                 + side * spread
                 + DVec3::Y * rng.range(-300.0, 300.0);
             let to_player = (player.pos - pos).normalize_or(DVec3::Z);
             self.raiders.push(Raider {
-                id: i as u32,
+                id: *id,
                 vessel: Vessel::new(fit, Damage::default()),
                 craft: Craft {
                     pos,
-                    vel: to_player * 150.0,
+                    vel: player.vel + to_player * 150.0,
                     rot: look_rotation(to_player),
                     spin: DVec3::ZERO,
                 },
@@ -840,12 +963,16 @@ impl Combat {
                 jink: DVec3::ZERO,
                 jink_t: 0.0,
                 burst: rng.range(-1.0, 0.5),
+                home,
+                crew: Crew::Pirate,
+                hostile: true,
+                slot: None,
             });
             out += 1;
         }
         (out > 0).then(|| {
             let ships = if out == 1 { "ship" } else { "ships" };
-            format!("Raiders! {out} {ships} closing")
+            format!("Raiders! The {name}: {out} {ships} closing")
         })
     }
 
@@ -878,6 +1005,19 @@ impl Combat {
         // The raiders.
         let target = alive.then_some(pilot.craft);
         for i in 0..self.raiders.len() {
+            if let (false, Some((pos, vel))) = (self.raiders[i].hostile, self.raiders[i].slot) {
+                // Holding its place in its convoy.
+                let r = &mut self.raiders[i];
+                r.craft.pos = pos;
+                r.craft.vel = vel;
+                r.burn = 0.15;
+                let k = 1.0 - (-2.0 * dt).exp();
+                if vel.length() > 1.0 {
+                    r.craft.rot = r.craft.rot.slerp(look_rotation(vel), k).normalize();
+                }
+                r.vessel.systems(dt, 0.1, false);
+                continue;
+            }
             let fired = self.raiders[i].think(dt, target, solids);
             for (gun, muzzle, dir) in fired {
                 let vel = self.raiders[i].craft.vel;
@@ -911,13 +1051,15 @@ impl Combat {
         }
         if self.target.is_none_or(|t| self.raider(t).is_none()) {
             self.target = None;
-            if alive {
+            if alive && self.raiders.iter().any(|r| r.hostile) {
                 self.cycle_target(pilot.craft.pos);
             }
         }
         out.player_destroyed = self.lost == Some(0.0);
         out.messages.append(&mut self.said);
         out.salvage.append(&mut self.dropped);
+        out.kills.append(&mut self.kills);
+        out.hits.append(&mut self.hits);
         out
     }
 
@@ -1048,14 +1190,23 @@ impl Combat {
                 }
                 (&mut self.player, pilot.craft)
             }
-            Side::Raider(id) => match self.raiders.iter_mut().find(|r| r.id == id) {
-                Some(r) => {
-                    // Being shot rattles them.
-                    r.jink_t = r.jink_t.min(0.2);
-                    (&mut r.vessel, r.craft)
+            Side::Raider(id) => {
+                // Only the player's guns hit anyone else; a trader they
+                // hit turns on them, with all its fleet.
+                let peaceful = self.raider(id).is_some_and(|r| !r.hostile);
+                self.hits.push((id, peaceful));
+                if let Some(fleet) = self.raider(id).and_then(|r| r.trader_fleet()) {
+                    self.provoke(fleet);
                 }
-                None => return,
-            },
+                match self.raiders.iter_mut().find(|r| r.id == id) {
+                    Some(r) => {
+                        // Being shot rattles them.
+                        r.jink_t = r.jink_t.min(0.2);
+                        (&mut r.vessel, r.craft)
+                    }
+                    None => return,
+                }
+            }
         };
         let local = craft.rot.inverse() * (point - craft.pos);
         let hit = vessel.hit(damage, local);
@@ -1120,10 +1271,10 @@ impl Combat {
                             .raider(id)
                             .map_or("section", |r| r.vessel.parts[part].name),
                     };
-                    let whose = if side == Side::Player {
-                        "Our"
-                    } else {
-                        "Raider's"
+                    let whose = match side {
+                        Side::Player => "Our",
+                        Side::Raider(id) if id >= TRADER_IDS => "Trader's",
+                        Side::Raider(_) => "Raider's",
                     };
                     self.said
                         .push(format!("{whose} {} is wrecked", name.to_lowercase()));
@@ -1137,23 +1288,27 @@ impl Combat {
                         self.said.push("Ship destroyed".to_owned());
                     }
                     Side::Raider(id) => {
+                        let crew = self.raider(id).map_or(Crew::Pirate, |r| r.crew);
                         self.raiders.retain(|r| r.id != id);
-                        if let Some(field) = self.field {
-                            let band = self.bands.0.entry(field).or_default();
-                            if band.epoch != self.band_epoch {
-                                *band = Band {
-                                    epoch: self.band_epoch,
-                                    killed: 0,
-                                };
-                            }
-                            band.killed |= 1 << id;
-                        }
-                        let left = self.raiders.len();
-                        self.said.push(if left == 0 {
-                            "Raider destroyed · the band is broken".to_owned()
+                        self.kills.push((id, crew));
+                        if id >= TRADER_IDS {
+                            // The world says what it cost; the wreck still
+                            // spills what it was carrying below.
                         } else {
-                            format!("Raider destroyed · {left} left")
-                        });
+                            self.killed.push(id);
+                        }
+                        let left = self
+                            .raiders
+                            .iter()
+                            .filter(|r| r.crew == Crew::Pirate)
+                            .count();
+                        if id < TRADER_IDS {
+                            self.said.push(if left == 0 {
+                                "Raider destroyed · the gang is broken".to_owned()
+                            } else {
+                                format!("Raider destroyed · {left} left")
+                            });
+                        }
                         // What it was carrying spills out.
                         let tonnes = (length / 4.0).clamp(1.0, 8.0) * self.rng.range(0.5, 1.2);
                         for (good, share) in [(Good::Components, 0.6), (Good::Metal, 0.4)] {
@@ -1295,16 +1450,21 @@ impl Raider {
         let (dir, speed) = match (self.tactic, target) {
             (_, None) => {
                 self.tactic = Tactic::Return;
-                (-c.pos, 120.0)
+                (self.home - c.pos, 120.0)
+            }
+            (Tactic::Return, Some(_)) if self.crew != Crew::Pirate => {
+                // A trader that has lost the player keeps running.
+                self.tactic = Tactic::Flee;
+                (c.vel, 600.0)
             }
             (Tactic::Return, Some(t)) => {
-                if t.pos.length() < LEASH * 0.8 {
+                if (t.pos - self.home).length() < LEASH * 0.8 {
                     self.tactic = Tactic::Attack;
                 }
-                if c.pos.length() < 3000.0 {
+                if (c.pos - self.home).length() < 3000.0 {
                     (t.pos - c.pos, 60.0)
                 } else {
-                    (-c.pos, 350.0)
+                    (self.home - c.pos, 350.0)
                 }
             }
             (Tactic::Flee, Some(t)) => (c.pos - t.pos, 600.0),
@@ -1318,7 +1478,7 @@ impl Raider {
             (Tactic::Attack, Some(t)) => {
                 let to = t.pos - c.pos;
                 let dist = to.length();
-                if t.pos.length() > LEASH {
+                if (t.pos - self.home).length() > LEASH {
                     self.tactic = Tactic::Return;
                 } else if self.vessel.hull_left() < 0.3 && self.rng.chance(dt * (1.2 - self.skill))
                 {
@@ -1441,59 +1601,6 @@ impl Raider {
                 (gun, muzzle, dir)
             })
             .collect()
-    }
-}
-
-/// Which hulls a field's band flies this epoch (empty: no band).
-pub fn band(
-    galaxy: &GalaxyState,
-    system: SystemId,
-    field: FieldId,
-    epoch: u64,
-) -> Vec<&'static str> {
-    let chance = band_chance(galaxy, system);
-    let mut rng = Rng::new(
-        (field.index() as u64).rotate_left(17) ^ epoch.wrapping_mul(0x2545_f491_4f6c_dd1d),
-    );
-    if !rng.chance(chance) {
-        return Vec::new();
-    }
-    let frontier = chance > 0.6;
-    let n = if frontier {
-        2 + rng.below(2)
-    } else {
-        1 + rng.below(2)
-    };
-    (0..n)
-        .map(|i| {
-            let roll = rng.f64();
-            if frontier && i == 0 && roll < 0.35 {
-                "gunship"
-            } else if roll < 0.65 {
-                "interceptor"
-            } else {
-                "heavy-fighter"
-            }
-        })
-        .collect()
-}
-
-/// How likely a field in this system is to have raiders: never where a
-/// faction keeps its capital, sometimes where people live, mostly where
-/// no one does.
-pub fn band_chance(galaxy: &GalaxyState, system: SystemId) -> f64 {
-    let capital = galaxy.factions.values().any(|f| {
-        galaxy
-            .settlements
-            .get(f.capital)
-            .is_some_and(|s| s.system == system)
-    });
-    if capital {
-        0.0
-    } else if galaxy.settlements_in(system).next().is_some() {
-        0.45
-    } else {
-        0.85
     }
 }
 

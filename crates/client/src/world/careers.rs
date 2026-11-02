@@ -460,8 +460,7 @@ fn mining_hour(seed: u64) {
     // marks them) and a station to sell at (a city costs minutes of flying
     // down its well and back out each trip).
     let systems: Vec<_> = b.w.galaxy.systems.iter().map(|(id, _)| id).collect();
-    let epoch = (b.w.t_days() / crate::combat::BAND_DAYS) as u64;
-    let quiet = |w: &World, sys, f| crate::combat::band(&w.galaxy, sys, f, epoch).is_empty();
+    let quiet = |w: &World, _sys, f| retrox_sim::pirates::gang_at(&w.galaxy, f).is_none();
     let home = systems
         .iter()
         .copied()
@@ -485,13 +484,7 @@ fn mining_hour(seed: u64) {
     b.go(port);
     let begin = b.real_s;
     while b.real_s - begin < HOUR {
-        let quiet_field = |w: &World| {
-            w.view
-                .fields
-                .iter()
-                .copied()
-                .find(|&f| !w.raiders_reported(f))
-        };
+        let quiet_field = |w: &World| w.view.fields.iter().copied().find(|&f| !w.gang_reported(f));
         // Every field has a band out: sit it out docked, a day at a time.
         let mut waited = 0;
         while quiet_field(&b.w).is_none() && waited < 60 {

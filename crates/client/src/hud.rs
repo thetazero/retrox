@@ -199,6 +199,10 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
         // colour, labelled once they're near enough to matter.
         let me = w.ship_position();
         for c in &w.traffic.contacts {
+            // A fleet in the fight's scene is marked ship by ship there.
+            if w.combat.has_convoy(c.key) {
+                continue;
+            }
             let rel = (c.pos - h.camera).as_vec3();
             let Some(p) = project(h.view_proj, rel, screen) else {
                 continue;
@@ -213,6 +217,24 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
             );
             if dist < TRAFFIC_LABEL_M {
                 labels.push((false, dist, p, contact_label(c, dist), VFD));
+            }
+        }
+        // Pirates: red diamonds, a doubled one for a gang after us. A gang
+        // coming for us is labelled at any range.
+        for c in &w.traffic.pirates {
+            let rel = (c.pos - h.camera).as_vec3();
+            let Some(p) = project(h.view_proj, rel, screen) else {
+                continue;
+            };
+            let dist = (c.pos - me).length();
+            let hunting = c.aim == retrox_sim::pirates::Aim::Stalk;
+            let color = if hunting { ALARM } else { RED_HOT };
+            diamond(&painter, p, 4.5, color);
+            if hunting {
+                diamond(&painter, p, 8.0, color.gamma_multiply(0.7));
+            }
+            if dist < TRAFFIC_LABEL_M || hunting {
+                labels.push((false, dist, p, pirate_label(c, dist), color));
             }
         }
         labels.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.total_cmp(&b.1)));
@@ -416,6 +438,10 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
         );
     }
 
+    if let Some((t, gang)) = &w.interdicted {
+        interdicted(ctx, screen, *t as f32, gang);
+    }
+
     match w.mode {
         Mode::Docked(s) => crate::station_ui::draw(ctx, w, s, &mut actions),
         Mode::Landed { city, timer, .. } => {
@@ -485,6 +511,20 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
                     let au = w.distance_to(place) / AU;
                     ("Fast travel", format!("{} · {au:.2} AU", w.name(place)))
                 }
+                Leg::Intercept(fleet) => {
+                    let company = w
+                        .galaxy
+                        .companies
+                        .get(fleet.0)
+                        .map_or("the convoy".to_owned(), |c| c.name.clone());
+                    let d = w
+                        .traffic
+                        .contacts
+                        .iter()
+                        .find(|c| c.key == fleet)
+                        .map_or(0.0, |c| (c.pos - w.ship_position()).length());
+                    ("Intercept", format!("{company} · {}", distance(d)))
+                }
                 Leg::Climb { well, .. } => {
                     let out = (w.well_radius(well) - w.distance_to(well)).max(0.0) / 1000.0;
                     (
@@ -527,6 +567,7 @@ fn nav_list(ui: &mut egui::Ui, w: &World, actions: &mut Vec<Action>) {
             Place::Star | Place::Body(_) => None,
             Place::Field(_) => Some("Fields"),
             Place::Station(_) => Some("Stations"),
+            Place::Convoy(_) => Some("Traffic"),
         };
         if group.is_some() && group != heading {
             ui.add_space(8.0);
@@ -568,9 +609,9 @@ fn nav_list(ui: &mut egui::Ui, w: &World, actions: &mut Vec<Action>) {
             mono(14.0),
             look.text(AMBER),
         );
-        // Raider bands are reported where they lurk.
+        // Pirates are known where they lair.
         if let Place::Field(f) = place
-            && w.raiders_reported(f)
+            && w.gang_reported(f)
         {
             painter.text(
                 Pos2::new(name.right() + 8.0, c.y),
@@ -633,6 +674,14 @@ fn place_glyph(painter: &egui::Painter, w: &World, place: Place, c: Pos2, ink: C
             ] {
                 painter.circle_filled(c + d, 1.6, ink);
             }
+        }
+        Place::Convoy(_) => {
+            painter.rect_stroke(
+                Rect::from_center_size(c, Vec2::splat(6.0)),
+                0.0,
+                Stroke::new(1.2, VFD),
+                egui::StrokeKind::Middle,
+            );
         }
         Place::Station(_) => {
             let r = 5.0;
@@ -1066,6 +1115,96 @@ pub(crate) fn segment_bar(ui: &mut egui::Ui, value: f32, width: f32, color: Colo
 }
 
 /// A big centred caption with a red rule and a subtitle, for transitions.
+/// The moment a gang pulls the ship out of fast travel: the view tears
+/// with interference, the edges flash red, and a red band slams across with
+/// INTERDICTED and who did it, then all of it fades.
+fn interdicted(ctx: &egui::Context, screen: Rect, t: f32, gang: &str) {
+    const SHOW: f32 = 3.2;
+    if t > SHOW {
+        return;
+    }
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::unique("interdicted"),
+    ));
+    let fade = (1.0 - ((t - SHOW + 0.8) / 0.8).clamp(0.0, 1.0)).min((t / 0.08).min(1.0));
+    // Interference: torn scan bands, thick at first, thinning out.
+    let tear = (1.0 - t / 1.2).clamp(0.0, 1.0);
+    if tear > 0.0 {
+        for i in 0..26 {
+            let h = ((i as f32 * 12.9898 + (t * 37.0).floor() * 78.233).sin() * 43758.545).fract();
+            let y = screen.top() + h.abs() * screen.height();
+            let thick = 1.0 + 5.0 * tear * ((i * 7 % 5) as f32 / 4.0);
+            let shift = (h - 0.5) * 60.0 * tear;
+            painter.rect_filled(
+                Rect::from_min_size(
+                    Pos2::new(screen.left() + shift, y),
+                    Vec2::new(screen.width(), thick),
+                ),
+                0.0,
+                ALARM.gamma_multiply(0.12 * tear),
+            );
+        }
+    }
+    // A red flash round the edges.
+    let flash = (1.0 - t / 0.6).clamp(0.0, 1.0);
+    for k in 0..6 {
+        painter.rect_stroke(
+            screen.shrink(k as f32 * 14.0),
+            0.0,
+            Stroke::new(
+                14.0,
+                RED.gamma_multiply(0.22 * flash * (1.0 - k as f32 / 6.0)),
+            ),
+            egui::StrokeKind::Inside,
+        );
+    }
+    // The band slams in from the left, then holds.
+    let slam = (t / 0.18).clamp(0.0, 1.0);
+    let ease = 1.0 - (1.0 - slam).powi(3);
+    let y = screen.top() + screen.height() * 0.24;
+    let off = screen.width() * (1.0 - ease);
+    let band = Rect::from_min_max(
+        Pos2::new(screen.left() - off, y - 46.0),
+        Pos2::new(screen.right() - off * 0.2, y + 46.0),
+    );
+    painter.rect_filled(band, 0.0, RED.gamma_multiply(0.92 * fade));
+    painter.rect_filled(
+        Rect::from_min_size(band.left_bottom(), Vec2::new(band.width(), 4.0)),
+        0.0,
+        RED_DARK.gamma_multiply(fade),
+    );
+    // Hazard slashes at the band's right end, as on the panel tabs.
+    for k in 0..5 {
+        let x = band.right() - 40.0 - k as f32 * 18.0;
+        painter.add(egui::Shape::convex_polygon(
+            vec![
+                Pos2::new(x, band.bottom()),
+                Pos2::new(x + 9.0, band.bottom()),
+                Pos2::new(x + 25.0, band.top()),
+                Pos2::new(x + 16.0, band.top()),
+            ],
+            RED_DARK.gamma_multiply(fade),
+            Stroke::NONE,
+        ));
+    }
+    let c = Pos2::new(screen.center().x - off, y);
+    painter.text(
+        c + Vec2::new(0.0, 8.0),
+        Align2::CENTER_BOTTOM,
+        "INTERDICTED",
+        display(72.0),
+        CREAM.gamma_multiply(fade),
+    );
+    painter.text(
+        c + Vec2::new(0.0, 12.0),
+        Align2::CENTER_TOP,
+        format!("pulled out of fast travel by the {gang}").to_uppercase(),
+        mono(18.0),
+        CREAM.gamma_multiply(0.85 * fade),
+    );
+}
+
 pub(crate) fn title_card(
     painter: &egui::Painter,
     centre: Pos2,
@@ -1147,6 +1286,34 @@ fn edge_arrow_color(
 const TRAFFIC_LABEL_M: f64 = 2.0e9;
 
 /// "KESSA HAULERS · 3× LIGHT TRADER · 120 T FOOD  42 KM"
+fn diamond(painter: &egui::Painter, c: Pos2, r: f32, color: Color32) {
+    let pts = vec![
+        c + Vec2::new(0.0, -r),
+        c + Vec2::new(r, 0.0),
+        c + Vec2::new(0.0, r),
+        c + Vec2::new(-r, 0.0),
+    ];
+    painter.add(egui::Shape::closed_line(pts, Stroke::new(1.2, color)));
+}
+
+fn pirate_label(c: &crate::traffic::PirateContact, dist: f64) -> String {
+    let n = c.fits.len();
+    let ships = if n == 1 {
+        "1 SHIP".to_owned()
+    } else {
+        format!("{n} SHIPS")
+    };
+    let wanted = c
+        .bounty
+        .map(|b| format!(" · WANTED {}", credits(b).to_uppercase()))
+        .unwrap_or_default();
+    format!(
+        "{} · {ships}{wanted}  {}",
+        c.name.to_uppercase(),
+        distance(dist)
+    )
+}
+
 fn contact_label(c: &crate::traffic::Contact, dist: f64) -> String {
     let class = c.fit.hull().name.to_uppercase();
     let ships = if c.ships > 1 {
