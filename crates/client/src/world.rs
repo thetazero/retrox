@@ -188,6 +188,10 @@ pub enum Action {
     ToggleCamera,
     ToggleFlightAssist,
     Wait(u64),
+    /// Open or close the galaxy map.
+    ToggleMap,
+    /// Plot a course along the hyperlanes to a system, or clear it.
+    PlotCourse(Option<SystemId>),
 }
 
 /// What the player could do right now (shown as prompts).
@@ -226,6 +230,10 @@ pub struct World {
     pub message: Option<(String, f32)>,
     /// Bumped whenever the system changes, so the client re-uploads meshes.
     pub system_generation: u64,
+    /// The galaxy map is open.
+    pub map_open: bool,
+    /// The system the plotted course leads to, if any.
+    pub course: Option<SystemId>,
 }
 
 impl World {
@@ -275,6 +283,8 @@ impl World {
             field_rocks: None,
             message: None,
             system_generation: 0,
+            map_open: false,
+            course: None,
         }
     }
 
@@ -444,6 +454,72 @@ impl World {
             .collect()
     }
 
+    /// The quickest way along the hyperlanes from here to `to` (by days in
+    /// transit): every system on the way, starting here and ending at `to`.
+    pub fn route(&self, to: SystemId) -> Option<Vec<SystemId>> {
+        use std::cmp::Reverse;
+        use std::collections::{BinaryHeap, HashMap};
+        let from = self.system;
+        let mut best: HashMap<SystemId, (f64, SystemId)> = HashMap::from([(from, (0.0, from))]);
+        let mut heap = BinaryHeap::from([Reverse((0.0f64.to_bits(), from))]);
+        while let Some(Reverse((bits, system))) = heap.pop() {
+            let days = f64::from_bits(bits);
+            if best.get(&system).is_some_and(|&(b, _)| b < days) {
+                continue;
+            }
+            if system == to {
+                let mut path = vec![to];
+                while let Some(&last) = path.last()
+                    && last != from
+                {
+                    path.push(best[&last].1);
+                }
+                path.reverse();
+                return Some(path);
+            }
+            for &lane in &self.galaxy.systems[system].lanes {
+                let lane = &self.galaxy.lanes[lane];
+                let next = lane.other(system);
+                let d = days + jump_days(lane.length_ly);
+                if best.get(&next).is_none_or(|&(b, _)| d < b) {
+                    best.insert(next, (d, system));
+                    heap.push(Reverse((d.to_bits(), next)));
+                }
+            }
+        }
+        None
+    }
+
+    /// The galaxy map can be opened: flying normally, docked, or landed.
+    pub fn map_available(&self) -> bool {
+        match self.mode {
+            Mode::Normal | Mode::Docked(_) => true,
+            Mode::Landed { timer, .. } => timer <= 0.0,
+            _ => false,
+        }
+    }
+
+    /// The next system on the plotted course.
+    pub fn next_hop(&self) -> Option<SystemId> {
+        self.route(self.course?)?.get(1).copied()
+    }
+
+    /// Total days in transit along a route (hops only, not flying to the
+    /// edge of each system's well).
+    pub fn route_days(&self, route: &[SystemId]) -> f64 {
+        route
+            .windows(2)
+            .map(|hop| {
+                self.galaxy.systems[hop[0]]
+                    .lanes
+                    .iter()
+                    .map(|&l| &self.galaxy.lanes[l])
+                    .find(|l| l.other(hop[0]) == hop[1])
+                    .map_or(0.0, |l| jump_days(l.length_ly))
+            })
+            .sum()
+    }
+
     pub fn prompts(&self) -> Prompts {
         let mut p = Prompts::default();
         if self.mode != Mode::Normal {
@@ -474,6 +550,10 @@ impl World {
         let prompts = self.prompts();
         match action {
             Action::ToggleCamera => self.cockpit = !self.cockpit,
+            Action::ToggleMap => self.map_open = !self.map_open && self.map_available(),
+            Action::PlotCourse(to) => {
+                self.course = to.filter(|&t| t != self.system && self.route(t).is_some());
+            }
             Action::ToggleFlightAssist => {
                 self.ship.flight_assist = !self.ship.flight_assist;
                 let state = if self.ship.flight_assist { "on" } else { "off" };
@@ -550,6 +630,7 @@ impl World {
                     let name = self.name(well);
                     self.say(format!("Can't jump inside the gravity well of {name}"));
                 } else if self.lanes().iter().any(|l| l.to == to) {
+                    self.map_open = false;
                     self.mode = Mode::Jumping {
                         to,
                         timer: JUMP_DURATION,
@@ -807,6 +888,9 @@ impl World {
         self.system_generation += 1;
         self.field_rocks = None;
         self.target = None;
+        if self.course == Some(to) {
+            self.course = None;
+        }
         // Arrive on the side facing the system we came from, outside the
         // star's well, facing the star.
         let entry = galaxy_direction(&self.galaxy, to, from);
@@ -1062,5 +1146,42 @@ mod tests {
         assert_eq!(world.system, lane.to);
         assert_eq!(world.current_well(), None, "arrive outside the star's well");
         assert!(world.date().days() >= before.days() + lane.days as u64);
+    }
+
+    #[test]
+    fn a_plotted_course_is_followed_hop_by_hop() {
+        let mut world = World::new(1);
+        // Somewhere a few jumps away.
+        let far = world
+            .galaxy
+            .systems
+            .iter()
+            .map(|(s, _)| s)
+            .filter_map(|s| world.route(s).map(|r| (s, r)))
+            .find(|(_, r)| r.len() >= 4)
+            .map(|(s, _)| s)
+            .expect("a system several jumps away");
+        world.act(Action::PlotCourse(Some(far)));
+        assert_eq!(world.course, Some(far));
+        let route = world.route(far).unwrap();
+        assert_eq!(route.first(), Some(&world.system));
+        assert_eq!(route.last(), Some(&far));
+        assert!(world.route_days(&route) > 0.0);
+
+        world.act(Action::Launch);
+        world.act(Action::ToggleMap);
+        assert!(world.map_open);
+        for &expected in &route[1..] {
+            open_space(&mut world);
+            let hop = world.next_hop().expect("course has a next hop");
+            assert_eq!(hop, expected);
+            world.act(Action::Jump(hop));
+            assert!(!world.map_open, "jumping closes the map");
+            run(&mut world, 5.0);
+            assert_eq!(world.system, hop);
+        }
+        assert_eq!(world.course, None, "arriving clears the course");
+        world.act(Action::PlotCourse(Some(world.system)));
+        assert_eq!(world.course, None, "no course to where you are");
     }
 }
