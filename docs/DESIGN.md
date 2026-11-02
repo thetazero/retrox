@@ -782,6 +782,17 @@ to was always directly behind you.
   has arrived and turns to face the place. Every autopilot ship follows
   the same rule: a fleet or gang that isn't burning (holding where it
   arrived, or with nowhere to go) shows no plumes.
+- **The camera looks where the trip is going (#158).** For the whole of
+  fast travel, and through the turn-over after it, the view (chase or
+  cockpit) faces the place the trip goes to, not the ship's nose. Out on
+  the burn the ship flies away from the camera; once it flips to brake it
+  faces the camera tail-first, with the place still dead ahead beyond it,
+  instead of the view swinging round to where the ship came from. The
+  view eases onto that heading when the trip starts and back onto the
+  nose (over about a second) once the ship has turned round to face the
+  place, or the pilot drops out or takes the stick, so nothing snaps. A climb out of a
+  well looks outward, an intercept at the convoy. Flying by hand the
+  camera follows the nose as ever.
 - **Fast travel to a station stops in docking range**: 1.2 station sizes
   + 200 m from it, inside the [F] dock prompt's reach (1.5 sizes + 400 m)
   and at rest. Arrive, [F] to dock, like [L] at a city planet. It used to

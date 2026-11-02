@@ -368,6 +368,11 @@ pub struct World {
     pub landing: Option<SettlementId>,
     pub cockpit: bool,
     pub cam_rot: DQuat,
+    /// How far the view has turned from the ship's nose to look where a
+    /// fast-travel trip is going, 0..1, and that look (DESIGN §7.1.2): a
+    /// ship braking tail-first doesn't turn the camera round with it.
+    pub travel_view: f64,
+    pub travel_rot: DQuat,
     /// Rocks of the asteroid field the ship is in, if any.
     pub field_rocks: Option<(FieldId, Vec<Rock>)>,
     /// Fast travel into a field stops by this rock (issue #122): the
@@ -537,6 +542,8 @@ impl World {
             burn: 0.0,
             turn_over: None,
             interdicted: None,
+            travel_view: 0.0,
+            travel_rot: DQuat::IDENTITY,
             complaints: Default::default(),
             convoy_seen: None,
             player,
@@ -1657,7 +1664,7 @@ impl World {
         self.ship.rot = DQuat::from_mat3(&glam::DMat3::from_cols(right, up, -along));
         self.ship.throttle = 0.3;
         self.ship.flight_assist = true;
-        self.cam_rot = self.ship.rot;
+        self.reset_camera();
         self.message = None;
         true
     }
@@ -1745,7 +1752,7 @@ impl World {
         self.ship.vel = DVec3::ZERO;
         self.ship.throttle = 0.0;
         self.ship.rot = look_rotation(-self.ship.rel);
-        self.cam_rot = self.ship.rot;
+        self.reset_camera();
         self.target = None;
         self.landing = None;
         let amount = 12.0;
@@ -1802,7 +1809,7 @@ impl World {
         self.ship.vel = DVec3::ZERO;
         self.ship.throttle = 0.0;
         self.ship.rot = look_rotation(at - self.ship.rel);
-        self.cam_rot = self.ship.rot;
+        self.reset_camera();
         self.target = Some(Place::Field(field));
         self.message = None;
         self.update_field();
@@ -1847,7 +1854,7 @@ impl World {
         let back = (-sun + DVec3::Y * 0.15).normalize();
         self.ship.rel = centre + back * off;
         self.ship.rot = look_rotation(centre - self.ship.rel);
-        self.cam_rot = self.ship.rot;
+        self.reset_camera();
         self.update_field();
         true
     }
@@ -1918,7 +1925,7 @@ impl World {
         self.ship.throttle = 0.0;
         self.ship.flight_assist = false;
         self.ship.rot = look_rotation(c.pos - at);
-        self.cam_rot = self.ship.rot;
+        self.reset_camera();
         self.message = None;
         true
     }
@@ -1968,7 +1975,7 @@ impl World {
         self.ship.throttle = 0.0;
         self.ship.flight_assist = false;
         self.ship.rot = look_rotation(c.pos - at);
-        self.cam_rot = self.ship.rot;
+        self.reset_camera();
         self.message = None;
         true
     }
@@ -1988,8 +1995,44 @@ impl World {
     }
 
     fn update_camera(&mut self, dt: f64) {
+        // In fast travel, and while the ship turns over after it, the view
+        // looks where the trip is going, whichever way the hull points
+        // (DESIGN §7.1.2). It eases there and back, so neither the flip to
+        // brake nor handing back to the pilot snaps the camera.
+        let going = match self.mode {
+            _ if self.combat.lost.is_some() => None,
+            Mode::FastTravel(trip) => Some(trip.leg),
+            Mode::Normal => self.turn_over,
+            _ => None,
+        };
+        if let Some(leg) = going {
+            let face = self.arrival_facing(leg, self.ship_position(), self.t_days());
+            if face.length_squared() > 1.0 {
+                self.travel_rot = look_rotation(face);
+            }
+        }
+        let want = if going.is_some() { 1.0 } else { 0.0 };
+        self.travel_view += (want - self.travel_view) * (1.0 - (-2.5 * dt).exp());
         let k = 1.0 - (-9.0 * dt).exp();
-        self.cam_rot = self.cam_rot.slerp(self.ship.rot, k).normalize();
+        self.cam_rot = self.cam_rot.slerp(self.view_rot(), k).normalize();
+    }
+
+    /// Which way the view looks before the chase camera's lag: the ship's
+    /// nose, or eased toward where a fast-travel trip is going.
+    pub fn view_rot(&self) -> DQuat {
+        if self.travel_view < 1e-4 {
+            return self.ship.rot;
+        }
+        // Smoothstepped, so the swing starts and ends without a jolt.
+        let w = self.travel_view;
+        let w = w * w * (3.0 - 2.0 * w);
+        self.ship.rot.slerp(self.travel_rot, w).normalize()
+    }
+
+    /// Put the camera straight on the ship's nose, for a cut.
+    pub fn reset_camera(&mut self) {
+        self.cam_rot = self.ship.rot;
+        self.travel_view = 0.0;
     }
 
     /// Camera position and orientation in the system frame.
@@ -2028,7 +2071,7 @@ impl World {
             }
             _ if self.cockpit => (
                 ship + self.ship.rot * DVec3::new(0.0, 1.2, -self.stats().length_m * 0.5 + 1.0),
-                self.ship.rot,
+                self.view_rot(),
             ),
             _ => (
                 ship + self.cam_rot * DVec3::new(0.0, 6.0, 28.0) * self.camera_scale(),
