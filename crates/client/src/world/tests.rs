@@ -1349,6 +1349,36 @@ fn a_running_raider_can_still_be_shot() {
 }
 
 #[test]
+fn a_hostile_factions_traders_running_by_dont_stop_mining() {
+    let mut world = World::new(1);
+    assert!(world.start_by_traffic(), "seed 1 has traffic");
+    let key = world
+        .traffic
+        .contacts
+        .iter()
+        .max_by_key(|c| c.ships)
+        .unwrap()
+        .key;
+    world.enter_frame(Place::Convoy(key));
+    world.update(1.0 / 60.0, Controls::default());
+    assert!(
+        world
+            .combat
+            .raiders
+            .iter()
+            .any(|r| r.trader_fleet().is_some())
+    );
+    for r in &mut world.combat.raiders {
+        r.hostile = true;
+        r.tactic = crate::combat::Tactic::Flee;
+    }
+    assert!(!world.guns_hot(), "running traders leave the guns on safe");
+    // One that turns to fight heats them.
+    world.combat.raiders[0].tactic = crate::combat::Tactic::Attack;
+    assert!(world.guns_hot());
+}
+
+#[test]
 fn no_jump_with_hostiles_near() {
     // Hostiles are checked before anything else, gravity wells included.
     let mut world = among_raiders();

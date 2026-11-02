@@ -40,17 +40,21 @@ impl World {
             .hostiles_within(self.combat_position(), HOSTILE_RANGE)
     }
 
-    /// Whether any hostile ship is within [`HOSTILE_RANGE`], running ones
-    /// too: they don't hold the ship from fast travel, but they're still
-    /// fair game for the guns (see [`World::guns_hot`]).
+    /// Whether a ship that's fighting the player is within
+    /// [`HOSTILE_RANGE`], or a pirate running from it: running pirates
+    /// don't hold the ship from fast travel, but they're still game for the
+    /// guns and their bounty (see [`World::guns_hot`]). A hostile faction's
+    /// unarmed traders running away don't count, so they never stop a pilot
+    /// mining (issue #189).
     pub fn foes_near(&self) -> bool {
+        use crate::combat::{Crew, Tactic};
         let me = self.combat_position();
         self.mode == Mode::Normal
-            && self
-                .combat
-                .raiders
-                .iter()
-                .any(|r| r.hostile && (r.craft.pos - me).length() < HOSTILE_RANGE)
+            && self.combat.raiders.iter().any(|r| {
+                r.hostile
+                    && (r.tactic != Tactic::Flee || r.crew == Crew::Pirate)
+                    && (r.craft.pos - me).length() < HOSTILE_RANGE
+            })
     }
 
     /// Whether a pirate gang is known to lair at `field`.
