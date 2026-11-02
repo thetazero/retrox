@@ -89,6 +89,7 @@ pub const WORK_KEYS: &[KeyRow] = &[
     (&["G"], "prospect: read the rocks"),
     (&["LMB", "R"], "fire guns · mining laser · gas scoop"),
     (&["Y"], "next hostile target"),
+    (&["I"], "intercept the trader in your sights"),
     (&["V"], "cockpit / chase camera"),
     (&["TAB"], "take or free the mouse"),
     (&["H"], "controls card"),
@@ -151,6 +152,9 @@ pub fn hint(w: &World) -> Option<String> {
             Screen::Trade => "Buy what's in SURPLUS here and sell it where it's short. Ore \
                  from mining sells here too."
                 .into(),
+            Screen::Bounties => "Warrants pay the moment a pirate ship goes down. PLOT \
+                 COURSE to a lair, fly to its field, and bring a gun that can win."
+                .into(),
             Screen::Hangar | Screen::Shipyard => {
                 "Refits change what your ship carries and how well it mines. [ESC] back.".into()
             }
@@ -178,6 +182,9 @@ pub fn hint(w: &World) -> Option<String> {
                     .into(),
                 Leg::Climb { .. } => "Climbing out of the gravity well: the autopilot stops at \
                                       its edge, where you can jump or fast travel on."
+                    .into(),
+                Leg::Intercept(_) => "Intercepting: the autopilot brings you alongside the \
+                                      convoy. Shooting it makes its faction hostile."
                     .into(),
             });
         }

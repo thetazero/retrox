@@ -4,14 +4,15 @@
 
 use retrox_sim::economy::{FacilityKind, Good};
 use retrox_sim::haul::Location;
-use retrox_sim::ledger::DEBT_PER_POPULATION;
+use retrox_sim::ledger::debt_limit;
 use retrox_sim::{EconomyModel, GalaxyState};
 
 /// A market counts as short of a good when more than this share of its
 /// demand for it went unmet today.
 const SHORT_SHARE: f64 = 0.1;
-/// A project counts as stalled after this many days.
-const STALLED_DAYS: u64 = 360;
+/// A project counts as stalled once it has used half the days it is
+/// given before it is cut short.
+const STALLED_DAYS: u64 = retrox_sim::construction::PATIENCE_DAYS / 2;
 
 pub(crate) fn print(state: &GalaxyState) {
     let markets = state.settlements.len().max(1);
@@ -48,10 +49,7 @@ pub(crate) fn print(state: &GalaxyState) {
             .collect();
         let balance: f64 = factions.iter().map(|f| f.treasury).sum();
         let in_debt = factions.iter().filter(|f| f.treasury < 0.0).count();
-        let limit: f64 = factions
-            .iter()
-            .map(|f| f.population * DEBT_PER_POPULATION)
-            .sum();
+        let limit: f64 = factions.iter().map(|f| debt_limit(f.population)).sum();
         let debt: f64 = factions.iter().map(|f| (-f.treasury).max(0.0)).sum();
         println!(
             "  {model:?} factions: {} ({in_debt} in debt), balance {balance:.0}, debt {:.1}% of limit",

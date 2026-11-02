@@ -67,6 +67,9 @@ pub struct Player {
     /// What the player has done, for the first-steps notes.
     #[serde(default)]
     pub progress: crate::guide::Progress,
+    /// Standing with each faction (DESIGN §7.2.2).
+    #[serde(default)]
+    pub standing: crate::standing::Standing,
 }
 
 impl Player {
@@ -83,6 +86,7 @@ impl Player {
             cargo: GoodMap::default(),
             contracts: Vec::new(),
             bought: 1,
+            standing: Default::default(),
             progress: Default::default(),
         }
     }
@@ -301,7 +305,10 @@ pub fn run(
     }
     let cost = quote(player, job).ok_or("That doesn't fit")?;
     if cost > player.credits {
-        return Err(format!("Not enough credits: that costs {cost:.0} cr"));
+        return Err(format!(
+            "Not enough credits: that costs {}",
+            crate::hud::credits(cost)
+        ));
     }
     if -cost > economy.treasury {
         return Err("The settlement can't afford to buy that".into());
@@ -406,7 +413,11 @@ pub fn run(
             let message = if sold.is_empty() {
                 format!("Fitted a {}", section.name)
             } else {
-                format!("Fitted a {} and sold {} modules", section.name, sold.len())
+                format!(
+                    "Fitted a {} and sold {}",
+                    section.name,
+                    crate::hud::count(sold.len(), "module")
+                )
             };
             Done {
                 message,

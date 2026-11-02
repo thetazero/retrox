@@ -269,6 +269,40 @@ fn stalled_projects_are_cut_short() {
 }
 
 #[test]
+fn projects_from_old_saves_get_their_full_patience() {
+    // A save from before projects recorded their start loads them as
+    // `UNKNOWN_START`: their clock starts on load rather than at day 0,
+    // so they aren't cut short on the first day.
+    use retrox_sim::economy::{GoodMap, Project};
+    let mut state = small();
+    // Well past a project's patience, counted from day 0.
+    state.time = retrox_sim::GalaxyTime::from_days(3 * retrox_sim::construction::PATIENCE_DAYS);
+    let id = state
+        .settlements
+        .iter()
+        .find(|(_, s)| s.economy.population > 1.0)
+        .map(|(id, _)| id)
+        .expect("a populated settlement");
+    let mut needs = GoodMap::splat(0.0);
+    needs[Good::Metal] = 2e9;
+    let economy = &mut state.settlements[id].economy;
+    economy.project = Some(Project {
+        kind: FacilityKind::Refinery,
+        scale: 1e8,
+        needs,
+        started: Project::UNKNOWN_START,
+    });
+    economy.refresh_demand();
+    tick(&mut state);
+    let project = state.settlements[id]
+        .economy
+        .project
+        .as_ref()
+        .expect("still under way after a day");
+    assert!(project.started.days() < Project::UNKNOWN_START.days());
+}
+
+#[test]
 fn planned_settlements_build_shipyards_for_orders() {
     use retrox_sim::EconomyModel;
     let mut state = small();

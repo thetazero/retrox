@@ -541,6 +541,7 @@ pub fn trade(state: &mut GalaxyState) {
     }
     crate::bubble::step(state, &contracts, &board);
     state.board = board;
+    crate::pirates::step(state);
     found_companies(state);
     crate::harvest::found(state);
 }
@@ -548,12 +549,19 @@ pub fn trade(state: &mut GalaxyState) {
 fn arrive(state: &mut GalaxyState, contracts: &Contracts, board: &Board, key: CompanyId, n: usize) {
     let today = state.time;
     let Location::Travelling {
-        to, arrive, jumps, ..
+        from,
+        to,
+        arrive,
+        jumps,
+        ..
     } = state.companies[key].fleets[n].at
     else {
         return;
     };
     if arrive != today {
+        return;
+    }
+    if !crate::pirates::coarse_raid(state, key, n, from, to) {
         return;
     }
     if jumps && !roll_losses(state, key, n, to) {
@@ -631,6 +639,32 @@ pub(crate) fn roll_losses(
         state.traffic.add(to, cargo.good, left - cargo.amount);
     }
     survived
+}
+
+/// One ship of `fleet` is destroyed (the player shot it down): it takes
+/// its share of the cargo with it. Returns what it was carrying.
+pub fn ship_destroyed(state: &mut GalaxyState, company: CompanyId, fleet: u32) -> Option<Cargo> {
+    let n = fleet_index(state, company, fleet)?;
+    let f = &state.companies[company].fleets[n];
+    let to = match f.at {
+        Location::Docked(s) => s,
+        Location::Travelling { to, .. } | Location::Flying { to } => to,
+    };
+    let lost = f.cargo.map(|c| Cargo {
+        good: c.good,
+        amount: c.amount / f64::from(f.ships.max(1)),
+    });
+    if f.ships <= 1 {
+        lose_fleet(state, company, n, to);
+        return lost;
+    }
+    let f = &mut state.companies[company].fleets[n];
+    f.ships -= 1;
+    if let (Some(c), Some(l)) = (f.cargo.as_mut(), lost) {
+        c.amount -= l.amount;
+        state.traffic.add(to, l.good, -l.amount);
+    }
+    lost
 }
 
 /// A fleet bound for `to` is lost with everything aboard.

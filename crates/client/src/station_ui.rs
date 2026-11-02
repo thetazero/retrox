@@ -25,6 +25,7 @@ pub fn draw(ctx: &egui::Context, w: &World, here: SettlementId, actions: &mut Ve
         Screen::Hangar => crate::hangar_ui::hangar_screen(ctx, w, here, actions),
         Screen::Shipyard => crate::hangar_ui::shipyard_screen(ctx, w, here, actions),
         Screen::Contracts => crate::contracts_ui::contracts_screen(ctx, w, here, actions),
+        Screen::Bounties => crate::bounty_ui::bounty_screen(ctx, w, here, actions),
     }
 }
 
@@ -71,6 +72,11 @@ fn hub(ctx: &egui::Context, w: &World, here: SettlementId, actions: &mut Vec<Act
             ui.label(
                 RichText::new(format!("population {:.1}k", economy.population)).color(CREAM_DIM),
             );
+            let rank = w.player.standing.rank(settlement.owner);
+            ui.label(
+                RichText::new(format!("they count you {}", rank.name().to_lowercase()))
+                    .color(crate::bounty_ui::rank_color(rank)),
+            );
             ui.add_space(14.0);
             ui.spacing_mut().item_spacing.y = 8.0;
 
@@ -95,7 +101,7 @@ fn hub(ctx: &egui::Context, w: &World, here: SettlementId, actions: &mut Vec<Act
             let contracts_note = match (w.board.len(), w.player.contracts.len()) {
                 (0, 0) => "nothing to haul today".to_owned(),
                 (0, n) => format!("{n} under way · nothing new today"),
-                (b, 0) => format!("{b} contracts to haul"),
+                (b, 0) => format!("{} to haul", crate::hud::count(b, "contract")),
                 (b, n) => format!("{b} to haul · {n} under way"),
             };
             let contracts_note = if bound_here > 0 {
@@ -105,6 +111,15 @@ fn hub(ctx: &egui::Context, w: &World, here: SettlementId, actions: &mut Vec<Act
             };
             if menu_button(ui, "Contracts", &contracts_note, true) {
                 actions.push(Action::Open(Screen::Contracts));
+            }
+            let warrants = crate::bounty_ui::wanted(w).len();
+            let bounty_note = match warrants {
+                0 => "no warrants posted nearby".to_owned(),
+                1 => "1 gang wanted nearby".to_owned(),
+                n => format!("{n} gangs wanted nearby"),
+            };
+            if menu_button(ui, "Bounties", &bounty_note, true) {
+                actions.push(Action::Open(Screen::Bounties));
             }
             let stored_here = w.player.stored.iter().filter(|s| s.at == here).count();
             let hangar_note = match (services.outfitter, stored_here) {
@@ -198,11 +213,7 @@ pub(crate) fn menu_button(ui: &mut egui::Ui, title: &str, note: &str, enabled: b
     let (fill, text, sub) = match (enabled, hot) {
         (false, _) => (Color32::TRANSPARENT, RULE, RULE),
         (true, true) => (RED_DARK, CREAM, CREAM),
-        (true, false) => (
-            Color32::from_rgba_premultiplied(24, 18, 28, 200),
-            CREAM,
-            CREAM_DIM,
-        ),
+        (true, false) => (crate::widgets::CARD_FILL, CREAM, CREAM_DIM),
     };
     painter.rect_filled(rect, 0.0, fill);
     painter.rect_stroke(

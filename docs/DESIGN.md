@@ -320,6 +320,7 @@ Consequences:
   tiers.
 - **Planet ports:** ships dock at a holding point above a planet's north
   pole (1.5 radii out), not at its centre.
+- **Pirates** fly in the bubble too (§7.2.2).
 - **Not yet in the bubble:** colony ships, patrols. Harvesters fly in it
   (§5.4.2).
 - **Seen by the player:** the client carries each flight on between the
@@ -618,22 +619,16 @@ of autopilot each way plus the landing sequence.
   when the frame gives out or every section is gone. Hull damage stays
   with the ship until a dock or city repairs it, automatically, at
   3 cr per point, paid to the settlement's treasury.
-- **Raiders.** Pirate bands lurk at asteroid fields, preying on miners:
-  never in a faction's capital system, at 45% of fields in settled
-  systems (1–2 light fighters), 85% where no one lives (2–3, sometimes a
-  gunship). Each field has a band or not for each 20-day stretch,
-  decided from the field and the date, so a restored checkpoint meets the
-  same band; ships killed stay dead for the stretch. The navigation list
-  marks fields with a band. A band closes in from ~7 km when a ship
-  arrives. Raiders fly the player's own arcade flight model (shared
-  code) and stock fits under the same budgets, attack along the lead,
-  break off after overshooting, jink when someone is on their tail, fire
-  in bursts, run when badly hurt, and give up 16 km out from their field.
-  Until raiders are agents of the bubble (§5.2) bands are kept by the
-  client, like the mining laser's work on a field.
+- **Raiders** are the ships of the sim's pirate gangs (§7.2.2), flying the
+  player's own arcade flight model (shared code) with stock fits under
+  the same budgets: they attack along the lead, break off after
+  overshooting, jink when someone is on their tail, fire in bursts, run
+  when badly hurt, and give up 16 km out from what they guard. (Until
+  #80 they were bands the client rolled per field and date; those are
+  gone.)
 - **Stakes.** With a hostile within 20 km there's no fast travel, no
-  jump and no saving: fight or run. Wrecks spill components and metal
-  for the tractor.
+  jump and no saving: fight or run. Wrecks in a field spill components
+  and metal for the tractor.
 - **The starting courier** carries a light autocannon in a belly mount
   besides its chin mining laser, so a new pilot can defend themselves.
 - **Looks (§8).** Tracers are streaks of light, cream for the player's
@@ -649,6 +644,103 @@ of autopilot each way plus the landing sequence.
   when shots get through, and the volatile-rock blast for ships going up.
 - **Losing the ship** shows a "ship lost" card and restores the last
   checkpoint (§7.7.1).
+
+#### 7.2.2 Pirates, bounties and standing (#80)
+
+The Bounty hunter path and the start of the Pirate one (§2). Pirates are
+part of the living galaxy (pillars 1 and 5): sim actors that come from
+somewhere, live somewhere, and fly for real near the player.
+
+- **Where gangs come from.** Each settlement looks at itself monthly on
+  its own day: a small base chance plus a share of its *hardship* (the
+  worst of its food and fuel demand going unmet) that some crews go over
+  (§5.1.1 cost: arithmetic, with a search only on the rare founding). At
+  most one gang per fifteen settlements, plus three: denser than that,
+  robbed freight leaves a quarter of the trade fleet idle. The starting
+  galaxy seeds gangs from 6% of settlements until prehistory grows them.
+- **Where they live.** A lair is an asteroid field within two jumps of
+  the crews' home, never in a system with a faction capital, one gang
+  per system, chosen at random weighted by *prey* (settlements in and
+  next to it, whose traffic passes) over *law* (settlements in the lair
+  system itself), with chokepoints (systems of one or two lanes) worth
+  1.6×. So gangs sit by the busy lanes in the quiet systems.
+- **What they are.** A name ("Ash Rats of Bralum", "Free Crews of Baalem":
+  the lair system and a crew name, no fake anything), two light fighters
+  (interceptors, heavy fighters) to start, and a record: tonnes taken,
+  last raid, and how much it has taken from each faction's traders.
+  Every 80 t taken buys another ship, up to five; the fourth is a gunship.
+  150 days without a raid costs a ship; a gang with none is gone.
+  Founding, breaking up and bounties go in the history record.
+- **Raids, coarse tier.** A trader trip that starts or ends in a lair
+  system (or a system next to one) may be robbed on arrival: 5% per gang
+  ship in the lair system, 2% next door, at most 40%. The gang takes up to
+  25 t per ship of the cargo, and one time in twenty a ship (much more
+  often and replacement ships outrun the freight: the economy test's
+  idle share goes past a fifth).
+- **Raids, in the bubble.** A gang whose lair is in the bubble flies,
+  under the shared autopilot and flight model like every other ship:
+  it holds at its field, spots the nearest laden trader within 0.4 AU,
+  flies out to intercept it, robs it when it catches it (the same take
+  as a coarse raid), gives up after three days, and flies home. A
+  robbery in the player's system comes over comms as a mayday.
+- **Hunting the player.** A gang not resting from a fight with the
+  player, within 0.4 AU of the player's ship in space, goes after it.
+  The client flies that stalk (only it knows where the player is between
+  ticks): full burn on an intercept course that matches the ship's
+  velocity across the line of sight while closing along it, on the
+  fast-travel drive the gang's slowest ship has (the same formula as the
+  player's). A stalking gang that comes within 4,000 km of a ship in fast
+  travel **interdicts** it: the ship drops out with its speed dragged down
+  to 250 m/s, an INTERDICTED band slams across the view, and the gang's
+  ships come in from where it was. At 1:1 a gang closes in for real and
+  its ships come out at 30 km. A gang at home meets a ship that comes to
+  its field.
+- **After a fight** the client tells the sim which ships died; the rest fly
+  home and keep away from the player for three days.
+- **Bounties.** When a gang forms, the faction whose settlement the crews
+  came from posts a warrant on them, if it can afford one. A gang without
+  one draws one at its monthly review from the faction whose traders it
+  has robbed most, if that faction can afford the whole gang twice over.
+  A warrant pays 2,000 cr per fighter, 15 cr more per tonne the gang has
+  taken, up to 8,000, and double for a gunship, from the posting
+  faction's treasury the moment a ship goes down (as far as it can pay).
+  A fresh two-fighter gang pays 4,000: about 1.4 hours of contracts in a
+  courier (§7.8), or two-thirds of an interceptor, for a trip of a few
+  jumps and a fight that can cost the ship and pays for its repairs.
+- **The bounty office**, on every station's and city's menu, lists the
+  warrants on gangs within six jumps (name, lair, ships, who posted it,
+  what it has taken, pay per ship and for the gang, PLOT COURSE), and the
+  player's standing with the local faction and every faction they have
+  one with. NAVIGATION marks a field where a gang lairs; the HUD marks
+  gangs flying in the system with red diamonds (a doubled one for a gang
+  after the player), labelled with name, ships and warrant.
+- **Standing** with each faction runs from −100 to +100, read as a rank:
+  hostile (−25 and below), wary (below −5), neutral, trusted (15 and
+  up), honoured (50 and up). It moves by: +3 for a ship with that
+  faction's warrant on it, +1 for any pirate destroyed in its space
+  (where it has the most people), +1 per delivery, −5 per failed
+  contract; **−20 for opening fire on one of its peaceful ships**, −6 for
+  each further hit (at most one per 1.5 s per fleet) and −30 for each of
+  its ships destroyed. So one attack and a second burst make a faction
+  hostile. Grudges fade by 0.25 a day, favours by 0.05. Standing is
+  saved with the player.
+- **Hostility you can feel.** A hostile faction's stations and cities
+  refuse clearance to dock or land, and its trader ships, when the
+  player comes alongside, are hostile: armed ones fight, the rest run.
+- **Faction ships near the player.** Within 12 km, each ship of a trader
+  fleet is a ship in the fight's scene, holding its place in the
+  formation, peaceful unless its faction counts the player hostile.
+  Shot, the whole fleet turns. A trader destroyed is gone from the sim's
+  fleet with its share of the cargo, and the tractor takes up to 80% of
+  that share into the hold.
+- **Intercept** ([I]) fast travels to the trader fleet nearest the
+  crosshair and brings the ship to rest 2.5 km off its quarter, in a
+  frame that moves with the fleet (so flight assist, and any fight, are
+  relative to the convoy). That is the start of the Pirate path:
+  interdicting on the lanes. Fencing stolen cargo, black markets and
+  bounties on the player are later work.
+- **Saves:** format 2 (the galaxy carries gangs, and the player
+  standing); a convoy's frame is saved as the star's.
 
 ### 7.3 Mining
 
@@ -757,8 +849,9 @@ from a random generator (pillar 5).
 - **Deadlines** allow 1.5× the expected trip (jumps plus ~3 days per
   system). Each day late takes 10% off the fee. Ten days late, or
   abandoned, the contract fails: the consignee keeps the deposit and its
-  fee, and the goods are the player's to sell. No reputation cost yet;
-  that comes with faction reputation (milestone 5).
+  fee, and the goods are the player's to sell, and the consignee's
+  faction counts it against the player (§7.2.2); a delivery counts a
+  little for them.
 - **Delivery** happens on docking or landing at the consignee. Waiting
   while docked stops on the day a contract falls due (§3).
 - **The client starts 30 days after generation**, so markets have
@@ -848,8 +941,11 @@ the sim's own numbers:
   the 12 t hold forces ~25 station trips an hour, and gluts at the local
   market set the price. A miner grows by refitting: a gunship with mining
   lasers in the bow and a cargo bay amidships (43 500 cr) cuts five times
-  as fast. A miner mines in fields the nav list shows clear of raiders
-  (§7.2), and sits a raided stretch out docked.
+  as fast. A miner mines in fields the nav list shows no gang lairs in
+  (§7.2.2).
+- **Bounties** pay from the posting faction's treasury per pirate ship
+  destroyed (§7.2.2), a little above contracts for the time, against the
+  risk of the fight.
 
 **Measured** with the career bench (`cargo test -p retrox-client careers
 -- --ignored --nocapture`, `crates/client/src/world/careers.rs`). Bots
@@ -995,6 +1091,13 @@ Decided while bringing every screen into one style (issue #77):
   teal; radiators and cargo cream).
 - **Key legends** (the corner strip from §8.3, the star chart's legend)
   are cream keycaps with the action in uppercase mono beside them.
+- **One lamp and one keycap** (audit 2, #101): every indicator lamp (HUD,
+  star chart, rewind deck) and every keycap (corner strip, hints, legends)
+  is painted by the same kit function, keycaps in mono 13, so they match
+  from screen to screen.
+- **Counts and estimates read as words:** "1 jump", "this system",
+  "1 settlement"; an estimated trip is "about 39 d". Never "~": in the
+  mono face it reads as a minus sign.
 
 ### 8.5 Sound
 

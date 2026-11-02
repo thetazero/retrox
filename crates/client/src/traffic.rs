@@ -12,6 +12,7 @@ use glam::DVec3;
 use retrox_sim::bubble::{self, FleetKey};
 use retrox_sim::economy::Good;
 use retrox_sim::flight::{self, Kinematics};
+use retrox_sim::pirates::{self, Aim, GangId};
 use retrox_sim::ship::Loadout;
 use retrox_sim::{GalaxyState, SystemId};
 
@@ -58,10 +59,32 @@ struct Track {
     done: bool,
 }
 
+/// A pirate gang in view (DESIGN §7.2.2), flying as one.
+#[derive(Clone, Debug)]
+pub struct PirateContact {
+    pub gang: GangId,
+    pub name: String,
+    /// Each ship's stock fit, in the gang's order.
+    pub fits: Vec<Loadout>,
+    /// A fighter's bounty, if a faction has posted one.
+    pub bounty: Option<f64>,
+    pub aim: Aim,
+    /// System frame, metres, y up.
+    pub pos: DVec3,
+    pub vel: DVec3,
+    pub thrust: DVec3,
+    pub accel: f64,
+}
+
 #[derive(Default)]
 pub struct Traffic {
     system: Option<SystemId>,
     tracks: HashMap<FleetKey, Track>,
+    /// Gangs' flights as last predicted, and what they were doing then.
+    pirate_tracks: HashMap<GangId, (Aim, Track)>,
+    pub pirates: Vec<PirateContact>,
+    /// The galaxy clock the contacts are for.
+    pub at_s: f64,
     /// Stock fits by hull id, built once.
     fits: HashMap<String, Loadout>,
     pub contacts: Vec<Contact>,
@@ -164,12 +187,113 @@ impl Traffic {
         }
         self.tracks.retain(|k, _| live.contains(k));
         self.contacts = contacts;
+        self.at_s = clock_s;
+        self.update_pirates(galaxy, system, clock_s);
+    }
+
+    /// The gang `id` in view, if it is.
+    pub fn pirate(&self, id: GangId) -> Option<&PirateContact> {
+        self.pirates.iter().find(|p| p.gang == id)
+    }
+
+    /// Bring every gang flying in `system` up to `clock_s`: from the sim's
+    /// state each day, like the traders; a stalk is the client's own and
+    /// is drawn where it is.
+    fn update_pirates(&mut self, galaxy: &GalaxyState, system: SystemId, clock_s: f64) {
+        let day = galaxy.time.days();
+        let day_start = day as f64 * SECONDS_PER_DAY;
+        let mut out = Vec::new();
+        let mut live = Vec::new();
+        for (&id, prowl) in &galaxy.pirates.prowls {
+            let Some(gang) = galaxy.pirates.gangs.get(id) else {
+                continue;
+            };
+            if gang.lair != system || prowl.aim == Aim::Engaged {
+                continue;
+            }
+            live.push(id);
+            let accel = pirates::accel(galaxy, gang);
+            let fresh = Track {
+                day,
+                t_s: day_start,
+                ship: prowl.ship,
+                done: false,
+            };
+            let entry = self.pirate_tracks.entry(id).or_insert((prowl.aim, fresh));
+            if entry.0 != prowl.aim || entry.1.day != day {
+                *entry = (prowl.aim, fresh);
+            }
+            let track = &mut entry.1;
+            let prey = match prowl.aim {
+                Aim::Hunt(key) => pirates::prey_ship(galaxy, key, system),
+                _ => None,
+            };
+            let goal = |t_s: f64| {
+                pirates::prowl_goal(
+                    galaxy,
+                    gang,
+                    prowl,
+                    prey,
+                    t_s - day_start,
+                    t_s / SECONDS_PER_DAY,
+                )
+            };
+            if prowl.aim == Aim::Stalk {
+                track.ship = prowl.ship;
+                track.t_s = clock_s;
+            } else if !track.done && clock_s > track.t_s {
+                let t0 = track.t_s;
+                if goal(t0).is_some() {
+                    let arrived = flight::fly(&mut track.ship, accel, clock_s - t0, |t, _| {
+                        goal(t0 + t).expect("checked")
+                    });
+                    // Home or caught up: hold there until the sim moves on.
+                    track.done = arrived.is_some() && prowl.aim != Aim::Lurk;
+                }
+                track.t_s = clock_s;
+            }
+            if prowl.aim == Aim::Lurk
+                && let Some(g) = goal(clock_s)
+            {
+                track.ship = Kinematics {
+                    pos: g.pos,
+                    vel: g.vel,
+                };
+            }
+            let thrust = match goal(track.t_s) {
+                Some(g) => flight::autopilot(&track.ship, &g, accel, 1.0),
+                None => track.ship.vel,
+            };
+            let fits = gang
+                .ships
+                .iter()
+                .filter_map(|h| retrox_content::ships::stock(h))
+                .collect();
+            out.push(PirateContact {
+                gang: id,
+                name: gang.name.clone(),
+                fits,
+                bounty: gang.bounty.map(|b| b.per_ship),
+                aim: prowl.aim,
+                pos: to_client(track.ship.pos),
+                vel: to_client(track.ship.vel),
+                thrust: to_client(thrust),
+                accel,
+            });
+        }
+        self.pirate_tracks.retain(|k, _| live.contains(k));
+        self.pirates = out;
     }
 }
 
 /// Sim frame (system plane x/y) to client frame (system plane x/z, y up).
-fn to_client(v: [f64; 3]) -> DVec3 {
+pub fn to_client(v: [f64; 3]) -> DVec3 {
     DVec3::new(v[0], v[2], v[1])
+}
+
+/// Client frame back to the sim's.
+pub fn to_sim(v: DVec3) -> [f64; 3] {
+    [v.x, v.z, v.y]
 }
 
 /// Where each ship of an `n`-ship fleet flies, relative to the fleet's

@@ -29,9 +29,11 @@
 
 #[cfg(test)]
 mod careers;
+mod convoy;
 mod field;
 mod fight;
 mod pilot;
+mod prowl;
 mod routing;
 #[cfg(test)]
 mod tests;
@@ -94,6 +96,9 @@ pub enum Place {
     Field(FieldId),
     /// A settlement in space.
     Station(SettlementId),
+    /// A trader fleet flying in the system: a frame that moves with it,
+    /// for flying alongside after an intercept (DESIGN §7.2.2).
+    Convoy(retrox_sim::bubble::FleetKey),
 }
 
 /// The current system's contents, indexed once on arrival.
@@ -166,6 +171,8 @@ pub enum Leg {
     /// Up and out of a gravity well, stopping just past its edge: on the
     /// side facing `toward` if that's somewhere outside, else straight up.
     Climb { well: Place, toward: Option<Place> },
+    /// Alongside a trader fleet, matching its course (DESIGN §7.2.2).
+    Intercept(retrox_sim::bubble::FleetKey),
 }
 
 impl Leg {
@@ -173,6 +180,7 @@ impl Leg {
     pub fn frame(self) -> Place {
         match self {
             Leg::To(place) | Leg::Climb { well: place, .. } => place,
+            Leg::Intercept(fleet) => Place::Convoy(fleet),
         }
     }
 }
@@ -255,6 +263,8 @@ pub enum Action {
     AbandonContract(usize),
     /// Ping the prospector: read the rocks around the ship.
     Scan,
+    /// Fast travel alongside the trader fleet nearest the crosshair.
+    Intercept,
     /// Point the guns at the next hostile.
     CycleHostile,
 }
@@ -272,6 +282,8 @@ pub enum Screen {
     Shipyard,
     /// The dispatch board: freight contracts.
     Contracts,
+    /// Warrants on pirates nearby, and standing with the factions.
+    Bounties,
 }
 
 /// What the player could do right now (shown as prompts).
@@ -339,6 +351,14 @@ pub struct World {
     pub combat: Combat,
     /// How hard the ship's engines burned this frame, 0..1.
     pub burn: f64,
+    /// Seconds since a gang pulled us out of fast travel, and which,
+    /// while that's news.
+    pub interdicted: Option<(f64, String)>,
+    /// The convoy the ship flies alongside, as last seen: where, how fast,
+    /// and the galaxy clock then.
+    convoy_seen: Option<(retrox_sim::bubble::FleetKey, DVec3, DVec3, f64)>,
+    /// When each trader fleet last took offence at our shots.
+    complaints: std::collections::HashMap<retrox_sim::bubble::FleetKey, f64>,
 }
 
 /// A wait in progress (DESIGN §3): docked or landed only, a day at a time,
@@ -438,10 +458,14 @@ impl World {
             traffic: Traffic::default(),
             combat: Combat::new(player.ship.fit.clone(), player.ship.damage.clone()),
             burn: 0.0,
+            interdicted: None,
+            complaints: Default::default(),
+            convoy_seen: None,
             player,
         };
         // Traders near the player are ships (DESIGN §5.2).
         bubble::set_centre(&mut world.galaxy, Some(system));
+        world.settle_prowls();
         world.update_field();
         world.refresh_board();
         world
@@ -480,6 +504,23 @@ impl World {
                 }
                 _ => DVec3::ZERO,
             },
+            Place::Convoy(fleet) => {
+                // Where the traffic last had it, carried on straight.
+                let seen = self
+                    .traffic
+                    .contacts
+                    .iter()
+                    .find(|c| c.key == fleet)
+                    .map(|c| (c.pos, c.vel, self.traffic.at_s))
+                    .or(self
+                        .convoy_seen
+                        .filter(|s| s.0 == fleet)
+                        .map(|s| (s.1, s.2, s.3)));
+                match seen {
+                    Some((pos, vel, at_s)) => pos + vel * (t * SECONDS_PER_DAY - at_s),
+                    None => DVec3::ZERO,
+                }
+            }
         }
     }
 
@@ -500,6 +541,11 @@ impl World {
                 .settlements
                 .get(s)
                 .map_or("(gone)".into(), |s| s.name.clone()),
+            Place::Convoy(fleet) => self
+                .galaxy
+                .companies
+                .get(fleet.0)
+                .map_or("a convoy".into(), |c| format!("{} convoy", c.name)),
         }
     }
 
@@ -550,6 +596,7 @@ impl World {
             Place::Body(b) => self.galaxy.bodies[b].radius_km * 1000.0,
             Place::Field(f) => self.galaxy.fields[f].radius_km * 1000.0,
             Place::Station(s) => self.station_size_m(s) * 0.5,
+            Place::Convoy(_) => 200.0,
         }
     }
 
@@ -577,6 +624,7 @@ impl World {
             Place::Star | Place::Body(_) => self.well_radius(place) * 1.05,
             Place::Field(_) => self.place_radius(place) + 10e3,
             Place::Station(_) => 20e3,
+            Place::Convoy(_) => 2.5e3,
         }
     }
 
@@ -678,6 +726,7 @@ impl World {
                 _ => {}
             },
             Action::Scan => self.scan(),
+            Action::Intercept => self.intercept(),
             Action::CycleHostile => {
                 let me = self.combat_position();
                 self.combat.cycle_target(me);
@@ -686,7 +735,7 @@ impl World {
                 }
             }
             Action::Dock => {
-                if let Some(s) = prompts.dock {
+                if let Some(s) = prompts.dock.filter(|&s| self.cleared(s)) {
                     self.mining.haul = Default::default();
                     self.mode = Mode::Docked(s);
                     self.screen = Screen::Hub;
@@ -710,7 +759,7 @@ impl World {
                 }
             }
             Action::Land => {
-                if let Some((city, body)) = prompts.land {
+                if let Some((city, body)) = prompts.land.filter(|&(c, _)| self.cleared(c)) {
                     self.mode = Mode::Landed {
                         city,
                         body,
@@ -961,6 +1010,14 @@ impl World {
 
     pub fn update(&mut self, dt: f64, controls: Controls) {
         self.bump = 0.0;
+        let from = self.ship_position();
+        let clock0 = self.clock_s;
+        if let Some((t, _)) = &mut self.interdicted {
+            *t += dt;
+            if *t > 6.0 {
+                self.interdicted = None;
+            }
+        }
         if let Some((_, t)) = &mut self.message {
             *t -= dt as f32;
             if *t <= 0.0 {
@@ -1003,6 +1060,9 @@ impl World {
         self.wait_some();
 
         self.traffic.update(&self.galaxy, self.system, self.clock_s);
+        self.keep_convoy_frame();
+        self.prowl(from, clock0);
+        self.player.standing.drift(self.galaxy.time.days());
         self.settle_contracts();
         self.refresh_board();
         self.update_field();
@@ -1014,6 +1074,7 @@ impl World {
         let skimming = pass.is_some_and(|p| crate::skim::density(p.altitude_m) > 0.0);
         self.mine(dt, trigger && !fighting && !skimming);
         self.skim(dt, pass, trigger && !fighting);
+        self.convoys();
         self.fight(dt, trigger);
         self.repair_docked();
         self.update_camera(dt);

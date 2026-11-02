@@ -111,6 +111,8 @@ pub fn deliver(player: &mut Player, galaxy: &mut GalaxyState, here: SettlementId
         }
         let c = player.contracts.remove(i);
         let o = &c.offer;
+        let owner = galaxy.settlements[here].owner;
+        player.standing.change(owner, crate::standing::DELIVERED);
         let pay = freight::pay_on(o.fee, o.deadline, today);
         let economy = &mut galaxy.settlements[here].economy;
         economy.market.stock[o.good] += o.amount;
@@ -147,6 +149,8 @@ pub fn abandon(player: &mut Player, galaxy: &mut GalaxyState, index: usize) -> O
     let o = &c.offer;
     if let Some(to) = galaxy.settlements.get_mut(o.to) {
         to.economy.treasury += o.fee;
+        // The faction that posted it remembers (DESIGN §7.2.2).
+        player.standing.change(to.owner, crate::standing::FAILED);
     }
     player.cargo[o.good] += o.amount;
     Some(format!(

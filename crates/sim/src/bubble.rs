@@ -364,6 +364,7 @@ pub fn set_centre(state: &mut GalaxyState, centre: Option<SystemId>) {
         collapse(state, key);
     }
     if centre.is_none() {
+        crate::pirates::sync(state);
         return;
     }
     let travelling: Vec<FleetKey> = state
@@ -379,6 +380,7 @@ pub fn set_centre(state: &mut GalaxyState, centre: Option<SystemId>) {
     for key in travelling {
         watch(state, key);
     }
+    crate::pirates::sync(state);
 }
 
 /// Systems within `jumps` lane jumps of `centre`.

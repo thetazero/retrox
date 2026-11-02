@@ -460,8 +460,7 @@ fn mining_hour(seed: u64) {
     // marks them) and a station to sell at (a city costs minutes of flying
     // down its well and back out each trip).
     let systems: Vec<_> = b.w.galaxy.systems.iter().map(|(id, _)| id).collect();
-    let epoch = (b.w.t_days() / crate::combat::BAND_DAYS) as u64;
-    let quiet = |w: &World, sys, f| crate::combat::band(&w.galaxy, sys, f, epoch).is_empty();
+    let quiet = |w: &World, _sys, f| retrox_sim::pirates::gang_at(&w.galaxy, f).is_none();
     let home = systems
         .iter()
         .copied()
@@ -485,13 +484,7 @@ fn mining_hour(seed: u64) {
     b.go(port);
     let begin = b.real_s;
     while b.real_s - begin < HOUR {
-        let quiet_field = |w: &World| {
-            w.view
-                .fields
-                .iter()
-                .copied()
-                .find(|&f| !w.raiders_reported(f))
-        };
+        let quiet_field = |w: &World| w.view.fields.iter().copied().find(|&f| !w.gang_reported(f));
         // Every field has a band out: sit it out docked, a day at a time.
         let mut waited = 0;
         while quiet_field(&b.w).is_none() && waited < 60 {
@@ -709,19 +702,13 @@ fn contracts_hour(seed: u64) {
             b.w.act(Action::AcceptContract(i));
             b.go(to);
             if std::env::var("BENCH_DEBUG").is_ok() {
-                // Freight as `freight::board` prices it (hauler upkeep).
-                let freight = (o.amount * 0.02 + 2.0) * o.trip_days * (1.0 + o.shortage);
-                let planned = model(&b.w, o.to) == retrox_sim::EconomyModel::Planned;
                 println!(
-                    "    {:>3.0} t {:10} {} jumps, {:>4.1} days: fee {:>5.0} (freight {:>4.0}, {} {:>5.0}) on goods worth {:>4.0}; {:.1} min, {} days",
+                    "    {:>3.0} t {:10} {} jumps, {:>4.1} days: fee {:>5.0} (carriage) on goods worth {:>4.0}; {:.1} min, {} days",
                     o.amount,
                     o.good.name(),
                     o.jumps,
                     o.trip_days,
                     o.fee,
-                    freight,
-                    if planned { "premium" } else { "gap" },
-                    o.fee - freight,
                     o.value,
                     (b.real_s - t0) / 60.0,
                     b.w.galaxy.time.days() - d0

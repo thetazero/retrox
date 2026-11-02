@@ -31,7 +31,7 @@ use crate::world::{Mode, Place, Ship, World};
 
 /// Bump whenever a change to the client's or the sim's saved state would
 /// make old saves load wrongly. Older formats are refused with a message.
-pub const FORMAT: u32 = 1;
+pub const FORMAT: u32 = 2;
 
 /// Which of a game's two files.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -124,9 +124,6 @@ struct PlayerState {
     /// What the mining laser has done to every field, and the haul.
     #[serde(default)]
     mining: Mining,
-    /// The raider bands fought, and who of them is dead.
-    #[serde(default)]
-    raiders: crate::combat::Bands,
     played_s: f64,
 }
 
@@ -213,14 +210,13 @@ pub fn snapshot(
     let state = PlayerState {
         system: world.system,
         clock_s: world.clock_s,
-        ship: world.ship.clone(),
+        ship: world.saved_ship(),
         mode,
         target: world.target,
         course: world.course,
         cockpit: world.cockpit,
         player: world.player.clone(),
         mining: world.mining.clone(),
-        raiders: world.combat.bands.clone(),
         played_s,
     };
     let err = |e: serde_json::Error| format!("couldn't write the save: {e}");
@@ -292,7 +288,6 @@ pub fn decode(bytes: &[u8]) -> Result<Loaded, String> {
     world.course = state.course;
     world.cockpit = state.cockpit;
     world.mining = state.mining;
-    world.combat.bands = state.raiders;
     Ok(Loaded {
         header,
         world,

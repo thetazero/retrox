@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::GalaxyTime;
+use crate::SystemId;
 use crate::settlement::SettlementId;
 use crate::state::FactionId;
 
@@ -43,4 +44,16 @@ pub enum HistoryKind {
     },
     /// A settlement started going badly hungry.
     Famine { settlement: SettlementId },
+    /// Crews from `origin` turned pirate and holed up in `system`.
+    GangFormed {
+        system: SystemId,
+        origin: SettlementId,
+    },
+    /// The gang that lairs in `system` is gone.
+    GangBroken { system: SystemId },
+    /// A faction put a price on the gang in `system`.
+    BountyPosted {
+        faction: FactionId,
+        system: SystemId,
+    },
 }

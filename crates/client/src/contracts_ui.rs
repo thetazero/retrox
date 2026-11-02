@@ -1,20 +1,21 @@
 //! The dispatch board while docked or landed, and the contracts readout in
 //! flight. Same panel kit as the trade screen: red tabs, display type for
-//! names, teal VFD for stock and time, amber for money.
+//! names, teal VFD for stock, time and what you're paid, amber for what
+//! you pay or are short of (DESIGN §8.4).
 
 use egui::{Align2, Color32, Margin, Rect, RichText, Stroke, Vec2};
 use retrox_sim::SettlementId;
 use retrox_sim::freight::Offer;
 
 use crate::contracts::{self, Contract};
+use crate::hud::jumps_text;
 use crate::hud::{
     ALARM, AMBER, CREAM, CREAM_DIM, Panel, RED, RULE, VFD, credits, display, glow_label, mono,
     panel, section, segment_bar, tag,
 };
 use crate::station_ui::screen_header;
+use crate::widgets::{CARD_FILL, READOUT_FILL};
 use crate::world::{Action, World};
-
-const CARD_FILL: Color32 = Color32::from_rgba_premultiplied(24, 18, 28, 200);
 
 pub fn contracts_screen(
     ctx: &egui::Context,
@@ -123,7 +124,7 @@ pub fn contracts_screen(
 }
 
 /// A card's frame: a dark plate with a coloured tab down the left edge.
-fn card(ui: &mut egui::Ui, tab: Color32, add: impl FnOnce(&mut egui::Ui)) {
+pub(crate) fn card(ui: &mut egui::Ui, tab: Color32, add: impl FnOnce(&mut egui::Ui)) {
     let frame = egui::Frame::new()
         .fill(CARD_FILL)
         .stroke(Stroke::new(1.0, RULE))
@@ -151,14 +152,6 @@ fn whereabouts(w: &World, to: SettlementId) -> String {
     let system = &w.galaxy.systems[s.system].name;
     let faction = &w.galaxy.factions[s.owner].name;
     format!("{system} · {faction}")
-}
-
-fn jumps_text(jumps: u32) -> String {
-    match jumps {
-        0 => "this system".into(),
-        1 => "1 jump".into(),
-        n => format!("{n} jumps"),
-    }
 }
 
 /// The left half of a card: destination, where it is, what's carried, and
@@ -219,7 +212,7 @@ fn offer_card(
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
                 ui.set_width(400.0);
-                let route = format!("{} · ~{:.0} d", jumps_text(o.jumps), o.trip_days);
+                let route = format!("{} · about {:.0} d", jumps_text(o.jumps), o.trip_days);
                 cargo_lines(ui, w, o, &route);
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -242,11 +235,11 @@ fn offer_card(
                     ui.spacing_mut().item_spacing.y = 1.0;
                     ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
                         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                        glow_label(ui, &format!("+{}", credits(o.fee)), mono(24.0), AMBER);
+                        glow_label(ui, &format!("+{}", credits(o.fee)), mono(24.0), VFD);
                         ui.label(
                             RichText::new(format!("due {} · {days_left} d", o.deadline))
                                 .size(12.0)
-                                .color(VFD),
+                                .color(CREAM_DIM),
                         );
                         let deposit = format!("deposit {}", credits(o.value));
                         let short = o.value > w.player.credits;
@@ -316,7 +309,7 @@ fn active_card(ui: &mut egui::Ui, w: &World, i: usize, c: &Contract, actions: &m
                     ui.label(
                         RichText::new(format!("pays {} · due {}", credits(pay), o.deadline))
                             .size(12.0)
-                            .color(AMBER),
+                            .color(VFD),
                     );
                     ui.label(
                         RichText::new(format!("deposit {} held", credits(o.value)))
@@ -378,7 +371,7 @@ pub fn flight_readout(ctx: &egui::Context, w: &World) {
         .anchor(Align2::LEFT_TOP, [18.0, 126.0])
         .show(ctx, |ui| {
             let frame = egui::Frame::new()
-                .fill(Color32::from_rgba_premultiplied(9, 7, 14, 205))
+                .fill(READOUT_FILL)
                 .inner_margin(Margin {
                     left: 18,
                     right: 14,
