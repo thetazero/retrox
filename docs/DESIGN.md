@@ -529,14 +529,18 @@ All in `sim::politics`; it runs in planning, in play as in prehistory.
   factions, *powers* (factions with at least 5% of all people), the
   largest faction's share, and the *effective number* of factions (one
   over the sum of squared population shares: four equal powers score 4,
-  one empire with crumbs scores near 1), then the family tree. `retrox
+  one empire with crumbs scores near 1), then the family tree of every
+  founding nation that has breakaways or is a power. `retrox
   simulate` prints the same at its end. The full legends tool is #14.
   Targets for 400 years: effective number 3–10, largest share under
   half, no more than about 60 factions standing. As tuned, seeds 1–3
   end with 30–41 factions, 4–6 powers, the largest at 24–28% and an
   effective number of about 7. The first secessions come around year
   230, once colonies have spread past ~100 ly. A compact seed (4) never
-  spreads far enough and keeps its four founding nations.
+  spreads far enough and keeps its four founding nations. In the placed
+  galaxy played today, stability starts at 1, so nothing breaks away in
+  the first years. Seed 1 sees 3 secessions in 20 years of play: news
+  for the player, not a collapse.
 
 ### 5.6 News & propaganda
 

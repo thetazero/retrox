@@ -92,7 +92,13 @@ fn loyalty_fades_with_distance_from_the_capital() {
         .expect("a settlement that isn't a capital");
     let near = politics::target(&state, id, Some(0.0));
     let far = politics::target(&state, id, Some(3.0 * politics::DISTANCE_SCALE_LY));
-    assert!(near > politics::UNSTABLE, "even nearby settlements are restless");
-    assert!(far < politics::UNSTABLE, "distance doesn't wear loyalty down");
+    assert!(
+        near > politics::UNSTABLE,
+        "even nearby settlements are restless"
+    );
+    assert!(
+        far < politics::UNSTABLE,
+        "distance doesn't wear loyalty down"
+    );
     assert_eq!(politics::target(&state, id, None), 0.0);
 }

@@ -3,8 +3,8 @@
 //!
 //! Every settlement has a stability between 0 and 1. At its monthly review
 //! it moves part of the way toward a target that falls with lane distance
-//! from its faction's capital and with hunger, and drops sharply in a
-//! famine. Once a year each faction's unstable systems, grouped with the
+//! from its faction's capital, with the size of its faction
+//! (overextension) and with hunger, and drops sharply in a famine. Once a year each faction's unstable systems, grouped with the
 //! unstable systems near them, may break away together as a new faction.
 //! The breakaway takes as capital its most populous settlement, keeps only
 //! the systems nearer that new capital than the old one, remembers its
@@ -21,12 +21,12 @@ use crate::{
     EconomyModel, Faction, FactionId, GalaxyState, HistoryKind, Rng, SettlementId, SystemId, names,
 };
 
-/// Days for stability to move most of the way to its target.
+/// Stability closes the gap to its target over about this many days:
+/// each monthly review moves it `REVIEW_DAYS / STABILITY_DAYS` of the way.
 const STABILITY_DAYS: f64 = 720.0;
 /// Stability lost per `DISTANCE_SCALE_LY` of lanes from the capital.
 pub const DISTANCE_WEIGHT: f64 = 0.5;
 pub const DISTANCE_SCALE_LY: f64 = 60.0;
-
 /// Stability lost everywhere in a faction per e-fold of its people past
 /// `OVEREXTENSION_PEOPLE`: big realms are harder to hold together.
 pub const OVEREXTENSION_WEIGHT: f64 = 0.2;

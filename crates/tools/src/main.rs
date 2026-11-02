@@ -420,9 +420,23 @@ fn print_lineages(state: &retrox_sim::GalaxyState) {
             }
         }
     }
+    // Founding factions with a family, or big enough to matter; the rest
+    // (the placed galaxy's one-settlement independents) are only counted.
+    let total: f64 = people.values().map(|p| p.0).sum();
+    let mut quiet = 0;
     for (id, f) in state.factions.iter() {
-        if f.parent.is_none() {
-            branch(state, &people, id, 0);
+        if f.parent.is_some() {
+            continue;
         }
+        let family = state.factions.values().any(|c| c.parent == Some(id));
+        let share = people.get(&id).map_or(0.0, |p| p.0) / total.max(1e-9);
+        if family || share >= retrox_sim::politics::MAJOR_SHARE {
+            branch(state, &people, id, 0);
+        } else {
+            quiet += 1;
+        }
+    }
+    if quiet > 0 {
+        println!("  and {quiet} minor factions with no breakaways");
     }
 }
