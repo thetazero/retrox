@@ -92,7 +92,6 @@ fn every_fleet_has_its_events() {
 }
 
 #[test]
-#[ignore = "slotmap free lists aren't saved: #62"]
 fn a_saved_game_resumes_the_same_history() {
     let mut state = small();
     for _ in 0..100 {
