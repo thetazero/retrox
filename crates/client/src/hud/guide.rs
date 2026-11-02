@@ -285,9 +285,10 @@ pub fn controls_card(ctx: &egui::Context, invert_pitch: bool) {
                             ui.add_space(8.0);
                             rich_hint(
                                 ui,
-                                "Click a name in NAVIGATION to target it. Jump with the JUMP \
-                                 buttons in HYPERLANES, clear of gravity wells.  [H] closes this \
-                                 card; the HANDBOOK in the [ESC] menu explains how to start.",
+                                "Click a name in NAVIGATION to target it. On a plotted course, \
+                                 [J] climbs out of a gravity well and then jumps the next lane \
+                                 (or press JUMP in HYPERLANES).  [H] closes this card; the \
+                                 HANDBOOK in the [ESC] menu explains how to start.",
                                 CREAM_DIM,
                             );
                         });

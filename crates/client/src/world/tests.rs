@@ -508,6 +508,61 @@ fn a_plotted_course_is_followed_hop_by_hop() {
     assert_eq!(world.course, None, "no course to where you are");
 }
 
+/// Issue #188: taking a contract sets its course, and from the launch
+/// [J] alone gets the ship there: up out of the well, then lane by lane.
+#[test]
+fn a_contract_is_reached_with_j_alone() {
+    let mut world = World::new(1);
+    let i = world
+        .board
+        .iter()
+        .position(|o| world.galaxy.settlements[o.to].system != world.system)
+        .expect("a job in another system");
+    let dest = world.galaxy.settlements[world.board[i].to].system;
+    world.act(Action::AcceptContract(i));
+    assert_eq!(world.course, Some(dest), "ACCEPT plots the course");
+
+    world.act(Action::Launch);
+    assert!(world.prompts().climb.is_some(), "launched inside a well");
+    assert_eq!(world.prompts().jump, None, "no jumping from in the well");
+    for _ in 0..20 {
+        if world.system == dest {
+            break;
+        }
+        world.act(Action::FastTravel);
+        assert_ne!(world.mode, Mode::Normal, "[J] does something");
+        for _ in 0..600 {
+            run(&mut world, 1.0);
+            if world.mode == Mode::Normal {
+                break;
+            }
+        }
+    }
+    assert_eq!(world.system, dest);
+    assert_eq!(world.course, None);
+}
+
+/// A course kept from before isn't replaced by taking a job.
+#[test]
+fn accepting_keeps_a_course_already_plotted() {
+    let mut world = World::new(1);
+    let i = world
+        .board
+        .iter()
+        .position(|o| world.galaxy.settlements[o.to].system != world.system)
+        .expect("a job in another system");
+    let dest = world.galaxy.settlements[world.board[i].to].system;
+    let other = world
+        .lanes()
+        .into_iter()
+        .map(|l| l.to)
+        .find(|&s| s != dest)
+        .expect("another lane");
+    world.act(Action::PlotCourse(Some(other)));
+    world.act(Action::AcceptContract(i));
+    assert_eq!(world.course, Some(other));
+}
+
 #[test]
 fn the_starting_board_carries_real_shortages() {
     for seed in 1..=3 {

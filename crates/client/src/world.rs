@@ -313,6 +313,9 @@ pub struct Prompts {
     /// The well [J] would climb out of, when there's nowhere in it to
     /// fast travel to.
     pub climb: Option<Place>,
+    /// The next lane of the plotted course, which [J] jumps when there's
+    /// no target to fast travel to and the ship is in open space (#188).
+    pub jump: Option<SystemId>,
 }
 
 /// A market that buys a good, for the mining and skimming panels.
@@ -920,6 +923,9 @@ impl World {
             if p.fast_travel.is_none() {
                 p.climb = well;
             }
+            if p.fast_travel.is_none() && well.is_none() && self.stats().drive_tier > 0 {
+                p.jump = self.next_hop();
+            }
         }
         p
     }
@@ -963,6 +969,13 @@ impl World {
                 };
                 self.target = Some(next.0);
                 self.landing = next.1;
+            }
+            // With nothing to fast travel to in open space, [J] goes on
+            // along the plotted course: it jumps the next lane (#188).
+            Action::FastTravel if self.mode == Mode::Normal && prompts.jump.is_some() => {
+                if let Some(next) = prompts.jump {
+                    self.act(Action::Jump(next));
+                }
             }
             Action::FastTravel => match (self.mode, prompts.fast_travel, prompts.climb) {
                 (Mode::Normal, _, _) if self.hostiles_near() > 0 => {
@@ -1162,6 +1175,19 @@ impl World {
                 match contracts::accept(&mut self.player, capacity, &mut self.galaxy, &offer) {
                     Ok(text) => {
                         self.board.remove(i);
+                        // Taking a job sets the course to it, as BUY & GO
+                        // does for a trade run (#188), unless the player
+                        // already has one plotted.
+                        let system = self.galaxy.settlements[offer.to].system;
+                        if self.course.is_none() && system != self.system {
+                            self.act(Action::PlotCourse(Some(system)));
+                        }
+                        let text = match self.course {
+                            Some(c) if c == system => {
+                                format!("{text} · course set for {}", self.galaxy.systems[c].name)
+                            }
+                            _ => text,
+                        };
                         self.say(text);
                     }
                     Err(text) => self.say(text),

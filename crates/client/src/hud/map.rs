@@ -1435,13 +1435,13 @@ fn sidebar(
                 }
             });
             if next_hop.is_some() && !open_space {
-                ui.label(
-                    RichText::new(match w.mode {
-                        Mode::Normal => "leave the gravity well to jump",
-                        _ => "launch and leave the gravity well to jump",
-                    })
-                    .color(AMBER),
-                );
+                let how = match w.mode {
+                    Mode::Normal => {
+                        "Jumps need open space: close the chart [M], then [J] climbs out of the gravity well."
+                    }
+                    _ => "Jumps need open space: launch, then [J] climbs out of the gravity well.",
+                };
+                crate::hud::guide::rich_hint(ui, how, AMBER);
             }
         },
     );
