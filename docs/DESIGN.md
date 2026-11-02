@@ -692,6 +692,14 @@ somewhere, live somewhere, and fly for real near the player.
   25 t per ship of the cargo, and one time in twenty a ship (much more
   often and replacement ships outrun the freight: the economy test's
   idle share goes past a fifth).
+- **Highports (#112) don't add pirates.** A city and the port above it are
+  one settled place: the gang cap, the starting gangs, the monthly
+  founding rolls and a lair's prey and law all count places, not
+  settlements. A run between a port and the city below never leaves the
+  planet's well and stays under the port, so coarse raids skip it. With
+  both, the share of loaded freight robbed stays as tuned (1.47% against
+  1.40% before highports, over four seeds of a year on the small test
+  galaxy; within seed noise).
 - **Raids, in the bubble.** A gang whose lair is in the bubble flies,
   under the shared autopilot and flight model like every other ship:
   it holds at its field, spots the nearest laden trader within 0.4 AU,

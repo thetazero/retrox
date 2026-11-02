@@ -590,7 +590,7 @@ pub(crate) fn coarse_raid(
     from: SettlementId,
     to: SettlementId,
 ) -> bool {
-    if state.pirates.gangs.is_empty() {
+    if state.pirates.gangs.is_empty() || port_run(state, from, to) {
         return true;
     }
     index(state);
@@ -622,6 +622,23 @@ pub(crate) fn coarse_raid(
         return true;
     }
     rob(state, gang, key, n, to, &mut rng).1
+}
+
+/// Whether a trip runs between a highport and a city on the planet below
+/// it (#112). It never leaves the planet's well and stays under the port,
+/// so gangs out in the fields can't rob it; without this the short, busy
+/// runs up and down robbed half as much freight again.
+fn port_run(state: &GalaxyState, from: SettlementId, to: SettlementId) -> bool {
+    let (Some(a), Some(b)) = (state.settlements.get(from), state.settlements.get(to)) else {
+        return false;
+    };
+    let over = |port: &crate::Settlement, city: &crate::Settlement| match (port.site, city.site) {
+        (crate::Site::Space(orbit), crate::Site::Region(r)) => {
+            orbit.parent == crate::Orbiting::Body(state.regions[r].body)
+        }
+        _ => false,
+    };
+    over(a, b) || over(b, a)
 }
 
 /// `gang` robs fleet `n` of `key`, bound for `to`: takes cargo, and now and
