@@ -13,6 +13,7 @@ fn small_galaxy() -> GalaxyState {
         color: [200, 60, 50],
         founded: GalaxyTime::ZERO,
         treasury: 0.0,
+        population: 0.0,
     });
     state
         .history

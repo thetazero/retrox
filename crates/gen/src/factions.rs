@@ -103,6 +103,7 @@ pub fn found(rng: &mut Rng, state: &mut GalaxyState, territory: &Territory, popu
             color: hsl((i as f64 * 137.508) % 360.0, 0.65, 0.6),
             founded: GalaxyTime::ZERO,
             treasury: 0.0,
+            population: 0.0,
         });
         state.history.record(
             GalaxyTime::ZERO,
@@ -147,6 +148,7 @@ pub fn found(rng: &mut Rng, state: &mut GalaxyState, territory: &Territory, popu
         );
     }
 
+    crate::factions::refresh_populations(state);
     // Capitals always have population, so every faction holds something.
     debug_assert!(
         state
@@ -254,6 +256,7 @@ fn independent(
         color: hsl(r.range(0.0, 360.0), 0.12, 0.42),
         founded: GalaxyTime::ZERO,
         treasury: 0.0,
+        population: 0.0,
     });
     state.history.record(
         GalaxyTime::ZERO,
@@ -358,4 +361,9 @@ fn hsl(h: f64, s: f64, l: f64) -> [u8; 3] {
     };
     let to = |v: f64| ((v + m) * 255.0).round() as u8;
     [to(r), to(g), to(b)]
+}
+
+/// Each faction's population, as the ledger's debt limits need it.
+pub fn refresh_populations(state: &mut GalaxyState) {
+    retrox_sim::demography::refresh_faction_populations(state);
 }

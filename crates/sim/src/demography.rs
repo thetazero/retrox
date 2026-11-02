@@ -49,6 +49,18 @@ pub fn change(population: f64, capacity: f64, hunger: f64) -> f64 {
     population * GROWTH_PER_YEAR / DAYS_PER_YEAR * (1.0 - population / capacity)
 }
 
+/// Recompute every faction's total population.
+pub fn refresh_faction_populations(state: &mut GalaxyState) {
+    for f in state.factions.values_mut() {
+        f.population = 0.0;
+    }
+    for s in state.settlements.values() {
+        if let Some(f) = state.factions.get_mut(s.owner) {
+            f.population += s.economy.population;
+        }
+    }
+}
+
 /// Production phase, after production and consumption: populations change
 /// by what they ate today.
 pub fn grow(state: &mut GalaxyState) {
@@ -82,6 +94,7 @@ pub fn grow(state: &mut GalaxyState) {
         }
         state.settlements[id].economy.famine = famine;
     }
+    refresh_faction_populations(state);
 }
 
 #[cfg(test)]

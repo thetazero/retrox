@@ -48,18 +48,26 @@ pub const PIPELINE: &[Phase] = &[
 
 /// Advance the galaxy by one day.
 pub fn tick(state: &mut GalaxyState) {
+    #[cfg(debug_assertions)]
+    let money = crate::ledger::total_money(state);
     for phase in PIPELINE {
         (phase.run)(state);
     }
+    #[cfg(debug_assertions)]
+    crate::ledger::check(state, money);
     state.time.advance(1);
 }
 
 /// Like [`tick`], reporting how long each phase took.
 pub fn tick_profiled(state: &mut GalaxyState, mut report: impl FnMut(&'static str, Duration)) {
+    #[cfg(debug_assertions)]
+    let money = crate::ledger::total_money(state);
     for phase in PIPELINE {
         let start = Instant::now();
         (phase.run)(state);
         report(phase.name, start.elapsed());
     }
+    #[cfg(debug_assertions)]
+    crate::ledger::check(state, money);
     state.time.advance(1);
 }
