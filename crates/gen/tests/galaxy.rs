@@ -1,6 +1,6 @@
 use std::collections::{HashSet, VecDeque};
 
-use retrox_gen::{GalaxyConfig, generate};
+use retrox_gen::{GalaxyConfig, generate, is_port};
 use retrox_sim::{BodyKind, FactionId, GalaxyState, Orbit, Orbiting, Settlement, Site, SystemId};
 
 fn reachable(state: &GalaxyState) -> usize {
@@ -65,12 +65,13 @@ fn same_seed_same_galaxy() {
     assert_ne!(a, c);
 }
 
-/// Settlements held by `faction`.
+/// Settlements held by `faction`, one per system: highports above their
+/// cities (#112) aren't counted.
 fn holdings(state: &GalaxyState, faction: FactionId) -> Vec<&Settlement> {
     state
         .settlements
         .values()
-        .filter(|s| s.owner == faction)
+        .filter(|s| s.owner == faction && !is_port(state, s))
         .collect()
 }
 
