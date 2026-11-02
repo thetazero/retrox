@@ -269,7 +269,10 @@ fn simulate(seed: u64, years: u64, csv: Option<&str>) -> std::io::Result<()> {
 fn print_economy(state: &retrox_sim::GalaxyState) {
     use retrox_sim::economy::{Good, summarize};
     let e = summarize(state);
-    println!("economy: population {:.0}", e.population);
+    println!(
+        "economy: population {:.0}, money {:.0} credits",
+        e.population, e.money
+    );
     println!(
         "  {:<11} {:>12} {:>10} {:>10} {:>9} {:>8}",
         "good", "stock", "demand/d", "short/d", "price", "#short"

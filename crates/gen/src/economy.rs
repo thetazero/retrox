@@ -14,6 +14,9 @@ use crate::rng::Rng;
 
 /// Galaxy-wide production as a multiple of what consumption needs.
 const SURPLUS: f64 = 1.15;
+/// Settlements start with enough credits to buy this many days of their own
+/// demand at base prices.
+const STARTING_TREASURY_DAYS: f64 = 60.0;
 
 /// Population per system: capitals large, claimed systems log-normal,
 /// a share of unclaimed systems small frontier outposts, the rest empty.
@@ -121,6 +124,11 @@ pub fn seed(rng: &mut Rng, state: &mut GalaxyState) {
             economy.market.stock[good] = economy.market.target(good);
         }
         economy.update_prices(model);
+        economy.treasury = STARTING_TREASURY_DAYS
+            * Good::ALL
+                .iter()
+                .map(|&g| economy.market.demand[g] * g.base_price())
+                .sum::<f64>();
     }
 }
 /// Daily output of each good the galaxy needs, working back up the supply

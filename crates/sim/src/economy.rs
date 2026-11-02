@@ -204,6 +204,9 @@ pub struct LocalEconomy {
     pub population: f64,
     pub facilities: Vec<Facility>,
     pub market: Market,
+    /// The settlement's money, in credits. Trade only moves money between
+    /// treasuries; nothing creates or destroys it yet.
+    pub treasury: f64,
 }
 
 impl LocalEconomy {
@@ -300,6 +303,9 @@ const LOCAL_TRIP_LY: f64 = 0.2;
 /// A settlement never ships out more than this share of a good's stock per
 /// day, split across its links.
 const MAX_EXPORT_SHARE: f64 = 0.5;
+/// A settlement never spends more than this share of its treasury per day,
+/// split across its links and goods.
+const MAX_SPEND_SHARE: f64 = 0.5;
 
 /// Each faction's market center in a system: its most populous settlement
 /// there (the earliest founded wins ties), in order of first settlement.
@@ -387,8 +393,12 @@ fn links(state: &GalaxyState, index: &SecondaryMap<SettlementId, usize>) -> Vec<
 /// - Everywhere else, goods move toward the higher price when the gap beats
 ///   transport cost.
 ///
+/// The buyer pays for every unit, at the seller's price (the official price
+/// inside a plan), and never spends more than it can afford.
+///
 /// Flows are computed in parallel from a snapshot, then applied in link
-/// order, so the result is deterministic and total stock is conserved.
+/// order, so the result is deterministic and total stock and money are
+/// conserved.
 pub fn trade(state: &mut GalaxyState) {
     let models = models(state);
     let mut index = SecondaryMap::with_capacity(state.settlements.len());
@@ -403,13 +413,15 @@ pub fn trade(state: &mut GalaxyState) {
         degree[link.b] += 1;
     }
 
-    let flows: Vec<(usize, usize, Good, f64)> = links
+    // (from, to, good, amount, price paid per unit)
+    let flows: Vec<(usize, usize, Good, f64, f64)> = links
         .par_iter()
         .flat_map_iter(|link| {
             let (ia, ib) = (link.a, link.b);
             let (a, b) = (settlements[ia], settlements[ib]);
             let same_plan = a.owner == b.owner && models[ia] == EconomyModel::Planned;
             let degree = &degree;
+            let settlements = &settlements;
             Good::ALL.into_iter().filter_map(move |good| {
                 let (ma, mb) = (&a.economy.market, &b.economy.market);
                 // Positive signal: flow a → b.
@@ -425,19 +437,31 @@ pub fn trade(state: &mut GalaxyState) {
                 } else {
                     (ib, ia, mb)
                 };
+                // The buyer pays the seller's price; inside a plan, the
+                // official price.
+                let price = if same_plan {
+                    good.base_price()
+                } else {
+                    from_market.price[good]
+                };
+                let buyer = &settlements[to].economy;
+                let budget = buyer.treasury.max(0.0) * MAX_SPEND_SHARE
+                    / (degree[to].max(1) * Good::COUNT) as f64;
                 let available =
                     from_market.stock[good] * MAX_EXPORT_SHARE / degree[from].max(1) as f64;
                 let wanted = signal.abs() * TRADE_RATE * from_market.target(good);
-                let amount = wanted.min(available);
-                (amount > 1e-6).then_some((from, to, good, amount))
+                let amount = wanted.min(available).min(budget / price);
+                (amount > 1e-6).then_some((from, to, good, amount, price))
             })
         })
         .collect();
 
     let mut settlements: Vec<&mut crate::Settlement> = state.settlements.values_mut().collect();
-    for (from, to, good, amount) in flows {
+    for (from, to, good, amount, price) in flows {
         settlements[from].economy.market.stock[good] -= amount;
         settlements[to].economy.market.stock[good] += amount;
+        settlements[from].economy.treasury += amount * price;
+        settlements[to].economy.treasury -= amount * price;
     }
 
     settlements
@@ -450,6 +474,8 @@ pub fn trade(state: &mut GalaxyState) {
 #[derive(Clone, Debug, Default)]
 pub struct EconomySummary {
     pub population: f64,
+    /// Credits held by all settlements.
+    pub money: f64,
     pub stock: GoodMap<f64>,
     pub demand: GoodMap<f64>,
     pub shortfall: GoodMap<f64>,
@@ -465,6 +491,7 @@ pub fn summarize(state: &GalaxyState) -> EconomySummary {
     for settlement in state.settlements.values() {
         let e = &settlement.economy;
         out.population += e.population;
+        out.money += e.treasury;
         for good in Good::ALL {
             let m = &e.market;
             out.stock[good] += m.stock[good];
