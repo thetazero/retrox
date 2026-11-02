@@ -1826,7 +1826,11 @@ retrox/
   real game turn by turn. Steps appended to the file (keys, held keys,
   clicks, the mouse wheel, `shot:` for a screenshot, `info:` for a text
   readout of bearings, rocks and raiders) run as in `--keys`, and the
-  world stands still between them, so a slow player loses nothing. Run it
+  world stands still between them, so a slow player loses nothing.
+  Screenshots are PNGs at most 1600 px wide, about a megabyte at most
+  (decided in #201: playtests keep them in a tmpfs scratchpad, which is
+  RAM, and raw 13 MB PPMs ran the machine out of memory); clicks are in
+  the screenshot's pixels. Run it
   with `RETROX_DATA` pointed somewhere scratch, so its saves stay out of
   the player's own. A playtest files each problem as its own issue, in
   the player's words, labelled **blocks play** (a new player can't get
