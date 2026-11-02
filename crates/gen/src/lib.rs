@@ -96,7 +96,6 @@ pub fn generate(seed: u64, config: &GalaxyConfig) -> GalaxyState {
 pub fn generate_cradle(seed: u64, config: &GalaxyConfig) -> GalaxyState {
     let mut state = generate_physical(seed, config);
     cradle::found(&mut Rng::derive(seed, "cradle"), &mut state, config);
-    highports::found(&mut Rng::derive(seed, "highports"), &mut state);
     economy::seed(&mut Rng::derive(seed, "economy"), &mut state);
     let classes = haulers::classes(&mut state);
     haulers::seed(&mut Rng::derive(seed, "companies"), &mut state, &classes);

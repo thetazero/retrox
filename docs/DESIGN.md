@@ -597,7 +597,8 @@ minutes (pillar 4):
   inside the 4-radii well. A colony that finds its site taken settles a
   station at 3 radii instead of on the well's edge, for the same reason.
   Cities founded later in history get no port by rule; that is left to
-  colonization.
+  colonization. The cradle (§4.2) starts without one: at the dawn of FTL
+  the nations have only their cities.
 
 A planet stop now takes about as long as a station stop: a few seconds
 of autopilot each way plus the landing sequence.
