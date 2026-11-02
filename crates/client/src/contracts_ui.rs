@@ -155,9 +155,8 @@ fn whereabouts(w: &World, to: SettlementId) -> String {
 }
 
 /// The left half of a card: destination, where it is, what's carried, and
-/// why it's wanted. `another`: an offer of more of what's already carried
-/// there.
-fn cargo_lines(ui: &mut egui::Ui, w: &World, o: &Offer, route: &str, another: bool) {
+/// why it's wanted.
+fn cargo_lines(ui: &mut egui::Ui, w: &World, o: &Offer, route: &str) {
     let dest = &w.galaxy.settlements[o.to];
     ui.spacing_mut().item_spacing.y = 1.0;
     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
@@ -171,10 +170,6 @@ fn cargo_lines(ui: &mut egui::Ui, w: &World, o: &Offer, route: &str, another: bo
         if o.urgent {
             ui.add_space(4.0);
             tag(ui, "GOING WITHOUT", ALARM);
-        }
-        if another {
-            ui.add_space(4.0);
-            tag(ui, "ANOTHER LOT", AMBER);
         }
     });
     ui.label(
@@ -218,7 +213,7 @@ fn offer_card(
             ui.vertical(|ui| {
                 ui.set_width(400.0);
                 let route = format!("{} · about {:.0} d", jumps_text(o.jumps), o.trip_days);
-                cargo_lines(ui, w, o, &route, contracts::another_lot(&w.player, o));
+                cargo_lines(ui, w, o, &route);
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let response = crate::widgets::push(
@@ -304,7 +299,7 @@ fn active_card(ui: &mut egui::Ui, w: &World, i: usize, c: &Contract, actions: &m
                     Some(n) => format!("{} from here", jumps_text(n)),
                     None => "no route from here".into(),
                 };
-                cargo_lines(ui, w, o, &route, false);
+                cargo_lines(ui, w, o, &route);
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {

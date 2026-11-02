@@ -144,6 +144,8 @@ pub struct HudInput<'a> {
     pub controls_card: bool,
     /// Show the first-steps notes (a setting).
     pub notes: bool,
+    /// The *Invert pitch* setting, for the controls card's arrow keys.
+    pub invert_pitch: bool,
 }
 
 pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
@@ -564,7 +566,7 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
     }
     guide::key_strip(ctx, w, h.captured);
     if h.controls_card {
-        guide::controls_card(ctx);
+        guide::controls_card(ctx, h.invert_pitch);
     }
 
     actions

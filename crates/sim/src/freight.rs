@@ -109,11 +109,6 @@ pub struct Pending {
     pub to: SettlementId,
     pub good: Good,
     pub amount: f64,
-    /// Taken off this board today. The dispatcher posts no more of that
-    /// good to that consignee until tomorrow's board (issue #126), so a
-    /// lot just taken doesn't seem to stay listed. If the consignee is
-    /// still short then, the next lot goes up as a second one.
-    pub taken_today: bool,
 }
 
 /// The board at `here`: contracts sized to a hold of `lot_t` tonnes,
@@ -157,12 +152,6 @@ pub fn board(
                 let need = target - dest_market.stock[good] - coming;
                 let shortage = (need / target).clamp(0.0, 1.0);
                 if shortage < MIN_SHORTAGE {
-                    continue;
-                }
-                if pending
-                    .iter()
-                    .any(|p| p.taken_today && p.to == to && p.good == good)
-                {
                     continue;
                 }
                 let min_lot = (lot_t * MIN_LOT_SHARE).max(1.0);

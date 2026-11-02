@@ -987,7 +987,6 @@ impl World {
                 };
                 let capacity = self.stats().cargo_t;
                 let before = self.player.credits;
-                let held = self.player.cargo[good];
                 let settlement = &mut self.galaxy.settlements[here];
                 let model = self.galaxy.factions[settlement.owner].economy;
                 let result = crate::trade::trade(
@@ -998,10 +997,7 @@ impl World {
                     good,
                     amount,
                 );
-                let sold = held - self.player.cargo[good];
-                if sold > 0.0 && self.player.progress.sold(good, sold) {
-                    self.player.progress.earned |= self.player.credits > before;
-                }
+                self.player.progress.earned |= self.player.credits > before;
                 match result {
                     Ok(text) | Err(text) => self.say(text),
                 }
@@ -1133,7 +1129,7 @@ impl World {
             return;
         }
         self.board_key = Some(key);
-        let pending = contracts::pending(&self.player, here, self.galaxy.time);
+        let pending = contracts::pending(&self.player);
         self.board = freight::board(&self.galaxy, here, lot, |ly| self.jump_days(ly), &pending);
     }
 

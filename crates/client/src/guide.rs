@@ -8,7 +8,6 @@
 //! you're aimed at) every frame, so it stays right whatever order you do
 //! things in.
 
-use retrox_sim::economy::{Good, GoodMap};
 use serde::{Deserialize, Serialize};
 
 use crate::world::{Leg, Mode, Place, Screen, World};
@@ -26,12 +25,8 @@ pub struct Progress {
     pub jumped: bool,
     /// Docked or landed after a flight.
     pub arrived: bool,
-    /// Paid for work: a contract delivered, a bounty, or goods sold that
-    /// were bought or mined, not ones kept from a failed contract (#127).
+    /// Sold goods or delivered a contract.
     pub earned: bool,
-    /// Tonnes of each good in the hold kept from failed contracts. Selling
-    /// these doesn't count as getting paid; they sell first.
-    pub forfeit_t: GoodMap<f64>,
 }
 
 impl Progress {
@@ -64,27 +59,40 @@ impl Progress {
             Mode::Docked(_) | Mode::Landed { .. } => self.arrived |= self.launched,
         }
         self.took_work |= !w.player.contracts.is_empty() || w.player.cargo_t() > 0.0;
-        // Lost from the hold some other way (raiders), it's gone first.
-        for good in Good::ALL {
-            self.forfeit_t[good] = self.forfeit_t[good].min(w.player.cargo[good]);
-        }
-    }
-
-    /// `sold` tonnes of `good` were sold: whether any were the player's own
-    /// work rather than goods kept from a failed contract.
-    pub fn sold(&mut self, good: Good, sold: f64) -> bool {
-        let forfeit = self.forfeit_t[good].min(sold);
-        self.forfeit_t[good] -= forfeit;
-        sold - forfeit > 1e-9
     }
 }
 
 /// A row of a controls table: the keys, and what they do.
 pub type KeyRow = (&'static [&'static str], &'static str);
 
+/// The flight keys, with the arrow-key pitch as the *Invert pitch*
+/// setting has it (issue #128): by default the keys work like a stick,
+/// ↓ pulling the nose up; inverted, ↑ does.
+pub fn flight_keys(invert_pitch: bool) -> &'static [KeyRow] {
+    if invert_pitch {
+        FLIGHT_KEYS_INVERTED
+    } else {
+        FLIGHT_KEYS
+    }
+}
+
 pub const FLIGHT_KEYS: &[KeyRow] = &[
     (&["MOUSE"], "steer (click the view first)"),
-    (&["↑", "↓", "←", "→"], "steer with the keys"),
+    (&["↑", "↓"], "↓ nose up · ↑ nose down"),
+    (&["←", "→"], "turn left / right"),
+    (&["W", "S"], "throttle up / down"),
+    (&["X"], "cut the throttle"),
+    (&["A", "D"], "strafe"),
+    (&["SPACE", "CTRL"], "rise / sink"),
+    (&["Q", "E"], "roll"),
+    (&["SHIFT"], "boost"),
+    (&["Z"], "flight assist on / off"),
+];
+
+const FLIGHT_KEYS_INVERTED: &[KeyRow] = &[
+    (&["MOUSE"], "steer (click the view first)"),
+    (&["↑", "↓"], "↑ nose up · ↓ nose down"),
+    (&["←", "→"], "turn left / right"),
     (&["W", "S"], "throttle up / down"),
     (&["X"], "cut the throttle"),
     (&["A", "D"], "strafe"),
@@ -358,28 +366,6 @@ mod tests {
     }
 
     #[test]
-    fn selling_goods_from_an_abandoned_contract_is_not_getting_paid() {
-        // Issue #127: abandon the first job and sell the food it left.
-        let mut w = World::new(1);
-        w.act(crate::world::Action::AcceptContract(0));
-        let good = w.player.contracts[0].offer.good;
-        let amount = w.player.contracts[0].offer.amount;
-        w.act(crate::world::Action::AbandonContract(0));
-        assert_eq!(w.player.cargo[good], amount);
-        let before = w.player.credits;
-        w.act(crate::world::Action::Trade(good, -amount));
-        assert!(w.player.credits > before, "sold");
-        assert_eq!(w.player.cargo[good], 0.0);
-        assert!(!w.player.progress.earned);
-        assert_eq!(w.player.progress.forfeit_t[good], 0.0);
-
-        // Ore mined is the player's own work.
-        w.player.cargo[Good::Ore] = 5.0;
-        w.act(crate::world::Action::Trade(Good::Ore, -5.0));
-        assert!(w.player.progress.earned, "mined ore sold");
-    }
-
-    #[test]
     fn delivering_a_contract_lights_get_paid() {
         let mut w = World::new(1);
         w.act(crate::world::Action::AcceptContract(0));
@@ -390,5 +376,19 @@ mod tests {
         assert!(w.player.contracts.is_empty(), "delivered");
         assert!(w.player.credits > before);
         assert!(w.player.progress.earned);
+    }
+
+    /// The inverted flight keys differ from the plain ones only in which
+    /// arrow pulls the nose up (issue #128).
+    #[test]
+    fn inverted_flight_keys_flip_only_the_pitch_row() {
+        let (plain, inverted) = (flight_keys(false), flight_keys(true));
+        assert_eq!(plain.len(), inverted.len());
+        let differ: Vec<_> = (0..plain.len())
+            .filter(|&i| plain[i] != inverted[i])
+            .collect();
+        assert_eq!(differ.len(), 1);
+        assert_eq!(plain[differ[0]].1, "↓ nose up · ↑ nose down");
+        assert_eq!(inverted[differ[0]].1, "↑ nose up · ↓ nose down");
     }
 }

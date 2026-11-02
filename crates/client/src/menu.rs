@@ -226,6 +226,7 @@ impl Menu {
             Page::Handbook => {
                 let max_h = (screen.bottom() - page_pos[1] - 150.0).max(240.0);
                 let chapter = &mut self.chapter;
+                let invert_pitch = input.settings.invert_pitch;
                 panel_filled(
                     ctx,
                     Panel {
@@ -237,7 +238,7 @@ impl Menu {
                         collapsible: None,
                     },
                     crate::hud::PAGE_FILL,
-                    |ui| crate::handbook::draw(ui, chapter, max_h),
+                    |ui| crate::handbook::draw(ui, chapter, max_h, invert_pitch),
                 );
             }
             Page::ConfirmQuit => {
@@ -687,7 +688,7 @@ fn settings_page(
             changed |= switch(ui, &mut settings.invert_pitch);
         });
         ui.label(
-            RichText::new("inverted: push the mouse forward to pull the nose up")
+            RichText::new("inverted: push the mouse forward, or press ↑, to pull the nose up")
                 .size(11.0)
                 .color(CREAM_DIM),
         );
@@ -697,7 +698,7 @@ fn settings_page(
             changed |= switch(ui, &mut settings.first_steps);
         });
         ui.label(
-            RichText::new("a checklist of firsts, then a hint on what to do next")
+            RichText::new("a checklist with hints in flight, until you've made your first credits")
                 .size(11.0)
                 .color(CREAM_DIM),
         );
