@@ -1240,7 +1240,7 @@ and field by hand, up to 30 minutes of an hour.
 |---|---|
 | Mining, courier (12 t, light laser) | 1 720 · 2 640 · 2 220 · 830 |
 | Freight contracts, courier | 5 640 · 5 150 · 4 530 · 5 430 |
-| Trading, courier | 45 750 · 12 420 · 31 550 · 28 350 |
+| Trading, courier | 45 750 · 22 760 · 32 550 · 20 330 |
 | Mining, gunship refit (180 t, 2 lasers) | 2 210 · 8 540 · 1 670 · 460 |
 | Freight contracts, hauler (360 t) | 11 320 · 16 280 · 19 250 · 16 750 |
 | Trading, hauler | 67 910 · 78 070 · 22 080 · 66 840 |
@@ -1307,6 +1307,11 @@ this market. Decided:
   and anywhere else with none, the panel names the **nearest market
   space** by jumps (which economy a faction runs is public, unlike its
   prices) with PLOT COURSE, and says contracts and mining pay anywhere.
+- The career bench's courier trader moved from 45 750 · 12 420 ·
+  35 660 · 28 350 cr/h (seeds 1–4) to 45 750 · 22 760 · 32 550 ·
+  20 330: the premium pays on seed 2's planned start, and buying only
+  surplus costs seeds 3 and 4. About the same on average, so trading's
+  lead over the other careers (#149) is no wider.
 - Prices further out than a jump stay unknown: a remembered price
   list for ports the player has visited is the natural next step for
   "a trader still learns the rest by going" (§7.3), not built yet.
