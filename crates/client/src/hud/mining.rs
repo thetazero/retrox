@@ -1,15 +1,15 @@
 //! The mining HUD: where the laser bites, what the rocks are, how hot the
 //! laser is and what the hold is worth.
 
-use egui::{Align2, Color32, Pos2, Rect, RichText, Stroke, Vec2};
+use egui::{Align, Align2, Color32, Layout, Pos2, Rect, RichText, Stroke, Vec2};
 use retrox_sim::economy::Good;
 
 use super::{
-    ALARM, AMBER, CREAM, CREAM_DIM, HudInput, Panel, VFD, brackets, credits, distance, keycap,
-    lamp, mono, panel, project, segment_bar, tag,
+    ALARM, AMBER, CREAM, CREAM_DIM, HudInput, Panel, VFD, brackets, credits, distance, jumps_text,
+    keycap, lamp, mono, panel, project, segment_bar, tag,
 };
 use crate::mining::{self, LiveRock};
-use crate::world::{Mode, Place};
+use crate::world::{Mode, Place, World};
 
 /// Rock labels are drawn this close, nearest first, up to [`MAX_LABELS`].
 const LABEL_RANGE: f64 = 1500.0;
@@ -38,6 +38,34 @@ fn describe(rock: &LiveRock) -> String {
         rock.lode.grade_letter(),
         rock.radius
     )
+}
+
+/// Where `tonnes` of `good` sell best nearby (issue #122): up to three
+/// markets in this system or a jump out, each with what the lot fetches
+/// there, best first.
+pub(super) fn buyers(ui: &mut egui::Ui, w: &World, good: Good, tonnes: f64) {
+    for b in w.buyers(good, tonnes, 3) {
+        ui.horizontal(|ui| {
+            let name = &w.galaxy.settlements[b.at].name;
+            let name = match name.char_indices().nth(18) {
+                Some((i, _)) => format!("{}…", &name[..i]),
+                None => name.clone(),
+            };
+            ui.label(RichText::new(name).size(12.0).color(CREAM));
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.label(
+                    RichText::new(credits(b.per_t * tonnes))
+                        .font(mono(13.0))
+                        .color(VFD),
+                );
+                ui.label(
+                    RichText::new(format!("{} · {:.1}/t", jumps_text(b.jumps), b.per_t))
+                        .size(11.0)
+                        .color(CREAM_DIM),
+                );
+            });
+        });
+    }
 }
 
 /// Draws over the view while flying: markers in the world and the mining
@@ -282,7 +310,7 @@ pub fn draw(ctx: &egui::Context, h: &HudInput) {
             segment_bar(ui, (cargo / stats.cargo_t.max(1e-9)) as f32, 276.0, AMBER);
             ui.add_space(4.0);
 
-            // What this run's haul fetches here.
+            // This run's haul, and where the hold's load of it sells.
             for good in [Good::Ore, Good::Ice] {
                 let t = w.mining.haul[good];
                 if t < 0.05 {
@@ -292,16 +320,8 @@ pub fn draw(ctx: &egui::Context, h: &HudInput) {
                     tag(ui, good.name(), good_color(good));
                     ui.label(RichText::new(format!("{t:.1} t mined")).color(CREAM));
                 });
-                if let Some((price, at)) = w.best_local_price(good) {
-                    ui.label(
-                        RichText::new(format!(
-                            "≈ {} at {} ({price:.1}/t)",
-                            credits(t * price),
-                            w.name(Place::Station(at))
-                        ))
-                        .color(CREAM_DIM),
-                    );
-                }
+                buyers(ui, w, good, w.player.cargo[good].max(t));
+                ui.add_space(2.0);
             }
             ui.add_space(4.0);
             ui.horizontal(|ui| {

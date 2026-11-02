@@ -217,7 +217,9 @@ fn living(ui: &mut egui::Ui) {
         "Contracts",
         "Settlements short of something post jobs on their dispatch board to fetch it. You leave \
          the cargo's value as a deposit and get it back with the fee on delivery. Late \
-         deliveries lose 10% of the fee a day; ten days late, the deposit is lost.",
+         deliveries lose 10% of the fee a day; ten days late, the deposit is lost. The fee \
+         pays your keep for the trip, so a long run pays more but takes longer: the nearest \
+         jobs come first on the board.",
     );
     topic(
         ui,
@@ -228,9 +230,11 @@ fn living(ui: &mut egui::Ui) {
     topic(
         ui,
         "Mining",
-        "In an asteroid field, [G] reads the rocks: what they hold, how rich, and the glowing \
-         veins. Hold the laser ([LMB] or [R]) on a vein: it cuts faster and yields more. Watch \
-         the heat; fly close to scoop the ore, and sell it at a station.",
+        "Fast travel to an asteroid field stops among its rocks, in laser reach of one. [G] \
+         reads them: what they hold, how rich, and the glowing veins. Hold the laser ([LMB] \
+         or [R]) on a vein: it cuts faster and yields more. Watch the heat; fly close to scoop \
+         the ore. The mining panel lists the markets here and a jump away that pay most for \
+         your load: a market full of ore pays little.",
     );
     topic(
         ui,

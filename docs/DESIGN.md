@@ -825,6 +825,23 @@ somewhere, live somewhere, and fly for real near the player.
 - **Collect:** a tractor pulls loose chunks into the hold (as the market
   goods ore and ice) when you fly close; when the hold is full, they stay
   floating. Sell at any market.
+- **Getting there** (#122): fast travel to a field flies in among its
+  rocks and stops 400 m off one, nose-on to it and inside the light
+  laser's 500 m reach: arrive, [G], fire. The rock is the whole one
+  nearest the point halfway in on the side you came from, 20–60 m across
+  (big enough to fill a courier's hold, small enough to fracture) and
+  not volatile. Rocks thin out toward a field's edge, so stopping at the
+  outermost rock left long hops to the next (the career bench lost a
+  third of its pay there). Fast travel used to stop 10 km outside the
+  field's radius, so a run began with ~25 km of hand flying.
+- **Where it sells** (#122): the mining panel lists, under what this run
+  has mined, the three markets in this system or one jump out that pay
+  most per tonne for the hold's load of it, with what the load fetches
+  (the price for the whole lot: selling moves a market). A market in
+  surplus pays little, so the choice of where to sell is the miner's
+  main lever. The skimming panel shows the same for gas. One jump is as
+  far as a pilot hears prices from; a trader still learns the rest by
+  going (§7.8).
 - Fields remember: broken and worked rocks stay that way for ~120 galaxy
   days, then the field is whole again.
 
@@ -896,6 +913,13 @@ from a random generator (pillar 5).
   fuller markets to emptier ones. Lots are sized to the player's hold.
   A board holds 8 contracts at most, 2 per destination, best pay per day
   first. Boards change daily as markets do; some days a port has nothing.
+- **Short runs first** (#129). Pay per day is the hauler's keep, so a
+  full lot pays the same per day however far it goes: the long runs
+  only pay more in total. Among equal rates (to the cent) the run with
+  fewer jumps comes first, and if the 8 places fill without a run of 1–2
+  jumps when one is on offer, the last place goes to the best one. So a
+  new pilot's first board usually starts with a short job, and the
+  first payment comes after one jump, not five.
 - **Who pays, and what.** The consignee buys the goods at the origin's
   price and pays the fee from its own treasury: freight for the expected
   trip (a rate per tonne-day plus the crew's wage, both the galaxy's own
@@ -1133,7 +1157,10 @@ player.
   card draw from the same key tables, so they can't disagree.
 - The suggested first run is a freight contract: it pays for sure and
   walks the player through launching, the galaxy map, a jump, fast travel
-  and docking. Mining and trade are offered as the other ways in.
+  and docking. Mining and trade are offered as the other ways in. On the
+  dispatch board the hint names the nearest job the player can take
+  (#129), the quickest to pay. Delivery says what came back in full: the
+  fee and the deposit, so the jump in the purse adds up.
 - **Edge arrows** (#117): a target off screen gets an arrow at the edge
   of the view (amber for the target, red for hostiles) pointing the short
   way round to turn toward it, whether it is beside, behind or below the

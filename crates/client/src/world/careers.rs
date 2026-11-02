@@ -101,6 +101,20 @@ impl Bot {
         self.real_s += TURN_S;
         let mut n = 0;
         while let Some(well) = self.w.current_well() {
+            // [J] climbs out, as a player does (DESIGN §7.1.1).
+            if self.w.hostiles_near() == 0 {
+                let target = self.w.target.take();
+                self.w.act(Action::FastTravel);
+                while matches!(self.w.mode, Mode::FastTravel(_)) {
+                    self.frame(Controls::default());
+                    n += 1;
+                    assert!(n < 30 * 600, "stuck climbing a well");
+                }
+                self.w.target = target;
+                if self.w.current_well() != Some(well) {
+                    continue;
+                }
+            }
             let away = self.w.ship_position() - self.w.position(well);
             self.w.ship.rot = look_rotation(away);
             self.w.ship.throttle = 1.0;
@@ -170,6 +184,11 @@ impl Bot {
     }
 
     fn approach_inner(&mut self, place: Place, within: f64) {
+        // Fast travel stops in reach of a dock or a landing (#118, #95):
+        // nothing to fly.
+        if self.w.distance_to(place) < within {
+            return;
+        }
         self.real_s += TURN_S;
         let mut n = 0;
         loop {
@@ -234,8 +253,9 @@ impl Bot {
         }
         match place {
             Place::Station(s) => {
+                // Fast travel stops inside the dock prompt's reach.
                 let reach = self.w.station_size_m(s) * 1.5 + 400.0;
-                self.approach(place, reach * 0.7);
+                self.approach(place, reach);
                 self.w.act(Action::Dock);
                 // Contracts settle on the first frame docked.
                 self.frame(Controls::default());
@@ -490,11 +510,9 @@ fn mining_hour(seed: u64) {
         }
         let field = quiet_field(&b.w).unwrap_or(b.w.view.fields[0]);
         b.leave();
+        // Fast travel stops in laser reach of a rock (#122); the hops
+        // from there are charged in `mine_hold`.
         b.cruise(Place::Field(field));
-        b.approach(
-            Place::Field(field),
-            b.w.place_radius(Place::Field(field)) * 0.5,
-        );
         let t0 = b.real_s;
         mined += mine_hold(&mut b, begin + HOUR);
         in_field += b.real_s - t0;
