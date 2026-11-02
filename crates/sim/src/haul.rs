@@ -129,8 +129,8 @@ const FOUNDING_CREDITS_PER_T: f64 = 20.0;
 /// A settlement founds companies only from treasury above this many times
 /// the cost of founding one.
 const FOUNDING_WEALTH: f64 = 3.0;
-/// Chance a ship is lost on any one trip.
-const LOSS_PER_SHIP_TRIP: f64 = 0.001;
+/// Chance a ship is lost on any one hyperlane jump.
+const LOSS_PER_SHIP_JUMP: f64 = 0.001;
 
 const METRES_PER_AU: f64 = 1.496e11;
 /// Jump points sit this far from a star, toward the system on the far end.
@@ -440,16 +440,35 @@ pub fn movement(state: &mut GalaxyState) {
         })
         .map(|(key, n, at, class)| (key, n, at, state.ship_classes[class].accel_laden))
         .collect();
-    let moved: Vec<(CompanyId, usize, Location)> = jobs
+    let moved: Vec<(CompanyId, usize, Location, Location)> = jobs
         .into_par_iter()
-        .map(|(key, n, at, accel)| (key, n, advance(state, at, accel)))
+        .map(|(key, n, at, accel)| (key, n, at, advance(state, at, accel)))
         .collect();
 
-    for (key, n, at) in moved {
+    for (key, n, before, at) in moved {
         let company_bits = slotmap::Key::data(&key).as_ffi();
         let fleet = &mut state.companies[key].fleets[n];
         fleet.at = at;
-        if !matches!(at, Location::Docked(_)) {
+        if matches!(at, Location::Docked(_)) {
+            // Unloading and loading before it can set off again.
+            fleet.idle_until = GalaxyTime::from_days(now.days() + HANDLING_DAYS as u64);
+        }
+        // Accidents happen in the lanes: roll for losses when a fleet
+        // comes out of a jump.
+        let left_lanes = matches!(
+            before,
+            Location::Travelling {
+                stage: Stage::Jumping { .. },
+                ..
+            }
+        ) && !matches!(
+            at,
+            Location::Travelling {
+                stage: Stage::Jumping { .. },
+                ..
+            }
+        );
+        if !left_lanes {
             continue;
         }
         let mut rng = Rng::stream(
@@ -459,7 +478,7 @@ pub fn movement(state: &mut GalaxyState) {
             company_bits ^ ((n as u64) << 48),
         );
         let survivors = (0..fleet.ships)
-            .filter(|_| !rng.chance(LOSS_PER_SHIP_TRIP))
+            .filter(|_| !rng.chance(LOSS_PER_SHIP_JUMP))
             .count() as u32;
         if survivors < fleet.ships {
             // Lost ships take their share of the cargo with them.
@@ -468,8 +487,6 @@ pub fn movement(state: &mut GalaxyState) {
             }
             fleet.ships = survivors;
         }
-        // Unloading and loading before it can set off again.
-        fleet.idle_until = GalaxyTime::from_days(now.days() + HANDLING_DAYS as u64);
     }
     for company in state.companies.values_mut() {
         company.fleets.retain(|f| f.ships > 0);

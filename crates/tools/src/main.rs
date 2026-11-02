@@ -17,6 +17,8 @@ usage:
                                            --csv writes monthly economy totals
   retrox map [--seed N] > galaxy.svg       render the generated galaxy as SVG
   retrox stats [--seed N]                  print generation statistics
+  retrox prehistory [--seed N] [--years N] grow the galaxy from the cradle,
+                                           printing it every 10 years
   retrox ship [HULL]                       list stock ships, or show one in detail";
 
 fn main() -> ExitCode {
@@ -47,6 +49,7 @@ fn main() -> ExitCode {
             print!("{}", map::svg(&state));
         }
         "stats" => stats(seed),
+        "prehistory" => prehistory(seed, years),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::FAILURE;
@@ -297,4 +300,46 @@ fn print_economy(state: &retrox_sim::GalaxyState) {
             e.markets_short[good]
         );
     }
+}
+
+fn prehistory(seed: u64, years: u64) {
+    use std::collections::HashSet;
+
+    let start = Instant::now();
+    let mut state = retrox_gen::generate_cradle(seed, &GalaxyConfig::default());
+    let Some(first) = state.settlements.values().next() else {
+        println!("seed {seed}: no world can hold a cradle");
+        return;
+    };
+    println!(
+        "seed {seed}: cradle in {}, {} nations",
+        state.systems[first.system].name,
+        state.factions.len()
+    );
+    println!(
+        "  {:>5} {:>9} {:>11} {:>8} {:>8} {:>10} {:>9}",
+        "year", "factions", "settlements", "systems", "colonies", "population", "ships"
+    );
+    let end = GalaxyTime::from_years(years);
+    loop {
+        if state.time.day_of_year() == 0 && state.time.year().is_multiple_of(10) {
+            let systems: HashSet<_> = state.settlements.values().map(|s| s.system).collect();
+            let e = retrox_sim::economy::summarize(&state);
+            println!(
+                "  {:>5} {:>9} {:>11} {:>8} {:>8} {:>10.0} {:>9}",
+                state.time.year(),
+                state.factions.len(),
+                state.settlements.len(),
+                systems.len(),
+                state.colony_ships.len(),
+                e.population,
+                e.ships
+            );
+        }
+        if state.time >= end {
+            break;
+        }
+        retrox_sim::tick(&mut state);
+    }
+    println!("ran in {:.1?}", start.elapsed());
 }

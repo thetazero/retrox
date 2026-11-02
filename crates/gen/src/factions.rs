@@ -318,7 +318,12 @@ fn nearest_capital(state: &GalaxyState, capitals: &[SystemId], system: SystemId)
 }
 
 /// Faction names from the capital's name and the faction's character.
-fn faction_name(rng: &mut Rng, capital: &str, economy: EconomyModel, fresh: bool) -> String {
+pub(crate) fn faction_name(
+    rng: &mut Rng,
+    capital: &str,
+    economy: EconomyModel,
+    fresh: bool,
+) -> String {
     // The capital's base name, without suffixes like " Prime".
     let base = capital.split(' ').next().unwrap_or(capital);
     let base = if fresh || rng.chance(0.25) {
@@ -347,7 +352,7 @@ fn faction_name(rng: &mut Rng, capital: &str, economy: EconomyModel, fresh: bool
     rng.pick(templates).replace("{}", &base)
 }
 
-fn hsl(h: f64, s: f64, l: f64) -> [u8; 3] {
+pub(crate) fn hsl(h: f64, s: f64, l: f64) -> [u8; 3] {
     let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
     let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
     let m = l - c / 2.0;

@@ -1,7 +1,7 @@
 //! Colony ships (DESIGN §5.7, issue #27): crowded settlements send people
 //! out along the lanes to found new settlements.
 //!
-//! Once a month a settlement near its carrying capacity, with the goods
+//! Once a month a settlement past half its carrying capacity, with the goods
 //! to build and stock a ship, may launch one. The ship carries a few
 //! thousand people, food and money to a free site within reach: an
 //! unsettled region of a habitable world, a habitable undivided body, or
@@ -41,9 +41,11 @@ pub struct ColonyShip {
     pub stage: Stage,
 }
 
-/// Settlements above this share of capacity are crowded.
+/// Emigration starts at this share of capacity and peaks at `CROWDED`.
+const UNEASY: f64 = 0.5;
 const CROWDED: f64 = 0.85;
-/// Monthly chance a crowded settlement launches a ship.
+/// Monthly chance a fully crowded settlement launches a ship; it ramps up
+/// from zero at `UNEASY`.
 const LAUNCH_CHANCE: f64 = 0.3;
 /// A settlement needs at least this many people to send some away.
 const MIN_POPULATION: f64 = 10.0;
@@ -144,10 +146,12 @@ pub fn launch(state: &mut GalaxyState) {
         let settlement = &state.settlements[id];
         let economy = &settlement.economy;
         let capacity = crate::demography::capacity(state, id);
-        if economy.population < MIN_POPULATION || economy.population < CROWDED * capacity {
+        let crowding = ((economy.population / capacity.max(1e-6) - UNEASY) / (CROWDED - UNEASY))
+            .clamp(0.0, 1.0);
+        if economy.population < MIN_POPULATION || crowding <= 0.0 {
             continue;
         }
-        if !Rng::stream(state.seed, "colony-launch", day, key).chance(LAUNCH_CHANCE) {
+        if !Rng::stream(state.seed, "colony-launch", day, key).chance(LAUNCH_CHANCE * crowding) {
             continue;
         }
         let market = &economy.market;
