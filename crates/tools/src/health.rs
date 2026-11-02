@@ -64,7 +64,7 @@ pub(crate) fn print(state: &GalaxyState) {
     let (mut ships, mut idle, mut laden, mut empty, mut docked_cargo) = (0u32, 0u32, 0u32, 0, 0);
     let (mut carried, mut capacity) = (0.0, 0.0);
     for company in state.companies.values() {
-        for fleet in &company.fleets {
+        for fleet in company.fleets.iter().filter(|f| f.harvest.is_none()) {
             let hold = state.ship_classes[fleet.class].cargo_t * f64::from(fleet.ships);
             ships += fleet.ships;
             match (fleet.at, fleet.cargo) {
@@ -83,10 +83,36 @@ pub(crate) fn print(state: &GalaxyState) {
         }
     }
     println!(
-        "  ships: {ships} in {} companies; {:.0}% idle, {laden} laden ({:.0}% full), {empty} empty legs; {docked_cargo} idle fleets holding cargo",
-        state.companies.len(),
+        "  traders: {ships} ships; {:.0}% idle, {laden} laden ({:.0}% full), {empty} empty legs; {docked_cargo} idle fleets holding cargo",
         100.0 * f64::from(idle) / f64::from(ships.max(1)),
         100.0 * carried / capacity.max(1.0),
+    );
+
+    // Harvesters (issue #68): ships on each good, how many idle, and the
+    // strain on the sources they work.
+    let mut by_good = std::collections::BTreeMap::<&str, (u32, u32)>::new();
+    let mut unplanned = 0u32;
+    for fleet in state.companies.values().flat_map(|c| c.fleets.iter()) {
+        let Some(h) = fleet.harvest else { continue };
+        match h.plan {
+            Some(plan) => {
+                let e = by_good.entry(plan.good.name()).or_default();
+                e.0 += fleet.ships;
+                if fleet.idle {
+                    e.1 += fleet.ships;
+                }
+            }
+            None => unplanned += fleet.ships,
+        }
+    }
+    let goods: Vec<String> = by_good
+        .iter()
+        .map(|(g, (n, idle))| format!("{g} {n} ({idle} idle)"))
+        .collect();
+    println!(
+        "  harvesters: {}; {unplanned} with no run; mean strain {:.2} of capacity",
+        goods.join(", "),
+        retrox_sim::harvest::mean_strain(state),
     );
 
     // Shipyards and hull, construction.

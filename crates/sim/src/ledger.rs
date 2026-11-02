@@ -169,6 +169,11 @@ pub fn consume(state: &mut GalaxyState, market: SettlementId, good: Good, wanted
     amount
 }
 
+/// Goods handed to a market for nothing: cargo nobody would buy.
+pub fn donate(state: &mut GalaxyState, market: SettlementId, good: Good, amount: f64) {
+    state.settlements[market].economy.market.stock[good] += amount.max(0.0);
+}
+
 /// All money anywhere: settlements, companies, factions and colony ships.
 pub fn total_money(state: &GalaxyState) -> f64 {
     let settlements: f64 = state.settlements.values().map(|s| s.economy.treasury).sum();

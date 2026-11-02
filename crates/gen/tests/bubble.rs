@@ -242,7 +242,11 @@ fn coarse_trip_times_match_real_flights() {
         let today = state.time.days();
         tick(&mut state);
         for (&key, flight) in &state.bubble.flights {
-            if flight.depart.days() == today && !watching.contains_key(&key) {
+            // Harvest runs stop at their source on the way: not trips.
+            if flight.depart.days() == today
+                && flight.work.is_none()
+                && !watching.contains_key(&key)
+            {
                 let class = state.companies[key.0]
                     .fleets
                     .iter()

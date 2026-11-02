@@ -15,6 +15,7 @@ pub mod fields;
 pub mod fiscal;
 pub mod flight;
 pub mod freight;
+pub mod harvest;
 pub mod haul;
 pub mod history;
 pub mod ledger;
