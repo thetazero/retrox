@@ -451,7 +451,7 @@ pub fn summarize(state: &GalaxyState) -> EconomySummary {
         out.money += company.credits;
         for fleet in &company.fleets {
             out.ships += fleet.ships;
-            if matches!(fleet.at, crate::haul::Location::Travelling { .. }) {
+            if !matches!(fleet.at, crate::haul::Location::Docked(_)) {
                 out.ships_travelling += fleet.ships;
             }
             if let Some(cargo) = fleet.cargo {

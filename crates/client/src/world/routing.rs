@@ -1,7 +1,7 @@
 //! Between systems: hyperlanes, routes along them, and the jump itself.
 
 use glam::DVec3;
-use retrox_sim::{GalaxyState, SystemId, routes};
+use retrox_sim::{GalaxyState, SystemId, bubble, routes};
 
 use super::{AU, Mode, Place, REFERENCE, SECONDS_PER_DAY, SystemView, World, look_rotation};
 
@@ -123,7 +123,10 @@ impl World {
         let days = self.lane_days(to);
         // Whatever of the jump's days the sequence hasn't passed yet.
         let start = self.jump_start_s.take().unwrap_or(self.clock_s);
+        // Days in the lanes: no bubble until we come out the other side.
+        bubble::set_centre(&mut self.galaxy, None);
         self.advance_clock((start + days * SECONDS_PER_DAY - self.clock_s).max(0.0));
+        bubble::set_centre(&mut self.galaxy, Some(to));
 
         self.system = to;
         self.view = SystemView::new(&self.galaxy, to);
