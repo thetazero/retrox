@@ -66,7 +66,7 @@ pub fn thrift(state: &GalaxyState, id: FactionId) -> f64 {
     if f.treasury >= 0.0 {
         return 1.0;
     }
-    let comfort = f.population * ledger::DEBT_PER_POPULATION * DEBT_COMFORT;
+    let comfort = ledger::debt_limit(f.population) * DEBT_COMFORT;
     if comfort <= 0.0 {
         return 0.0;
     }

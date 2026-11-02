@@ -21,7 +21,7 @@ use crate::{EconomyModel, GalaxyState, Resources, SettlementId};
 pub const BUILD_DAYS: f64 = 30.0;
 /// A project still short of materials after this many days is cut
 /// short at whatever share of it has been built.
-const PATIENCE_DAYS: u64 = 180;
+pub const PATIENCE_DAYS: u64 = 180;
 /// Materials per unit of scale added.
 const METAL_PER_SCALE: f64 = 20.0;
 const COMPONENTS_PER_SCALE: f64 = 3.0;
@@ -244,6 +244,9 @@ fn progress(state: &mut GalaxyState, id: SettlementId) {
     let done = Good::ALL.iter().all(|&g| needs[g] <= 1e-9);
     if let Some(p) = state.settlements[id].economy.project.as_mut() {
         p.needs = needs;
+        if p.started == Project::UNKNOWN_START {
+            p.started = state.time;
+        }
     }
     if planned && used > 0.0 {
         let wages = used * WAGE_PER_UNIT * crate::fiscal::thrift(state, owner);
@@ -254,7 +257,12 @@ fn progress(state: &mut GalaxyState, id: SettlementId) {
             wages,
         );
     }
-    let late = state.time.days().saturating_sub(project.started.days()) > PATIENCE_DAYS;
+    let started = if project.started == Project::UNKNOWN_START {
+        state.time
+    } else {
+        project.started
+    };
+    let late = state.time.days().saturating_sub(started.days()) > PATIENCE_DAYS;
     let economy = &mut state.settlements[id].economy;
     if done || late {
         // A project that can't get the rest of its materials is cut short:

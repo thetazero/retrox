@@ -23,6 +23,11 @@ use crate::{FactionId, GalaxyState, SettlementId};
 /// How deep in debt a faction may go, per unit of its population.
 pub const DEBT_PER_POPULATION: f64 = 5_000.0;
 
+/// The most a faction of `population` may owe.
+pub fn debt_limit(population: f64) -> f64 {
+    population * DEBT_PER_POPULATION
+}
+
 /// Something that holds credits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Account {
@@ -68,9 +73,7 @@ fn balance_mut(state: &mut GalaxyState, account: Account) -> Option<&mut f64> {
 pub fn floor(state: &GalaxyState, account: Account) -> f64 {
     match account {
         Account::Settlement(_) | Account::Company(_) | Account::Colony(_) => 0.0,
-        Account::Faction(id) => {
-            -state.factions.get(id).map_or(0.0, |f| f.population) * DEBT_PER_POPULATION
-        }
+        Account::Faction(id) => -debt_limit(state.factions.get(id).map_or(0.0, |f| f.population)),
     }
 }
 

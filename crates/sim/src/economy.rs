@@ -223,9 +223,19 @@ pub struct Project {
     pub scale: f64,
     pub needs: GoodMap<f64>,
     /// When it was started. A project that can't get its materials is
-    /// eventually cut short; see [`crate::construction`].
-    #[serde(default)]
+    /// eventually cut short; see [`crate::construction`]. A save from
+    /// before this was recorded loads it as [`Project::UNKNOWN_START`], and
+    /// the project's clock starts on the next day it is worked.
+    #[serde(default = "Project::unknown_start")]
     pub started: crate::GalaxyTime,
+}
+
+impl Project {
+    pub const UNKNOWN_START: crate::GalaxyTime = crate::GalaxyTime::from_days(u64::MAX);
+
+    fn unknown_start() -> crate::GalaxyTime {
+        Self::UNKNOWN_START
+    }
 }
 
 /// Daily consumption of `good` per unit of population.
@@ -521,6 +531,20 @@ pub fn summarize(state: &GalaxyState) -> EconomySummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_project_saved_without_its_start_loads_as_unknown() {
+        let project = Project {
+            kind: FacilityKind::Refinery,
+            scale: 1.0,
+            needs: GoodMap::splat(0.0),
+            started: crate::GalaxyTime::from_days(400),
+        };
+        let mut json = serde_json::to_value(&project).expect("serializes");
+        json.as_object_mut().expect("an object").remove("started");
+        let old: Project = serde_json::from_value(json).expect("loads");
+        assert_eq!(old.started, Project::UNKNOWN_START);
+    }
 
     fn economy(facilities: Vec<Facility>) -> LocalEconomy {
         let mut e = LocalEconomy {
