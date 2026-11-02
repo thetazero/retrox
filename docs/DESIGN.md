@@ -594,8 +594,8 @@ minutes (pillar 4):
   of that city's people, so a system's population is unchanged. It has
   its own market but does no mining (the planet below does that); it can
   run a gas plant if the system has gas. It orbits at 2.6–3.2 radii:
-  above the 2-radii landing range, with its 20 km arrival point well
-  inside the 4-radii well. A colony that finds its site taken settles a
+  above the 2-radii landing range, with its arrival point (in docking
+  range, §7.1.2) well inside the 4-radii well. A colony that finds its site taken settles a
   station at 3 radii instead of on the well's edge, for the same reason.
   Cities founded later in history get no port by rule; that is left to
   colonization. The cradle (§4.2) starts without one: at the dawn of FTL
@@ -603,6 +603,24 @@ minutes (pillar 4):
 
 A planet stop now takes about as long as a station stop: a few seconds
 of autopilot each way plus the landing sequence.
+
+#### 7.1.2 Arriving nose-on (#118)
+
+Fast travel used to hand the ship back tail-first: it faces its thrust,
+and the last thing the drive does is brake, so the place you travelled
+to was always directly behind you.
+
+- **The ship turns over at the end of every trip** to face where it was
+  going: the autopilot still brakes the same way (orientation doesn't
+  change the flight), but once the stop is under 1.5 real seconds away
+  the ship swings round, and it finishes the turn as it hands back. The
+  place is the first thing you see. A climb out of a well ends facing the
+  way it's headed next; an intercept ends facing the convoy.
+- **Fast travel to a station stops in docking range**: 1.2 station sizes
+  + 200 m from it, inside the [F] dock prompt's reach (1.5 sizes + 400 m)
+  and at rest. Arrive, [F] to dock, like [L] at a city planet. It used to
+  stop 20 km out, which meant minutes of hand flying twice per trip. The
+  station is still the far end of a real flight, so piracy is unchanged.
 
 ### 7.2 Combat
 
