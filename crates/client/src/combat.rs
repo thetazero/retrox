@@ -41,9 +41,9 @@ mod vessel;
 
 pub use effects::{Blast, Debris, Flash, FlashKind, PULSE_LIFE, Pulse, Wreck};
 pub(crate) use geom::random_dir;
-pub use geom::{lead_point, segment_ellipsoid, stick_toward};
+pub use geom::{lead_point, segment_ellipsoid};
 pub use raider::{Crew, Raider, TRADER_IDS, Tactic};
-pub use vessel::{Damage, Gun, Hit, Part, Vessel};
+pub use vessel::{Damage, Gun, Hit, Vessel};
 
 use glam::{DQuat, DVec3};
 use retrox_gen::Rng;

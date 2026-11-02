@@ -1047,10 +1047,8 @@ fn with_hostiles_near_the_trigger_fires_the_guns_and_not_the_mining_laser() {
 
 #[test]
 fn no_jump_with_hostiles_near() {
+    // Hostiles are checked before anything else, gravity wells included.
     let mut world = among_raiders();
-    open_space(&mut world);
-    world.update(0.02, Controls::default());
-    assert!(world.hostiles_near() > 0);
     let system = world.system;
     let lane = world.lanes()[0].clone();
     world.act(Action::Jump(lane.to));
@@ -1059,8 +1057,9 @@ fn no_jump_with_hostiles_near() {
     assert_eq!(world.system, system, "the jump never started");
     assert!(world.jump_start_s.is_none());
 
-    // With them gone, the same jump goes.
+    // With them gone, out in open space, the same jump goes.
     world.combat.leave();
+    open_space(&mut world);
     world.act(Action::Jump(lane.to));
     assert!(world.jump_start_s.is_some(), "{}", said(&world));
 }

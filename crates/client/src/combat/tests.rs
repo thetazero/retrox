@@ -1,3 +1,4 @@
+use super::geom::stick_toward;
 use super::*;
 use crate::world::{assist, handling, steer};
 use retrox_content::ships::stock;
@@ -226,7 +227,8 @@ fn duel(raider: &str, fight_back: bool, seconds: f64) -> (f64, bool, bool) {
         rot: DQuat::IDENTITY,
         spin: DVec3::ZERO,
     };
-    c.raiders.push(raider_at(raider, DVec3::new(300.0, 100.0, -5000.0)));
+    c.raiders
+        .push(raider_at(raider, DVec3::new(300.0, 100.0, -5000.0)));
     c.target = Some(0);
     let dt = 1.0 / 60.0;
     let mut t = 0.0;
