@@ -31,7 +31,7 @@ impl Default for Settings {
             fullscreen: false,
             ui_scale: 1.0,
             master_volume: 0.8,
-            music_volume: 0.6,
+            music_volume: 0.7,
             effects_volume: 0.8,
         }
     }
@@ -60,7 +60,11 @@ impl Settings {
             &mut self.music_volume,
             &mut self.effects_volume,
         ] {
-            *v = if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.8 };
+            *v = if v.is_finite() {
+                v.clamp(0.0, 1.0)
+            } else {
+                0.8
+            };
         }
         self
     }

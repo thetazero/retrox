@@ -295,7 +295,10 @@ impl Score {
             hat: (1.0, Svf::default()),
             lfo: Osc::default(),
             wow: [Osc::default(), Osc::at(0.4)],
-            echo: [Delay::new((rate * 1.2) as usize), Delay::new((rate * 1.2) as usize)],
+            echo: [
+                Delay::new((rate * 1.2) as usize),
+                Delay::new((rate * 1.2) as usize),
+            ],
             echo_lp: Default::default(),
             time: 0.0,
         };
@@ -347,8 +350,9 @@ impl Score {
             while n < 53 {
                 n += 12;
             }
+            let n_pads = self.pads.len();
             let pad = &mut self.pads[self.next_pad];
-            self.next_pad = (self.next_pad + 1) % self.pads.len();
+            self.next_pad = (self.next_pad + 1) % n_pads;
             pad.note = n as f32;
             pad.env.gate_on();
         }
@@ -393,8 +397,9 @@ impl Score {
                 while n < 74 {
                     n += 12;
                 }
+                let n_bells = self.bells.len();
                 let bell = &mut self.bells[self.next_bell];
-                self.next_bell = (self.next_bell + 1) % self.bells.len();
+                self.next_bell = (self.next_bell + 1) % n_bells;
                 bell.freq = mtof(n as f32);
                 bell.age = -(k as f32) * self.step_len * 3.0;
                 bell.amp = 1.0 / (1.0 + k as f32 * 0.5);
@@ -412,7 +417,6 @@ impl Score {
         self.phrase_len = 0;
         if self.lead_on {
             let rhythm = self.rng.pick(&PHRASES);
-            let scale_of = |n: f32| n;
             let span = self.profile.chord_steps as f32 / 32.0;
             let mut at = 0u32;
             let mut note = self.last_lead;
@@ -425,7 +429,7 @@ impl Score {
                     note = step_scale(note, degree);
                 }
                 note = note.clamp(62.0, 79.0);
-                self.phrase[i] = ((at as f32 * span) as u32, scale_of(note));
+                self.phrase[i] = ((at as f32 * span) as u32, note);
                 self.phrase_len = i + 1;
                 at += len;
             }
@@ -441,14 +445,13 @@ impl Score {
 
     /// Advance one sixteenth.
     fn tick(&mut self) {
-        if self.pending_section && self.step % 16 == 0 {
+        if self.pending_section && self.step.is_multiple_of(16) {
             self.start_section();
         }
         if self.step >= self.section_steps {
             self.start_section();
         }
-        let p = &self.profile;
-        let chord_steps = p.chord_steps;
+        let chord_steps = self.profile.chord_steps;
         let in_chord = self.step % chord_steps;
         if in_chord == 0 {
             self.chord = (self.step / chord_steps) as usize;
@@ -471,7 +474,7 @@ impl Score {
                 }
             }
             Mood::Transit => {
-                if in_chord % 2 == 0 && in_chord > 0 {
+                if in_chord.is_multiple_of(2) && in_chord > 0 {
                     self.bass_note(bass_low + if in_chord % 8 == 4 { 12.0 } else { 0.0 });
                 }
             }
@@ -486,7 +489,7 @@ impl Score {
         }
 
         // Arpeggio.
-        if self.arp_on && self.step % p.arp_every == 0 {
+        if self.arp_on && self.step.is_multiple_of(self.profile.arp_every) {
             let n = self.arp_notes[self.arp_i % 8];
             self.arp_i += 1;
             self.arp.target = mtof(n);
@@ -512,16 +515,18 @@ impl Score {
         }
 
         // Rhythm box.
-        if self.gains[5].z > 0.01 || p.layers[5] > 0.0 {
+        if self.gains[5].z > 0.01 || self.profile.layers[5] > 0.0 {
             let s = self.step % 16;
             let kick = match self.mood {
-                Mood::Transit => s % 4 == 0,
+                Mood::Transit => s.is_multiple_of(4),
                 _ => s == 0 || s == 8 || (s == 11 && self.rng.chance(0.3)),
             };
             if kick {
                 self.kick = (0.0, 0.0);
             }
-            if s % 2 == 0 && s % 4 != 0 || (self.mood == Mood::Transit && s % 2 == 1) {
+            if s.is_multiple_of(2) && !s.is_multiple_of(4)
+                || (self.mood == Mood::Transit && s % 2 == 1)
+            {
                 self.hat.0 = 0.0;
             }
         }
@@ -581,7 +586,9 @@ impl Score {
             let env = b.env.next(dt);
             b.fenv *= (-dt / 0.18).exp();
             let s = 0.6 * b.osc[0].saw(f, dt) + 0.5 * b.osc[1].pulse(f * 0.5, 0.5, dt);
-            let y = b.filter.low(s, 90.0 + (250.0 + 900.0 * b.fenv) * bright, 1.6, dt)
+            let y = b
+                .filter
+                .low(s, 90.0 + (250.0 + 900.0 * b.fenv) * bright, 1.6, dt)
                 * env
                 * 0.2
                 * gain[1];
@@ -660,7 +667,10 @@ impl Score {
             let (age, f) = &mut self.hat;
             if *age < 0.1 {
                 *age += dt;
-                let y = f.high(self.rng.noise(), 7000.0, 0.8, dt) * (-*age / 0.025).exp() * 0.04 * gain[5];
+                let y = f.high(self.rng.noise(), 7000.0, 0.8, dt)
+                    * (-*age / 0.025).exp()
+                    * 0.04
+                    * gain[5];
                 add(super::dsp::pan(y, 0.3), 0.2);
             }
         }
@@ -736,7 +746,10 @@ mod tests {
         for start in 60..80 {
             for d in -3..=3 {
                 let n = step_scale(start as f32, d) as i32;
-                assert!(SCALE.contains(&(n - KEY).rem_euclid(12)), "{start} {d} -> {n}");
+                assert!(
+                    SCALE.contains(&(n - KEY).rem_euclid(12)),
+                    "{start} {d} -> {n}"
+                );
             }
         }
     }

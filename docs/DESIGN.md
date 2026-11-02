@@ -506,6 +506,42 @@ Inspiration, not imitation — fictional throughout.
 - **Audio:** analog-synth score, radio static and crackle on comms, heavy
   mechanical sounds for docking, switches, and hull stress.
 
+### 8.2 Sound
+
+Decided while building the soundscape (#76):
+
+- **All synthesized, no samples.** Every sound is made in code from
+  oscillators, noise, filters and resonators (`client/src/audio/`), so
+  the whole game shares one analog character, nothing needs licensing,
+  and cues can be retuned like any other code. One-shot cues render once
+  at startup; continuous sounds run live on the audio thread through
+  kira.
+- **The score is generative**: a small analog ensemble — detuned-saw
+  string pad, filtered bass, sequencer arpeggio through a ping-pong tape
+  delay, a theremin-like lead with blooming vibrato, glassy FM bells, a
+  soft rhythm box — with tape wow on everything. It plays progressions in
+  D Dorian / Aeolian (hopeful, with melancholy), a section at a time.
+  Moods crossfade by situation: *title* (the full theme), *space*
+  (sparse, and it rests in silence now and then), *station* (warmer,
+  with the rhythm box), *transit* (fast travel and jumps: the sequencer
+  driving).
+- **The palette:** heavy mechanisms for anything physical — docking
+  clamps then airlock hiss, the jump drive's breaker, the star chart's
+  motors and relays, bakelite toggles for every switch and button, hull
+  plates groaning on impacts and in transit; radio static with crackle
+  and a squelch tail whenever a message comes over comms; VFD-panel beeps
+  for instruments (menu cursor, targeting, the prospector's sonar ping).
+  Engines are a low roar plus a turbine note that rise with acceleration
+  rather than speed, so cruising is quiet and burns are loud.
+- **The sound follows the game**, not the other way round: the client
+  watches the world each frame and turns what changed into cues and loop
+  levels. Game code only reports what the sound can't see (the speed of a
+  collision).
+- **Volume:** master, music and effects sliders in Settings, heard while
+  dragging. Pausing silences the ship but not the music. Screenshot and
+  scripted runs are silent unless `--sound`; `--mute` silences any run.
+  No audio device means silence, never an error.
+
 ### 8.1 Ship models and liveries
 
 Decided while hand-building every hull (PR #86):

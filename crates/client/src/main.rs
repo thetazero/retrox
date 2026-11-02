@@ -118,8 +118,7 @@ impl Flags {
             keys: value("--keys")
                 .map(|k| k.split(',').map(|s| s.trim().to_lowercase()).collect())
                 .unwrap_or_default(),
-            mute: has("--mute")
-                || (!has("--sound") && (has("--screenshot") || has("--keys"))),
+            mute: has("--mute") || (!has("--sound") && (has("--screenshot") || has("--keys"))),
         }
     }
 
@@ -365,6 +364,7 @@ impl ApplicationHandler for App {
 
         let data = save::data_dir();
         let (written_tx, written_rx) = mpsc::channel();
+        let audio = audio::Audio::new(&settings, self.flags.mute);
         let mut r = Running {
             renderer,
             meshes,
@@ -393,7 +393,7 @@ impl ApplicationHandler for App {
             written_rx,
             writers: Vec::new(),
             toast: None,
-            audio: audio::Audio::new(&settings, self.flags.mute),
+            audio,
             quit: false,
             script: self.flags.keys.iter().cloned().collect(),
             script_wait: 0,

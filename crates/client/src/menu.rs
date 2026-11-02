@@ -261,7 +261,7 @@ impl Menu {
                 enabled: !saves.is_empty(),
                 ..Item::page("Load", &load_note, Page::Load)
             },
-            Item::page("Settings", "controls and display", Page::Settings),
+            Item::page("Settings", "controls, display, sound", Page::Settings),
             Item::action("Quit", "back to the desktop", MenuAction::Quit),
         ]
     }
@@ -284,7 +284,7 @@ impl Menu {
                 ..Item::action("Save", &save_note, MenuAction::Save)
             },
             Item::page("Load", "a save or checkpoint", Page::Load),
-            Item::page("Settings", "controls and display", Page::Settings),
+            Item::page("Settings", "controls, display, sound", Page::Settings),
             Item::page("Quit to title", "leave this game", Page::ConfirmQuit),
         ]
     }
@@ -705,7 +705,7 @@ fn times(v: f64) -> String {
 }
 
 fn percent(v: f64) -> String {
-    format!("{:>3.0}%", v * 100.0)
+    format!("{:>4.0}%", v * 100.0)
 }
 
 /// A segmented VFD bar to drag, with its value beside it (as `readout`
@@ -757,7 +757,10 @@ fn vfd_slider(
     if let Some(mark) = mark {
         let at = rect.left() + ((mark - lo) / (hi - lo)) as f32 * width;
         painter.line_segment(
-            [Pos2::new(at, bar.bottom() + 2.0), Pos2::new(at, rect.bottom())],
+            [
+                Pos2::new(at, bar.bottom() + 2.0),
+                Pos2::new(at, rect.bottom()),
+            ],
             Stroke::new(1.0, if hot { CREAM } else { RULE }),
         );
     }

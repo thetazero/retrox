@@ -236,10 +236,6 @@ impl Adsr {
         self.stage != Stage::Idle
     }
 
-    pub fn releasing(&self) -> bool {
-        self.stage == Stage::Release
-    }
-
     pub fn next(&mut self, dt: f32) -> f32 {
         match self.stage {
             Stage::Idle => {}

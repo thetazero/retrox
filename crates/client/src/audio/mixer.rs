@@ -60,7 +60,7 @@ impl Shared {
             values: std::array::from_fn(|_| AtomicU32::new(0)),
         };
         s.set(Param::Master, 0.8);
-        s.set(Param::Music, 0.6);
+        s.set(Param::Music, 0.5);
         s.set(Param::Effects, 0.8);
         s
     }
@@ -196,17 +196,23 @@ impl Synth {
 
         if flight > 0.001 {
             // Main engine: a low roar and a turbine note rising with thrust.
-            let roar = l.rumble.low(rng.noise(), 70.0 + 160.0 * thrust + 200.0 * boost, 0.7, dt)
+            let roar = l
+                .rumble
+                .low(rng.noise(), 70.0 + 160.0 * thrust + 200.0 * boost, 0.7, dt)
                 * (0.25 + 0.9 * thrust + 0.8 * boost);
             let f = 48.0 + 70.0 * thrust + 30.0 * boost;
             let t = l.turbine[0].saw(f, dt) + 0.6 * l.turbine[1].saw(f * 2.01, dt);
-            let turbine = l.turbine_f.low(t, 160.0 + 900.0 * thrust * (1.0 - 0.5 * cockpit), 1.1, dt)
-                * (0.05 + 0.18 * thrust);
+            let turbine =
+                l.turbine_f
+                    .low(t, 160.0 + 900.0 * thrust * (1.0 - 0.5 * cockpit), 1.1, dt)
+                    * (0.05 + 0.18 * thrust);
             let hiss = l.boost.band(rng.noise(), 900.0, 0.6, dt) * boost * 0.35;
             // Thruster puffs: hissing gas.
-            let puff = l.rcs.high(rng.noise(), 2200.0, 0.7, dt) * rcs * 0.12 * (1.0 - 0.5 * cockpit);
+            let puff =
+                l.rcs.high(rng.noise(), 2200.0, 0.7, dt) * rcs * 0.12 * (1.0 - 0.5 * cockpit);
             // The cabin: fan and electrics, only heard inside.
-            let cabin = (l.cabin.sine(100.0, dt) * 0.02 + l.air.low(rng.noise(), 500.0, 0.6, dt) * 0.08)
+            let cabin = (l.cabin.sine(100.0, dt) * 0.02
+                + l.air.low(rng.noise(), 500.0, 0.6, dt) * 0.08)
                 * cockpit;
             let engine = (roar * 0.55 + turbine + hiss) * flight;
             let engine = [engine, engine];
@@ -223,13 +229,19 @@ impl Synth {
         if laser > 0.001 {
             // The laser's hum, rising with heat; a sizzle where it bites.
             let f = 110.0 * (1.0 + 0.3 * heat);
-            let s = l.hum[0].saw(f, dt) + l.hum[1].saw(f * 1.007, dt) + 0.5 * l.hum[2].pulse(f * 2.0, 0.3, dt);
+            let s = l.hum[0].saw(f, dt)
+                + l.hum[1].saw(f * 1.007, dt)
+                + 0.5 * l.hum[2].pulse(f * 2.0, 0.3, dt);
             let hum = l.hum_f.band(s, 700.0 + 1400.0 * heat, 1.6, dt) * 0.25;
             if rng.chance(0.02 + 0.08 * contact) {
                 l.crackle = rng.noise();
             }
             l.crackle *= 0.9;
-            let sizzle = l.sizzle.high(rng.noise() * (0.3 + l.crackle.abs()), 2600.0, 0.7, dt) * 0.3 * contact;
+            let sizzle = l
+                .sizzle
+                .high(rng.noise() * (0.3 + l.crackle.abs()), 2600.0, 0.7, dt)
+                * 0.3
+                * contact;
             let whine = l.whine.sine(1800.0 + 2400.0 * heat, dt) * heat * heat * 0.05;
             let y = (hum + sizzle + whine) * laser;
             out[0] += y;
@@ -241,9 +253,14 @@ impl Synth {
         if warp > 0.001 {
             // Fast travel: a deep chord drone and shimmer.
             let base = 41.2 * (1.0 + 0.15 * warp_rate);
-            let d = l.drone[0].saw(base, dt) + l.drone[1].saw(base * 1.5, dt) + l.drone[2].saw(base * 2.003, dt);
+            let d = l.drone[0].saw(base, dt)
+                + l.drone[1].saw(base * 1.5, dt)
+                + l.drone[2].saw(base * 2.003, dt);
             let lfo = l.shimmer_lfo.sine(0.18, dt);
-            let drone = l.drone_f.low(d, 260.0 + 300.0 * warp_rate + 120.0 * lfo, 1.2, dt) * 0.16;
+            let drone = l
+                .drone_f
+                .low(d, 260.0 + 300.0 * warp_rate + 120.0 * lfo, 1.2, dt)
+                * 0.16;
             let shimmer = l.shimmer.band(rng.noise(), 3200.0 + 1800.0 * lfo, 3.0, dt) * 0.08;
             let y = (drone + shimmer) * warp;
             out[0] += y;
@@ -257,7 +274,8 @@ impl Synth {
             let f = 60.0 + 700.0 * jump * jump;
             let trem = 0.5 + 0.5 * l.tremolo.sine(4.0 + 26.0 * jump, dt);
             let c = l.charge.saw(f, dt);
-            let tone = l.charge_f.low(c, 300.0 + 3000.0 * jump, 2.0, dt) * (0.1 + 0.25 * jump) * trem;
+            let tone =
+                l.charge_f.low(c, 300.0 + 3000.0 * jump, 2.0, dt) * (0.1 + 0.25 * jump) * trem;
             let swell = l.shimmer.band(rng.noise(), 900.0 + 3000.0 * jump, 1.0, dt) * 0.2 * jump;
             let y = (tone + swell) * jump.sqrt();
             out[0] += y;
@@ -287,7 +305,8 @@ impl Synth {
 impl Sound for Synth {
     fn on_start_processing(&mut self) {
         self.take_commands();
-        self.score.set_mood(Mood::from_index(self.shared.get(Param::Mood) as u32));
+        self.score
+            .set_mood(Mood::from_index(self.shared.get(Param::Mood) as u32));
     }
 
     fn process(&mut self, out: &mut [Frame], dt: f64, _info: &Info) {
@@ -398,8 +417,13 @@ mod tests {
             shared.set(p, 1.0);
         }
         let out = render(&mut synth, 3.0);
-        let peak = out.iter().fold(0f32, |m, f| m.max(f.left.abs()).max(f.right.abs()));
-        assert!(out.iter().all(|f| f.left.is_finite() && f.right.is_finite()));
+        let peak = out
+            .iter()
+            .fold(0f32, |m, f| m.max(f.left.abs()).max(f.right.abs()));
+        assert!(
+            out.iter()
+                .all(|f| f.left.is_finite() && f.right.is_finite())
+        );
         assert!(peak > 0.05 && peak < 1.0, "peak {peak}");
     }
 }

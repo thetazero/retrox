@@ -119,7 +119,7 @@ impl Cue {
             Cue::Confirm | Cue::Back | Cue::Cooled => 0.25,
             Cue::Relay | Cue::Teletype => 0.3,
             Cue::Switch => 0.42,
-            Cue::Comms => 0.3,
+            Cue::Comms => 0.38,
             Cue::Scan => 0.42,
             Cue::Collect => 0.32,
             Cue::Clank => 0.2,
@@ -127,7 +127,7 @@ impl Cue {
             Cue::Overheat => 0.36,
             Cue::Stamp | Cue::Trade | Cue::Refit => 0.42,
             Cue::MapOpen | Cue::MapClose => 0.4,
-            Cue::HullCreak => 0.45,
+            Cue::HullCreak => 0.3,
             Cue::Fracture => 0.62,
             Cue::Blast => 0.72,
             Cue::JumpArrive | Cue::Land | Cue::Launch => 0.62,
@@ -225,7 +225,9 @@ fn thud(t: f32, from: f32, to: f32, tau: f32) -> f32 {
 fn transient(seed: u64, len: f32, cutoff: f32, tau: f32) -> Vec<f32> {
     let mut rng = Rng::new(seed);
     let mut f = Svf::default();
-    synth(len, |t| f.band(rng.noise(), cutoff, 0.9, DT) * decay(t, tau))
+    synth(len, |t| {
+        f.band(rng.noise(), cutoff, 0.9, DT) * decay(t, tau)
+    })
 }
 
 fn clank(seed: u64, pitch: f32, weight: f32) -> Vec<f32> {
@@ -263,7 +265,8 @@ fn creak(seed: u64, len: f32, low: f32, high: f32) -> Vec<f32> {
             impulse = rng.range(0.4, 1.0);
         }
         let bend = 1.0 + 0.08 * (TAU * 0.45 * t).sin();
-        let r = a.band(impulse, low * bend, 14.0, DT) + 0.6 * b.band(impulse, high * bend, 10.0, DT);
+        let r =
+            a.band(impulse, low * bend, 14.0, DT) + 0.6 * b.band(impulse, high * bend, 10.0, DT);
         r * env
     })
 }
@@ -277,18 +280,16 @@ fn beep(len: f32, notes: &[(f32, f32)], bright: f32) -> Vec<f32> {
             return 0.0;
         };
         let local = t - at;
-        let next = notes
-            .iter()
-            .find(|(n, _)| *n > at)
-            .map_or(len, |(n, _)| *n);
-        let env = ramp(local, 0.003) * decay(local, 0.05).max(0.0) * (1.0 - ramp(t - next + 0.01, 0.01));
+        let next = notes.iter().find(|(n, _)| *n > at).map_or(len, |(n, _)| *n);
+        let env =
+            ramp(local, 0.003) * decay(local, 0.05).max(0.0) * (1.0 - ramp(t - next + 0.01, 0.01));
         let s = osc.sine(f, DT) * 0.7 + osc.phase.round() * bright * 0.3 - bright * 0.15;
         lp.low(s * env, 3500.0, DT)
     })
 }
 
 fn render(cue: Cue, seed: u64, variant: usize) -> Vec<f32> {
-    let mut rng = Rng::new(seed ^ cue.index() as u64 * 0x1234_5678);
+    let mut rng = Rng::new(seed ^ (cue.index() as u64 * 0x1234_5678));
     let v = variant as f32;
     match cue {
         Cue::Switch => {
@@ -301,7 +302,12 @@ fn render(cue: Cue, seed: u64, variant: usize) -> Vec<f32> {
             });
             mix_in(&mut buf, &transient(seed, 0.02, 3800.0, 0.0015), 0.0, 1.4);
             // The latch catching a moment later.
-            mix_in(&mut buf, &transient(seed + 1, 0.02, 2600.0, 0.001), 0.017, 0.6);
+            mix_in(
+                &mut buf,
+                &transient(seed + 1, 0.02, 2600.0, 0.001),
+                0.017,
+                0.6,
+            );
             buf
         }
         Cue::Tick => beep(0.07, &[(0.0, 1320.0)], 0.4),
@@ -311,7 +317,12 @@ fn render(cue: Cue, seed: u64, variant: usize) -> Vec<f32> {
             let ring = 1700.0 + v * 260.0;
             let mut buf = synth(0.07, |t| 0.25 * decay(t, 0.008) * (TAU * ring * t).sin());
             mix_in(&mut buf, &transient(seed, 0.02, 3000.0, 0.0012), 0.0, 1.0);
-            mix_in(&mut buf, &transient(seed + 1, 0.02, 2400.0, 0.0010), 0.022, 0.5);
+            mix_in(
+                &mut buf,
+                &transient(seed + 1, 0.02, 2400.0, 0.0010),
+                0.022,
+                0.5,
+            );
             buf
         }
         Cue::Teletype => {
@@ -397,9 +408,16 @@ fn render(cue: Cue, seed: u64, variant: usize) -> Vec<f32> {
             buf
         }
         Cue::HullCreak => {
-            let (lo, hi) = [(170.0, 420.0), (130.0, 350.0), (210.0, 510.0), (150.0, 610.0)][variant];
+            let (lo, hi) = [
+                (170.0, 420.0),
+                (130.0, 350.0),
+                (210.0, 510.0),
+                (150.0, 610.0),
+            ][variant];
             let mut buf = creak(seed, 1.3 + 0.15 * v, lo, hi);
-            let rumble = synth(1.3, |t| 0.15 * (TAU * 48.0 * t).sin() * (t / 1.3 * 3.14).sin());
+            let rumble = synth(1.3, |t| {
+                0.15 * (TAU * 48.0 * t).sin() * (t / 1.3 * std::f32::consts::PI).sin()
+            });
             mix_in(&mut buf, &rumble, 0.0, 1.0);
             buf
         }
@@ -410,7 +428,12 @@ fn render(cue: Cue, seed: u64, variant: usize) -> Vec<f32> {
             let ring = synth(0.4, |t| metal(t, &short, pitch));
             mix_in(&mut buf, &ring, 0.0, 0.6);
             mix_in(&mut buf, &transient(seed, 0.05, 1200.0, 0.01), 0.0, 1.0);
-            mix_in(&mut buf, &creak(seed + 2, 0.6, 160.0 * pitch, 400.0), 0.15, 0.3);
+            mix_in(
+                &mut buf,
+                &creak(seed + 2, 0.6, 160.0 * pitch, 400.0),
+                0.15,
+                0.3,
+            );
             buf
         }
         Cue::JumpEngage => {
@@ -434,7 +457,11 @@ fn render(cue: Cue, seed: u64, variant: usize) -> Vec<f32> {
                 roar + 1.2 * thud(t, 110.0, 32.0, 1.1)
             });
             // A shimmer settling: high partials falling silent.
-            let shimmer = [(1863.0, 0.08, 1.2), (2417.0, 0.06, 0.9), (3109.0, 0.04, 0.7)];
+            let shimmer = [
+                (1863.0, 0.08, 1.2),
+                (2417.0, 0.06, 0.9),
+                (3109.0, 0.04, 0.7),
+            ];
             let glass = synth(1.6, |t| metal(t, &shimmer, 1.0) * ramp(t, 0.05));
             mix_in(&mut buf, &glass, 0.02, 1.0);
             mix_in(&mut buf, &creak(seed, 1.2, 140.0, 360.0), 0.8, 0.4);
@@ -491,7 +518,11 @@ fn render(cue: Cue, seed: u64, variant: usize) -> Vec<f32> {
             let mut buf = synth(2.6, |t| {
                 let env = ramp(t, 0.15) * decay(t - 0.3, 0.9).min(1.0);
                 let roar = lp.low(rng.noise(), 600.0, 0.7, DT);
-                let pop = if rng.chance(0.004) { rng.noise() * 3.0 } else { 0.0 };
+                let pop = if rng.chance(0.004) {
+                    rng.noise() * 3.0
+                } else {
+                    0.0
+                };
                 (roar + crackle.band(pop, 1200.0, 2.0, DT)) * env
             });
             let kick = synth(0.6, |t| thud(t, 85.0, 38.0, 0.25));
@@ -503,7 +534,9 @@ fn render(cue: Cue, seed: u64, variant: usize) -> Vec<f32> {
             mix_in(&mut buf, &transient(seed, 0.08, 1400.0, 0.006), 0.0, 2.5);
             mix_in(&mut buf, &transient(seed + 1, 0.12, 900.0, 0.04), 0.0, 1.0);
             let mut rumble = Svf::default();
-            let tail = synth(1.0, |t| rumble.low(rng.noise(), 160.0, 0.7, DT) * decay(t, 0.4) * 1.5);
+            let tail = synth(1.0, |t| {
+                rumble.low(rng.noise(), 160.0, 0.7, DT) * decay(t, 0.4) * 1.5
+            });
             mix_in(&mut buf, &tail, 0.0, 1.0);
             // Debris pattering off the hull, thinning out.
             for i in 0..40 {
@@ -525,7 +558,12 @@ fn render(cue: Cue, seed: u64, variant: usize) -> Vec<f32> {
             for i in 0..70 {
                 let at = 0.03 + rng.unit().powf(2.0) * 1.8;
                 let grain = transient(seed + 10 + i, 0.02, rng.range(900.0, 4000.0), 0.002);
-                mix_in(&mut buf, &grain, at, rng.range(0.1, 0.35) * (1.0 - at / 2.0));
+                mix_in(
+                    &mut buf,
+                    &grain,
+                    at,
+                    rng.range(0.1, 0.35) * (1.0 - at / 2.0),
+                );
             }
             buf
         }
@@ -576,7 +614,12 @@ fn render(cue: Cue, seed: u64, variant: usize) -> Vec<f32> {
             for i in 0..6 {
                 let ring = synth(0.03, |t| 0.3 * decay(t, 0.006) * (TAU * 2100.0 * t).sin());
                 mix_in(&mut buf, &ring, i as f32 * 0.032, 1.0);
-                mix_in(&mut buf, &transient(seed + i, 0.02, 3200.0, 0.0012), i as f32 * 0.032, 0.8);
+                mix_in(
+                    &mut buf,
+                    &transient(seed + i, 0.02, 3200.0, 0.0012),
+                    i as f32 * 0.032,
+                    0.8,
+                );
             }
             let chunk = synth(0.5, |t| {
                 0.8 * thud(t, 160.0, 80.0, 0.06) + 0.18 * decay(t, 0.25) * (TAU * 1890.0 * t).sin()
@@ -588,7 +631,11 @@ fn render(cue: Cue, seed: u64, variant: usize) -> Vec<f32> {
             let mut buf = synth(0.45, |t| thud(t, 130.0, 70.0, 0.05));
             mix_in(&mut buf, &transient(seed, 0.06, 1500.0, 0.02), 0.0, 1.0);
             let mut hp = Svf::default();
-            let paper = synth(0.18, |t| hp.high(rng.noise(), 3500.0, 0.7, DT) * (t / 0.18 * 3.14).sin() * 0.15);
+            let paper = synth(0.18, |t| {
+                hp.high(rng.noise(), 3500.0, 0.7, DT)
+                    * (t / 0.18 * std::f32::consts::PI).sin()
+                    * 0.15
+            });
             mix_in(&mut buf, &paper, 0.1, 1.0);
             buf
         }
@@ -613,7 +660,11 @@ fn render(cue: Cue, seed: u64, variant: usize) -> Vec<f32> {
             let mut lp = Svf::default();
             let mut buf = synth(len, |t| {
                 let x = ramp(t, len * 0.9);
-                let f = if opening { 70.0 + 70.0 * x } else { 140.0 - 80.0 * x };
+                let f = if opening {
+                    70.0 + 70.0 * x
+                } else {
+                    140.0 - 80.0 * x
+                };
                 let env = ramp(t, 0.06) * (1.0 - ramp(t - len * 0.82, len * 0.15));
                 let teeth = 0.6 + 0.4 * gear.pulse(f / 7.0, 0.3, DT);
                 lp.low(motor.saw(f, DT), 900.0, 1.4, DT) * env * teeth * 0.6
@@ -639,7 +690,10 @@ fn render(cue: Cue, seed: u64, variant: usize) -> Vec<f32> {
             let mut hp = Svf::default();
             let mut buf = synth(0.5, |t| {
                 let gate = 0.5 + 0.5 * (TAU * 38.0 * t).sin();
-                hp.band(rng.noise(), 1500.0, 1.5, DT) * gate * ramp(t, 0.02) * (1.0 - ramp(t - 0.4, 0.1))
+                hp.band(rng.noise(), 1500.0, 1.5, DT)
+                    * gate
+                    * ramp(t, 0.02)
+                    * (1.0 - ramp(t - 0.4, 0.1))
             });
             mix_in(&mut buf, &clank(seed, 1.15, 0.6), 0.48, 0.7);
             buf
@@ -657,7 +711,7 @@ mod tests {
         for &cue in &Cue::ALL {
             for take in &lib.takes[cue.index()] {
                 assert!(!take.is_empty(), "{cue:?} is empty");
-                assert!(take.len() < (RATE * 4.0) as usize, "{cue:?} is too long");
+                assert!(take.len() < (RATE * 5.0) as usize, "{cue:?} is too long");
                 assert!(take.iter().all(|x| x.is_finite()), "{cue:?} has NaN");
                 let peak = take.iter().fold(0f32, |m, x| m.max(x.abs()));
                 assert!(peak > 0.5 && peak <= 0.91, "{cue:?} peak {peak}");

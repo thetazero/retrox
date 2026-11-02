@@ -44,6 +44,9 @@ pub struct Audio {
     /// Seconds since the last cue of each rate-limited kind.
     since_comms: f32,
     since_collect: f32,
+    /// Every cue asked for, for tests.
+    #[cfg(test)]
+    heard: std::cell::RefCell<Vec<Cue>>,
 }
 
 /// What the director needs to know about the frame.
@@ -71,6 +74,8 @@ impl Audio {
             ambient_in: 8.0,
             since_comms: 10.0,
             since_collect: 10.0,
+            #[cfg(test)]
+            heard: Default::default(),
         };
         audio.set_volumes(settings);
         audio
@@ -118,6 +123,8 @@ impl Audio {
     }
 
     pub fn play_with(&self, cue: Cue, gain: f32, pitch: f32, pan: f32) {
+        #[cfg(test)]
+        self.heard.borrow_mut().push(cue);
         if !self.muted {
             // Fails only once the synth is gone, at exit.
             let _ = self.tx.send(Play {
@@ -164,7 +171,16 @@ impl Audio {
         // Loops.
         let flying = matches!(world.mode, Mode::Normal);
         let travelling = matches!(world.mode, Mode::FastTravel(_));
-        set(Param::Flight, if flying { 1.0 } else if travelling { 0.5 } else { 0.0 });
+        set(
+            Param::Flight,
+            if flying {
+                1.0
+            } else if travelling {
+                0.5
+            } else {
+                0.0
+            },
+        );
         let accel = self.watch.as_ref().map_or(0.0, |w| {
             let dv = (now.vel - w.vel).length() / f64::from(dt.max(1e-3));
             (dv / (now.vel.length() * 0.5).max(90.0)).clamp(0.0, 1.0) as f32
@@ -172,14 +188,27 @@ impl Audio {
         let throttle = world.ship.throttle.abs() as f32;
         set(
             Param::Thrust,
-            if travelling { 0.8 } else { accel.max(0.3 * throttle) },
+            if travelling {
+                0.8
+            } else {
+                accel.max(0.3 * throttle)
+            },
         );
         let c = view.controls.copied().unwrap_or_default();
         set(
             Param::Boost,
-            if flying && c.boost && world.ship.throttle <= 0.5 { 1.0 } else { 0.0 },
+            if flying && c.boost && world.ship.throttle <= 0.5 {
+                1.0
+            } else {
+                0.0
+            },
         );
-        let rcs = c.stick.abs().max_element().max(c.strafe.abs()).max(c.lift.abs());
+        let rcs = c
+            .stick
+            .abs()
+            .max_element()
+            .max(c.strafe.abs())
+            .max(c.lift.abs());
         set(Param::Rcs, if flying { rcs as f32 } else { 0.0 });
         set(Param::Cockpit, if world.cockpit { 1.0 } else { 0.0 });
         let mining = &world.mining;
@@ -191,14 +220,19 @@ impl Audio {
         match world.mode {
             Mode::FastTravel(trip) => {
                 set(Param::Warp, 1.0);
-                set(Param::WarpRate, (trip.warp.max(1.0).log10() / 5.0).clamp(0.0, 1.0) as f32);
+                set(
+                    Param::WarpRate,
+                    (trip.warp.max(1.0).log10() / 5.0).clamp(0.0, 1.0) as f32,
+                );
             }
             _ => set(Param::Warp, 0.0),
         }
         set(
             Param::Jump,
             match world.mode {
-                Mode::Jumping { timer, .. } => (1.0 - timer / crate::world::JUMP_DURATION).clamp(0.0, 1.0),
+                Mode::Jumping { timer, .. } => {
+                    (1.0 - timer / crate::world::JUMP_DURATION).clamp(0.0, 1.0)
+                }
                 _ => 0.0,
             },
         );
@@ -213,10 +247,12 @@ impl Audio {
             if docked {
                 let gain = self.rng.range(0.4, 1.0);
                 let pan = self.rng.range(-0.8, 0.8);
-                self.play_with(Cue::Clank, gain, self.rng.range(0.85, 1.1), pan);
+                let pitch = self.rng.range(0.85, 1.1);
+                self.play_with(Cue::Clank, gain, pitch, pan);
                 self.ambient_in = self.rng.range(5.0, 13.0);
             } else if travelling {
-                self.play_with(Cue::HullCreak, self.rng.range(0.4, 0.7), self.rng.range(0.9, 1.1), 0.0);
+                let (gain, pitch) = (self.rng.range(0.4, 0.7), self.rng.range(0.9, 1.1));
+                self.play_with(Cue::HullCreak, gain, pitch, 0.0);
                 self.ambient_in = self.rng.range(7.0, 16.0);
             } else {
                 self.ambient_in = 3.0;
@@ -247,7 +283,11 @@ impl Audio {
         }
 
         if now.map_open != was.map_open {
-            self.play(if now.map_open { Cue::MapOpen } else { Cue::MapClose });
+            self.play(if now.map_open {
+                Cue::MapOpen
+            } else {
+                Cue::MapClose
+            });
         }
         if now.course != was.course && now.course.is_some() {
             self.play(Cue::Relay);
@@ -257,7 +297,12 @@ impl Audio {
             self.play(Cue::Switch);
         }
         if now.flight_assist != was.flight_assist {
-            self.play_with(Cue::Switch, 1.0, if now.flight_assist { 1.0 } else { 0.85 }, 0.0);
+            self.play_with(
+                Cue::Switch,
+                1.0,
+                if now.flight_assist { 1.0 } else { 0.85 },
+                0.0,
+            );
         }
         if now.target != was.target && now.target.is_some() {
             self.play(Cue::Tick);
@@ -413,12 +458,135 @@ impl Snapshot {
             message: world.message.as_ref().map(|(m, _)| m.clone()),
             since_scan: world.mining.since_scan,
             locked: world.mining.locked,
-            bursts: world.mining.bursts.iter().map(|b| burst_key(b.pos)).collect(),
+            bursts: world
+                .mining
+                .bursts
+                .iter()
+                .map(|b| burst_key(b.pos))
+                .collect(),
             cargo: player.cargo_t(),
             credits: player.credits,
             contracts: player.contracts.len(),
             ship: format!("{} {}", player.ship.name, crate::fit_key(&player.ship.fit)),
             stored: player.stored.len(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn wav(path: &std::path::Path, frames: &[[f32; 2]]) {
+        let rate = dsp::RATE as u32;
+        let mut b = Vec::with_capacity(44 + frames.len() * 4);
+        let data = (frames.len() * 4) as u32;
+        b.extend_from_slice(b"RIFF");
+        b.extend_from_slice(&(36 + data).to_le_bytes());
+        b.extend_from_slice(b"WAVEfmt ");
+        {
+            let v = 16u32;
+            b.extend_from_slice(&v.to_le_bytes());
+        }
+        b.extend_from_slice(&1u16.to_le_bytes());
+        b.extend_from_slice(&2u16.to_le_bytes());
+        b.extend_from_slice(&rate.to_le_bytes());
+        b.extend_from_slice(&(rate * 4).to_le_bytes());
+        b.extend_from_slice(&4u16.to_le_bytes());
+        b.extend_from_slice(&16u16.to_le_bytes());
+        b.extend_from_slice(b"data");
+        b.extend_from_slice(&data.to_le_bytes());
+        for f in frames {
+            for x in f {
+                b.extend_from_slice(&((x.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes());
+            }
+        }
+        std::fs::write(path, b).unwrap();
+    }
+
+    #[test]
+    fn the_game_is_heard() {
+        let settings = Settings::default();
+        let mut audio = Audio::new(&settings, true);
+        let mut world = World::new(1);
+        world.start_at_station();
+        let step = |audio: &mut Audio, world: &World, paused| {
+            audio.update(
+                View {
+                    world: Some(world),
+                    paused,
+                    controls: None,
+                },
+                1.0 / 60.0,
+            );
+            std::mem::take(&mut *audio.heard.borrow_mut())
+        };
+        step(&mut audio, &world, false);
+        assert_eq!(audio.shared.get(Param::Mood), Mood::Station.index() as f32);
+        assert_eq!(audio.shared.get(Param::Station), 1.0);
+
+        world.act(crate::world::Action::Undock);
+        assert!(step(&mut audio, &world, false).contains(&Cue::Undock));
+        assert_eq!(audio.shared.get(Param::Mood), Mood::Space.index() as f32);
+        assert_eq!(audio.shared.get(Param::Flight), 1.0);
+
+        world.act(crate::world::Action::ToggleCamera);
+        assert!(step(&mut audio, &world, false).contains(&Cue::Switch));
+
+        // Paused: the ship falls quiet, and nothing fires on resume.
+        step(&mut audio, &world, true);
+        assert_eq!(audio.shared.get(Param::Flight), 0.0);
+        world.say("Incoming");
+        step(&mut audio, &world, true);
+        assert!(!step(&mut audio, &world, false).contains(&Cue::Comms));
+        world.say("Another");
+        assert!(step(&mut audio, &world, false).contains(&Cue::Comms));
+
+        // Back on the title.
+        audio.update(
+            View {
+                world: None,
+                paused: false,
+                controls: None,
+            },
+            0.016,
+        );
+        assert_eq!(audio.shared.get(Param::Mood), Mood::Title.index() as f32);
+        assert_eq!(audio.shared.get(Param::Flight), 0.0);
+    }
+
+    /// Write every cue and a minute of each mood as WAV files, to listen
+    /// to: `RETROX_AUDIO_DUMP=dir cargo test -p retrox-client dump -- --ignored`.
+    #[test]
+    #[ignore]
+    fn dump() {
+        let dir = std::path::PathBuf::from(
+            std::env::var("RETROX_AUDIO_DUMP").expect("set RETROX_AUDIO_DUMP"),
+        );
+        std::fs::create_dir_all(&dir).unwrap();
+        let lib = sfx::Library::render();
+        for &cue in &Cue::ALL {
+            for (i, take) in lib.takes[cue.index()].iter().enumerate() {
+                let frames: Vec<[f32; 2]> = take.iter().map(|&x| [x * cue.gain(); 2]).collect();
+                wav(&dir.join(format!("cue-{cue:?}-{i}.wav")), &frames);
+            }
+        }
+        let dt = 1.0 / dsp::RATE;
+        for mood in [Mood::Title, Mood::Space, Mood::Station, Mood::Transit] {
+            let mut score = score::Score::new(0xD0_57E5, dsp::RATE);
+            score.set_mood(mood);
+            let mut room = dsp::Reverb::new(dsp::RATE, 1.0);
+            let frames: Vec<[f32; 2]> = (0..(dsp::RATE * 60.0) as usize)
+                .map(|_| {
+                    let (dry, send) = score.next(dt);
+                    let wet = room.run(send, 0.86, 0.35);
+                    [
+                        dsp::soft_clip((dry[0] + wet[0] * 0.6) * 0.6),
+                        dsp::soft_clip((dry[1] + wet[1] * 0.6) * 0.6),
+                    ]
+                })
+                .collect();
+            wav(&dir.join(format!("music-{mood:?}.wav")), &frames);
         }
     }
 }
