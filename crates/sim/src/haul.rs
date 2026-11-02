@@ -9,12 +9,12 @@
 //! the [`Calendar`]: arriving somewhere, or its monthly review. Between
 //! events a fleet costs nothing. Trip times come from lane distances and
 //! the class's laden jump speed, plus a rough in-system estimate; there are
-//! no flights here (those are the bubble's, see [`crate::bubble`]).
+//! no flights here. Near the player, fleets fly for real instead: see
+//! [`crate::bubble`], which hands them back here when they leave.
 //!
 //! Every movement of money and goods goes through [`crate::ledger`].
 
-use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -22,6 +22,7 @@ use slotmap::{SecondaryMap, new_key_type};
 
 use crate::economy::{Good, GoodMap};
 use crate::ledger::{self, Account, Supply};
+use crate::routes::{self, Visit};
 use crate::settlement::{SettlementId, Site};
 use crate::{EconomyModel, FactionId, GalaxyState, GalaxyTime, Id, Orbiting, Rng, SystemId};
 
@@ -80,10 +81,21 @@ pub struct Fleet {
 pub enum Location {
     Docked(SettlementId),
     Travelling {
+        /// Where the trip began, and when: what the bubble needs to place
+        /// the fleet along it.
+        #[serde(default)]
+        from: SettlementId,
+        #[serde(default)]
+        depart: GalaxyTime,
         to: SettlementId,
         arrive: GalaxyTime,
         /// Whether the trip goes through the lanes, where ships are lost.
         jumps: bool,
+    },
+    /// Flying for real in the bubble, bound for `to`; the trip itself is
+    /// in [`crate::bubble::Bubble::flights`].
+    Flying {
+        to: SettlementId,
     },
 }
 
@@ -116,6 +128,8 @@ pub struct Event {
 pub enum EventKind {
     Arrive,
     Review,
+    /// A trip reaches the bubble and starts flying for real.
+    Enter,
 }
 
 /// Days of events the calendar holds ahead: longer than any trip and than
@@ -211,14 +225,14 @@ impl<'de> Deserialize<'de> for Traffic {
     }
 }
 
-type Contracts = SecondaryMap<FactionId, bool>;
+pub(crate) type Contracts = SecondaryMap<FactionId, bool>;
 
 /// Each system's best buyer of every good, and its most valuable surplus:
 /// what route choice reads instead of scanning every market. Rebuilt at the
 /// start of every trade phase in one pass over settlements.
 /// Only settled systems have an entry.
 #[derive(Clone, Debug, Default)]
-struct Board {
+pub(crate) struct Board {
     systems: HashMap<SystemId, Listing>,
 }
 
@@ -265,9 +279,9 @@ const ROUTE_SYSTEMS: usize = 20;
 /// Days between monthly reviews.
 const REVIEW_DAYS: u64 = 30;
 /// Trips longer than this aren't considered.
-const MAX_TRIP_DAYS: f64 = 40.0;
+pub(crate) const MAX_TRIP_DAYS: f64 = 40.0;
 /// Loading and unloading, added to every leg.
-const HANDLING_DAYS: f64 = 1.0;
+pub(crate) const HANDLING_DAYS: f64 = 1.0;
 /// A route has to earn at least this many credits per day.
 const MIN_PROFIT_PER_DAY: f64 = 1.0;
 /// Fuel burned per ship per day of travel: a base plus a share of the hold.
@@ -299,7 +313,7 @@ const STATION_ORBIT_AU: f64 = 0.001;
 /// How far a settlement is from its star, in AU: its body's orbit (or its
 /// planet's, for a moon). Sizes, not positions: good enough for coarse
 /// travel times.
-fn radius_au(state: &GalaxyState, id: SettlementId) -> f64 {
+pub(crate) fn radius_au(state: &GalaxyState, id: SettlementId) -> f64 {
     let body_radius = |b: crate::BodyId| {
         let body = &state.bodies[b];
         match body.orbit.parent {
@@ -388,25 +402,19 @@ pub fn reach(state: &GalaxyState, origin: SystemId, max_ly: f64) -> Reached {
 }
 
 fn search(state: &GalaxyState, origin: SystemId, max_ly: f64) -> Vec<(SystemId, f64)> {
-    let mut best: HashMap<SystemId, f64> = HashMap::from([(origin, 0.0)]);
-    let mut heap = BinaryHeap::from([Reverse((0.0f64.to_bits(), origin))]);
     let mut out = Vec::new();
-    while let Some(Reverse((bits, system))) = heap.pop() {
-        let ly = f64::from_bits(bits);
-        if best.get(&system).is_some_and(|&b| b < ly) {
-            continue;
-        }
-        out.push((system, ly));
-        for &lane in &state.systems[system].lanes {
-            let lane = &state.lanes[lane];
-            let next = lane.other(system);
-            let d = ly + lane.length_ly;
-            if d <= max_ly && best.get(&next).is_none_or(|&b| d < b) {
-                best.insert(next, d);
-                heap.push(Reverse((d.to_bits(), next)));
+    routes::search(
+        state,
+        origin,
+        |lane| lane.length_ly,
+        |step| {
+            if step.cost > max_ly {
+                return Visit::Stop;
             }
-        }
-    }
+            out.push((step.system, step.cost));
+            Visit::Expand
+        },
+    );
     out
 }
 
@@ -450,7 +458,7 @@ pub fn add_company(state: &mut GalaxyState, mut company: Company) -> CompanyId {
     key
 }
 
-fn fleet_index(state: &GalaxyState, company: CompanyId, fleet: u32) -> Option<usize> {
+pub(crate) fn fleet_index(state: &GalaxyState, company: CompanyId, fleet: u32) -> Option<usize> {
     state
         .companies
         .get(company)?
@@ -473,25 +481,45 @@ pub fn trade(state: &mut GalaxyState) {
         match event.kind {
             EventKind::Arrive => arrive(state, &contracts, &board, event.company, n),
             EventKind::Review => review(state, &contracts, &board, event.company, n),
+            EventKind::Enter => crate::bubble::enter(state, (event.company, event.fleet)),
         }
     }
+    crate::bubble::step(state, &contracts, &board);
     found_companies(state);
     crate::economy::update_all_prices(state);
 }
 
 fn arrive(state: &mut GalaxyState, contracts: &Contracts, board: &Board, key: CompanyId, n: usize) {
     let today = state.time;
-    let Location::Travelling { to, arrive, jumps } = state.companies[key].fleets[n].at else {
+    let Location::Travelling {
+        to, arrive, jumps, ..
+    } = state.companies[key].fleets[n].at
+    else {
         return;
     };
     if arrive != today {
         return;
     }
+    if jumps && !roll_losses(state, key, n, to) {
+        return;
+    }
+    dock(state, contracts, board, key, n, to, false);
+}
+
+/// A fleet reaches `to`, in either tier: sell, maybe buy a ship, and carry
+/// on. `replan` chooses a fresh route here whether or not a review is due,
+/// which is how fleets in the bubble trade.
+pub(crate) fn dock(
+    state: &mut GalaxyState,
+    contracts: &Contracts,
+    board: &Board,
+    key: CompanyId,
+    n: usize,
+    to: SettlementId,
+    replan: bool,
+) {
     if let Some(cargo) = state.companies[key].fleets[n].cargo {
         state.traffic.add(to, cargo.good, -cargo.amount);
-    }
-    if jumps && !lose_ships(state, key, n) {
-        return;
     }
     if !state.settlements.contains_key(to) {
         // Its destination is gone, and the fleet with it.
@@ -501,11 +529,43 @@ fn arrive(state: &mut GalaxyState, contracts: &Contracts, board: &Board, key: Co
     state.companies[key].fleets[n].at = Location::Docked(to);
     sell(state, contracts, key, n, to);
     buy_ship(state, key, n, to);
-    if state.companies[key].fleets[n].review_due {
+    if replan || state.companies[key].fleets[n].review_due {
         state.companies[key].fleets[n].review_due = false;
         choose_route(state, contracts, board, key, n, to);
     }
     run_route(state, contracts, key, n, to);
+}
+
+/// Roll for losses coming out of the lanes on the way to `to`, keeping
+/// [`Traffic`] in step with the cargo that's left. Returns whether any of
+/// the fleet survived.
+pub(crate) fn roll_losses(
+    state: &mut GalaxyState,
+    key: CompanyId,
+    n: usize,
+    to: SettlementId,
+) -> bool {
+    let before = state.companies[key].fleets[n].cargo;
+    let survived = lose_ships(state, key, n);
+    if let Some(cargo) = before {
+        let left = if survived {
+            state.companies[key].fleets[n]
+                .cargo
+                .map_or(0.0, |c| c.amount)
+        } else {
+            0.0
+        };
+        state.traffic.add(to, cargo.good, left - cargo.amount);
+    }
+    survived
+}
+
+/// A fleet bound for `to` is lost with everything aboard.
+pub(crate) fn lose_fleet(state: &mut GalaxyState, key: CompanyId, n: usize, to: SettlementId) {
+    if let Some(cargo) = state.companies[key].fleets[n].cargo {
+        state.traffic.add(to, cargo.good, -cargo.amount);
+    }
+    remove_fleet(state, key, n);
 }
 
 /// Roll for losses coming out of the lanes. Returns whether any of the
@@ -537,7 +597,8 @@ fn lose_ships(state: &mut GalaxyState, key: CompanyId, n: usize) -> bool {
 /// A fleet is gone. A company with no fleets left winds up, its money
 /// going home.
 fn remove_fleet(state: &mut GalaxyState, key: CompanyId, n: usize) {
-    state.companies[key].fleets.remove(n);
+    let fleet = state.companies[key].fleets.remove(n);
+    state.bubble.flights.remove(&(key, fleet.id));
     if !state.companies[key].fleets.is_empty() {
         return;
     }
@@ -570,7 +631,9 @@ fn review(state: &mut GalaxyState, contracts: &Contracts, board: &Board, key: Co
     );
     pay_upkeep(state, key, n);
     match state.companies[key].fleets[n].at {
-        Location::Travelling { .. } => state.companies[key].fleets[n].review_due = true,
+        Location::Travelling { .. } | Location::Flying { .. } => {
+            state.companies[key].fleets[n].review_due = true;
+        }
         Location::Docked(here) => {
             choose_route(state, contracts, board, key, n, here);
             run_route(state, contracts, key, n, here);
@@ -805,17 +868,33 @@ fn depart(
         Supply::Stock,
         1.0,
     );
-    let arrive = GalaxyTime::from_days(today.days() + u64::from(days.max(1)));
-    let fleet = &mut state.companies[key].fleets[n];
-    fleet.at = Location::Travelling { to, arrive, jumps };
-    let event = Event {
-        company: key,
-        fleet: fleet.id,
-        kind: EventKind::Arrive,
-    };
+    let fleet = &state.companies[key].fleets[n];
+    let id = fleet.id;
     if let Some(cargo) = fleet.cargo {
         state.traffic.add(to, cargo.good, cargo.amount);
     }
+    // Setting out from inside the bubble: fly it.
+    if crate::bubble::contains(state, state.settlements[here].system)
+        && crate::bubble::launch(state, (key, id), here, to, jumps)
+    {
+        return;
+    }
+    let arrive = GalaxyTime::from_days(today.days() + u64::from(days.max(1)));
+    state.companies[key].fleets[n].at = Location::Travelling {
+        from: here,
+        depart: today,
+        to,
+        arrive,
+        jumps,
+    };
+    // A trip that passes through the bubble enters it on the way; that
+    // event goes first, so it runs before an arrival on the same day.
+    crate::bubble::watch(state, (key, id));
+    let event = Event {
+        company: key,
+        fleet: id,
+        kind: EventKind::Arrive,
+    };
     state.calendar.schedule(today, arrive, event);
 }
 

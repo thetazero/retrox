@@ -32,12 +32,10 @@
 //! The board is a pure function of the galaxy state, so the same state
 //! shows the same board (DESIGN §5.1).
 
-use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap};
-
 use serde::{Deserialize, Serialize};
 
 use crate::economy::Good;
+use crate::routes::{self, Visit};
 use crate::settlement::{SettlementId, Site};
 use crate::{EconomyModel, GalaxyState, GalaxyTime, SystemId};
 
@@ -240,28 +238,20 @@ fn routes(
     origin: SystemId,
     lane_days: impl Fn(f64) -> f64,
 ) -> Vec<(SystemId, u32, f64)> {
-    let mut best: HashMap<SystemId, (f64, u32)> = HashMap::from([(origin, (0.0, 0))]);
-    let mut heap = BinaryHeap::from([Reverse((0.0f64.to_bits(), 0u32, origin))]);
     let mut out = Vec::new();
-    while let Some(Reverse((bits, jumps, system))) = heap.pop() {
-        let days = f64::from_bits(bits);
-        if best.get(&system).is_some_and(|&(b, _)| b < days) {
-            continue;
-        }
-        out.push((system, jumps, days));
-        if jumps >= MAX_JUMPS {
-            continue;
-        }
-        for &lane in &state.systems[system].lanes {
-            let lane = &state.lanes[lane];
-            let next = lane.other(system);
-            let d = days + lane_days(lane.length_ly);
-            if best.get(&next).is_none_or(|&(b, _)| d < b) {
-                best.insert(next, (d, jumps + 1));
-                heap.push(Reverse((d.to_bits(), jumps + 1, next)));
+    routes::search(
+        state,
+        origin,
+        |lane| lane_days(lane.length_ly),
+        |step| {
+            out.push((step.system, step.jumps, step.cost));
+            if step.jumps >= MAX_JUMPS {
+                Visit::Leaf
+            } else {
+                Visit::Expand
             }
-        }
-    }
+        },
+    );
     out
 }
 

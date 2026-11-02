@@ -11,7 +11,7 @@ use std::f32::consts::{FRAC_PI_2, PI, TAU};
 use glam::{Mat4, Quat, Vec3};
 use retrox_sim::ship::{Loadout, Module, Position, SlotKind};
 
-use super::kit::{bell, container, flank, gun, radar, shield, soot, stencil};
+use super::kit::{bell, container, flank, gun, profile, radar, shield, soot, stencil};
 use super::{Placed, at, is_laser, placed, scale};
 use crate::meshes::{
     Mesh, Paint, ShipShape, boxed, cube, cylinder, fin, icosphere, lathe, quad, strut, torus,
@@ -39,22 +39,6 @@ fn k(module: &Module) -> f32 {
 fn smooth(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
-}
-
-/// `(z, radius(z))` from `z0` to `z1` in `n` steps.
-fn profile(
-    radius: &dyn Fn(f32) -> f32,
-    z0: f32,
-    z1: f32,
-    n: usize,
-    inflate: f32,
-) -> Vec<(f32, f32)> {
-    (0..=n)
-        .map(|i| {
-            let z = z0 + (z1 - z0) * i as f32 / n as f32;
-            (z, radius(z) + inflate)
-        })
-        .collect()
 }
 
 /// A strip on a body of revolution about `axis` (a point on the Z axis

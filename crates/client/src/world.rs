@@ -24,7 +24,14 @@
 //! place it arrived at or launched from. The frame moves with that place,
 //! so nearby things hold still while you fly.
 
+mod field;
+mod pilot;
+mod routing;
+#[cfg(test)]
+mod tests;
+
 use std::sync::LazyLock;
+use std::time::{Duration, Instant};
 
 use glam::{DQuat, DVec3};
 use retrox_sim::ship::ShipStats;
@@ -32,10 +39,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::contracts;
 use crate::hangar::{self, Job, Player};
-use crate::mining::{self, Mining};
+use crate::mining::Mining;
+use crate::traffic::Traffic;
 use retrox_gen::{GalaxyConfig, Rock, generate, rocks};
+use retrox_sim::bubble;
 use retrox_sim::economy::Good;
-use retrox_sim::flight::{self, Goal, Kinematics};
+use retrox_sim::flight::Kinematics;
 use retrox_sim::freight::{self, Offer};
 use retrox_sim::{
     BodyId, BodyKind, FieldId, GalaxyState, GalaxyTime, SettlementId, Site, StarClass, SystemId,
@@ -46,21 +55,16 @@ pub const AU: f64 = 1.495_978_707e11;
 pub const SECONDS_PER_DAY: f64 = 86_400.0;
 const SOLAR_RADIUS_M: f64 = 6.957e8;
 
-/// Top of the fine-control range, m/s (throttle 0.5).
-pub const COMBAT_SPEED: f64 = 500.0;
-/// Top speed at full throttle, m/s.
-pub const CRUISE_SPEED: f64 = 150_000.0;
-const BOOST: f64 = 2.0;
-const ACCEL: f64 = 90.0;
-const STRAFE_SPEED: f64 = 80.0;
-/// Pitch, yaw, roll rates at full stick, rad/s.
-const TURN_RATES: DVec3 = DVec3::new(1.3, 0.9, 2.2);
 /// Gravity wells extend this many radii from the centre of a star or body.
 pub const WELL_RADII: f64 = 4.0;
-/// The ship's main drive under autopilot, m/s²: about a day per AU.
-const DRIVE_ACCEL: f64 = ACCEL;
+pub use pilot::{COMBAT_SPEED, look_rotation};
+
+/// Real seconds the hyperlane sequence plays for.
 pub const JUMP_DURATION: f32 = 4.0;
 const LANDING_DURATION: f32 = 3.0;
+/// How long a frame may spend ticking the sim through a wait, so a long
+/// wait plays out over several frames instead of freezing one.
+const WAIT_BUDGET: Duration = Duration::from_millis(12);
 /// Days the galaxy runs before the player starts (see [`World::new`]).
 const WARM_UP_DAYS: f64 = 30.0;
 /// The ship the flight model is tuned for: the starting ship, stock.
@@ -170,17 +174,6 @@ pub struct Ship {
     pub flight_assist: bool,
 }
 
-/// Forward speed for a throttle setting: linear up to [`COMBAT_SPEED`] at
-/// 0.5, then exponential up to [`CRUISE_SPEED`] at 1.0.
-pub fn throttle_speed(throttle: f64) -> f64 {
-    if throttle <= 0.5 {
-        throttle / 0.5 * COMBAT_SPEED
-    } else {
-        let t = (throttle - 0.5) / 0.5;
-        COMBAT_SPEED * (CRUISE_SPEED / COMBAT_SPEED).powf(t)
-    }
-}
-
 /// Player input for one frame.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Controls {
@@ -207,7 +200,11 @@ pub enum Action {
     Target(Place),
     ToggleCamera,
     ToggleFlightAssist,
+    /// Wait docked or landed for up to this many days. The days pass over
+    /// the next frames (see [`World::waiting`]).
     Wait(u64),
+    /// Stop a wait early.
+    StopWaiting,
     /// Open or close the galaxy map.
     ToggleMap,
     /// Plot a course along the hyperlanes to a system, or clear it.
@@ -255,15 +252,6 @@ pub struct Prompts {
     pub fast_travel: Option<Place>,
 }
 
-/// A hyperlane out of the current system.
-#[derive(Clone, Debug)]
-pub struct LaneInfo {
-    pub to: SystemId,
-    pub name: String,
-    pub length_ly: f64,
-    pub days: f64,
-}
-
 pub struct World {
     pub galaxy: GalaxyState,
     pub system: SystemId,
@@ -302,6 +290,23 @@ pub struct World {
     /// What the board was drawn up for: settlement, day, and the player's
     /// hold and contracts then.
     board_key: Option<(SettlementId, u64, u64, usize)>,
+    /// The bubble's fleets flying in this system.
+    pub traffic: Traffic,
+    /// A wait in progress, if any.
+    pub waiting: Option<Waiting>,
+    /// The galaxy clock when the current hyperlane jump began: the jump's
+    /// days pass over its sequence, not all in its last frame.
+    jump_start_s: Option<f64>,
+}
+
+/// A wait in progress (DESIGN §3): docked or landed only, a day at a time,
+/// stopping on the day a contract falls due.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Waiting {
+    /// Days asked for.
+    pub days: u64,
+    /// Days passed so far.
+    pub waited: u64,
 }
 
 impl World {
@@ -340,10 +345,13 @@ impl World {
             timer: 0.0,
         };
         let mut world = Self::from_parts(galaxy, system, clock_s, ship, mode, Player::new());
+        // No bubble until the player arrives.
+        bubble::set_centre(&mut world.galaxy, None);
         // Generation leaves every market exactly on target. Let the galaxy
         // run for a while first, so the player arrives in a going concern:
         // traders under way, some markets short, others with goods to spare.
         world.advance_clock(WARM_UP_DAYS * SECONDS_PER_DAY);
+        bubble::set_centre(&mut world.galaxy, Some(system));
         world.refresh_board();
         world
     }
@@ -383,7 +391,12 @@ impl World {
             course: None,
             board: Vec::new(),
             board_key: None,
+            waiting: None,
+            jump_start_s: None,
+            traffic: Traffic::default(),
         };
+        // Traders near the player are ships (DESIGN §5.2).
+        bubble::set_centre(&mut world.galaxy, Some(system));
         world.update_field();
         world.refresh_board();
         world
@@ -398,7 +411,7 @@ impl World {
     }
 
     pub fn star_radius_m(&self) -> f64 {
-        star_radius_suns(self.star()) * SOLAR_RADIUS_M
+        self.star().radius_suns() * SOLAR_RADIUS_M
     }
 
     /// Position of a place in the system frame (metres, y up).
@@ -430,18 +443,6 @@ impl World {
         const H_DAYS: f64 = 1e-3;
         (self.position_at(place, t + H_DAYS) - self.position_at(place, t - H_DAYS))
             / (2.0 * H_DAYS * SECONDS_PER_DAY)
-    }
-
-    /// Where the autopilot brings the ship to rest for `place` at galaxy
-    /// day `t`: on the arrival sphere, on the ship's side of it.
-    fn fast_travel_goal(&self, place: Place, ship: DVec3, t: f64) -> Goal {
-        let centre = self.position_at(place, t);
-        let side = (ship - centre).normalize_or(DVec3::Z);
-        let pos = centre + side * self.arrival_distance(place);
-        Goal {
-            pos: pos.to_array(),
-            vel: self.velocity_at(place, t).to_array(),
-        }
     }
 
     pub fn name(&self, place: Place) -> String {
@@ -536,101 +537,6 @@ impl World {
 
     pub fn distance_to(&self, place: Place) -> f64 {
         (self.position(place) - self.ship_position()).length()
-    }
-
-    /// Days to cross a lane, by the jump drive's speed with the ship's mass,
-    /// relative to the starting ship.
-    pub fn jump_days(&self, length_ly: f64) -> f64 {
-        let speed = self.stats().jump_speed();
-        let slower = if speed > 0.0 {
-            (REFERENCE.jump_speed() / speed).clamp(0.5, 3.0)
-        } else {
-            1.0
-        };
-        (jump_days(length_ly) * slower).round().max(1.0)
-    }
-
-    pub fn lanes(&self) -> Vec<LaneInfo> {
-        self.galaxy.systems[self.system]
-            .lanes
-            .iter()
-            .map(|&l| {
-                let lane = &self.galaxy.lanes[l];
-                let to = lane.other(self.system);
-                LaneInfo {
-                    to,
-                    name: self.galaxy.systems[to].name.clone(),
-                    length_ly: lane.length_ly,
-                    days: self.jump_days(lane.length_ly),
-                }
-            })
-            .collect()
-    }
-
-    /// The quickest way along the hyperlanes from here to `to` (by days in
-    /// transit): every system on the way, starting here and ending at `to`.
-    pub fn route(&self, to: SystemId) -> Option<Vec<SystemId>> {
-        use std::cmp::Reverse;
-        use std::collections::{BinaryHeap, HashMap};
-        let from = self.system;
-        let mut best: HashMap<SystemId, (f64, SystemId)> = HashMap::from([(from, (0.0, from))]);
-        let mut heap = BinaryHeap::from([Reverse((0.0f64.to_bits(), from))]);
-        while let Some(Reverse((bits, system))) = heap.pop() {
-            let days = f64::from_bits(bits);
-            if best.get(&system).is_some_and(|&(b, _)| b < days) {
-                continue;
-            }
-            if system == to {
-                let mut path = vec![to];
-                while let Some(&last) = path.last()
-                    && last != from
-                {
-                    path.push(best[&last].1);
-                }
-                path.reverse();
-                return Some(path);
-            }
-            for &lane in &self.galaxy.systems[system].lanes {
-                let lane = &self.galaxy.lanes[lane];
-                let next = lane.other(system);
-                let d = days + jump_days(lane.length_ly);
-                if best.get(&next).is_none_or(|&(b, _)| d < b) {
-                    best.insert(next, (d, system));
-                    heap.push(Reverse((d.to_bits(), next)));
-                }
-            }
-        }
-        None
-    }
-
-    /// The galaxy map can be opened: flying normally, docked, or landed.
-    pub fn map_available(&self) -> bool {
-        match self.mode {
-            Mode::Normal | Mode::Docked(_) => true,
-            Mode::Landed { timer, .. } => timer <= 0.0,
-            _ => false,
-        }
-    }
-
-    /// The next system on the plotted course.
-    pub fn next_hop(&self) -> Option<SystemId> {
-        self.route(self.course?)?.get(1).copied()
-    }
-
-    /// Total days in transit along a route (hops only, not flying to the
-    /// edge of each system's well).
-    pub fn route_days(&self, route: &[SystemId]) -> f64 {
-        route
-            .windows(2)
-            .map(|hop| {
-                self.galaxy.systems[hop[0]]
-                    .lanes
-                    .iter()
-                    .map(|&l| &self.galaxy.lanes[l])
-                    .find(|l| l.other(hop[0]) == hop[1])
-                    .map_or(0.0, |l| jump_days(l.length_ly))
-            })
-            .sum()
     }
 
     pub fn prompts(&self) -> Prompts {
@@ -756,6 +662,10 @@ impl World {
                     self.say("Can't jump: no jump drive fitted");
                 } else if self.lanes().iter().any(|l| l.to == to) {
                     self.map_open = false;
+                    self.jump_start_s = Some(self.clock_s);
+                    // Days in the lanes: no bubble until we come out the
+                    // other side.
+                    bubble::set_centre(&mut self.galaxy, None);
                     self.mode = Mode::Jumping {
                         to,
                         timer: JUMP_DURATION,
@@ -763,32 +673,16 @@ impl World {
                 }
             }
             Action::Wait(days) => {
-                if matches!(self.mode, Mode::Docked(_) | Mode::Landed { .. }) {
-                    // Waiting stops when a contract falls due (DESIGN §3).
-                    let mut waited = 0;
-                    let mut due = None;
-                    while waited < days {
-                        self.advance_clock(SECONDS_PER_DAY);
-                        waited += 1;
-                        let today = self.galaxy.time;
-                        due = self
-                            .player
-                            .contracts
-                            .iter()
-                            .find(|c| c.offer.deadline == today || c.fails_on() == today)
-                            .map(|c| self.galaxy.settlements[c.offer.to].name.clone());
-                        if due.is_some() {
-                            break;
-                        }
-                    }
-                    let plural = if waited == 1 { "" } else { "s" };
-                    match due {
-                        Some(to) if waited < days => self.say(format!(
-                            "Stopped waiting after {waited} day{plural}: a contract to {to} is due"
-                        )),
-                        _ => self.say(format!("Waited {waited} day{plural}")),
-                    }
-                    self.settle_contracts();
+                if days > 0 && self.waiting.is_none() && self.docked_at().is_some() {
+                    // Time compresses: the bubble folds back into the coarse
+                    // tier while we wait, and comes back after (DESIGN §5.2).
+                    bubble::set_centre(&mut self.galaxy, None);
+                    self.waiting = Some(Waiting { days, waited: 0 });
+                }
+            }
+            Action::StopWaiting => {
+                if let Some(w) = self.waiting.take() {
+                    self.end_wait(w, None);
                 }
             }
             Action::Open(screen) => {
@@ -802,6 +696,7 @@ impl World {
                     return;
                 };
                 let capacity = self.stats().cargo_t;
+                let before = self.player.credits;
                 let settlement = &mut self.galaxy.settlements[here];
                 let model = self.galaxy.factions[settlement.owner].economy;
                 let result = crate::trade::trade(
@@ -812,6 +707,7 @@ impl World {
                     good,
                     amount,
                 );
+                self.player.progress.earned |= self.player.credits > before;
                 match result {
                     Ok(text) | Err(text) => self.say(text),
                 }
@@ -853,16 +749,72 @@ impl World {
         }
     }
 
+    /// Pass as many days of a wait as fit in this frame's budget.
+    fn wait_some(&mut self) {
+        let started = Instant::now();
+        while let Some(mut w) = self.waiting {
+            if self.docked_at().is_none() {
+                // Waiting is docked-only (DESIGN §3): leaving ends it.
+                self.waiting = None;
+                self.end_wait(w, None);
+                return;
+            }
+            self.advance_clock(SECONDS_PER_DAY);
+            w.waited += 1;
+            let today = self.galaxy.time;
+            let due = self
+                .player
+                .contracts
+                .iter()
+                .find(|c| c.offer.deadline == today || c.fails_on() == today)
+                .map(|c| self.galaxy.settlements[c.offer.to].name.clone());
+            if due.is_some() || w.waited >= w.days {
+                self.waiting = None;
+                self.end_wait(w, due);
+                return;
+            }
+            self.waiting = Some(w);
+            if started.elapsed() >= WAIT_BUDGET {
+                return;
+            }
+        }
+    }
+
+    /// Wait `days` and run the wait to its end at once (for tests).
+    #[cfg(test)]
+    pub fn wait_days(&mut self, days: u64) {
+        self.act(Action::Wait(days));
+        while self.waiting.is_some() {
+            self.wait_some();
+        }
+    }
+
+    /// Say how a wait ended, and settle contracts it made due.
+    fn end_wait(&mut self, w: Waiting, due: Option<String>) {
+        bubble::set_centre(&mut self.galaxy, Some(self.system));
+        let waited = w.waited;
+        let plural = if waited == 1 { "" } else { "s" };
+        match due {
+            Some(to) if waited < w.days => self.say(format!(
+                "Stopped waiting after {waited} day{plural}: a contract to {to} is due"
+            )),
+            _ => self.say(format!("Waited {waited} day{plural}")),
+        }
+        self.settle_contracts();
+    }
+
     /// Deliver contracts bound for where we're docked or landed, and fail
     /// the ones past their grace period.
     fn settle_contracts(&mut self) {
         if self.player.contracts.is_empty() {
             return;
         }
+        let before = self.player.credits;
         let mut said = contracts::expire(&mut self.player, &mut self.galaxy);
         if let Some(here) = self.docked_at() {
             said.extend(contracts::deliver(&mut self.player, &mut self.galaxy, here));
         }
+        self.player.progress.earned |= self.player.credits > before;
         if !said.is_empty() {
             self.say(said.join(" · "));
         }
@@ -923,83 +875,6 @@ impl World {
         false
     }
 
-    /// The fast-travel drive's acceleration for this ship.
-    fn drive_accel(&self) -> f64 {
-        DRIVE_ACCEL * self.handling().0
-    }
-
-    /// How the ship handles next to the starting ship: thrust and turning
-    /// multipliers, within limits so every ship stays flyable.
-    pub fn handling(&self) -> (f64, f64) {
-        let (s, r) = (self.stats(), &*REFERENCE);
-        let thrust = (s.acceleration() / r.acceleration()).clamp(0.3, 2.5);
-        let turn = (s.angular_acceleration() / r.angular_acceleration())
-            .sqrt()
-            .clamp(0.3, 1.8);
-        (thrust, turn)
-    }
-
-    fn start_fast_travel(&mut self, target: Place) {
-        let t = self.t_days();
-        let pos = self.ship_position();
-        let ship = Kinematics {
-            pos: pos.to_array(),
-            vel: (self.ship.vel + self.velocity_at(self.ship.frame, t)).to_array(),
-        };
-        // Pick how fast time runs so the flight plays out in a few seconds.
-        // Time it by flying it once ahead: a ship already moving fast (say,
-        // just dropped out of another trip) must brake and come back, which
-        // can take far longer than the distance alone suggests.
-        let distance = (self.position(target) - pos).length();
-        let accel = self.drive_accel();
-        let mut rehearsal = ship;
-        let estimate = flight::fly(&mut rehearsal, accel, 1e10, |s, k| {
-            self.fast_travel_goal(target, DVec3::from_array(k.pos), t + s / SECONDS_PER_DAY)
-        })
-        .unwrap_or_else(|| flight::trip_seconds(distance, accel));
-        let real = (2.0 + (distance / 1e7).max(1.0).log10() * 1.2).min(7.0);
-        self.ship.spin = DVec3::ZERO;
-        self.ship.throttle = 0.0;
-        self.mode = Mode::FastTravel(FastTravel {
-            target,
-            ship,
-            depart_s: self.clock_s,
-            warp: estimate / real,
-            elapsed: 0.0,
-        });
-    }
-
-    /// One frame of fast travel: fly `dt` real seconds of sped-up flight.
-    fn fast_travel(&mut self, mut trip: FastTravel, dt: f64) {
-        trip.elapsed += dt as f32;
-        let t0 = self.t_days();
-        let target = trip.target;
-        let accel = self.drive_accel();
-        let arrived = flight::fly(&mut trip.ship, accel, dt * trip.warp, |t, ship| {
-            let pos = DVec3::from_array(ship.pos);
-            self.fast_travel_goal(target, pos, t0 + t / SECONDS_PER_DAY)
-        });
-        // Galaxy time passes by exactly as long as the ship flew.
-        self.advance_clock(arrived.unwrap_or(dt * trip.warp));
-        let pos = DVec3::from_array(trip.ship.pos);
-        let vel = DVec3::from_array(trip.ship.vel);
-        // Face the way the drive is pushing: out along the route, then
-        // flipped round to brake.
-        let goal = self.fast_travel_goal(target, pos, self.t_days());
-        let thrust = DVec3::from_array(flight::autopilot(&trip.ship, &goal, accel, 1.0));
-        if thrust.length() > accel * 0.1 {
-            let k = 1.0 - (-4.0 * dt).exp();
-            self.ship.rot = self.ship.rot.slerp(look_rotation(thrust), k).normalize();
-        }
-        self.ship.frame = Place::Star;
-        self.ship.rel = pos;
-        self.ship.vel = vel;
-        match arrived {
-            Some(_) => self.arrive_fast_travel(target),
-            None => self.mode = Mode::FastTravel(trip),
-        }
-    }
-
     pub fn update(&mut self, dt: f64, controls: Controls) {
         self.bump = 0.0;
         if let Some((_, t)) = &mut self.message {
@@ -1031,243 +906,21 @@ impl World {
                     self.arrive_jump(to);
                 } else {
                     self.mode = Mode::Jumping { to, timer };
+                    self.jump_progress(to, 1.0 - f64::from(timer / JUMP_DURATION));
                 }
             }
         }
+        self.wait_some();
 
+        self.traffic.update(&self.galaxy, self.system, self.clock_s);
         self.settle_contracts();
         self.refresh_board();
         self.update_field();
         self.mine(dt, controls.fire);
         self.update_camera(dt);
-    }
-
-    /// Switch the ship into `frame`, keeping where it is and how it moves.
-    fn enter_frame(&mut self, frame: Place) {
-        let t = self.t_days();
-        let pos = self.ship_position();
-        let vel = self.ship.vel + self.velocity_at(self.ship.frame, t);
-        self.ship.frame = frame;
-        self.ship.rel = pos - self.position(frame);
-        self.ship.vel = vel - self.velocity_at(frame, t);
-    }
-
-    /// Stop the autopilot mid-trip: the ship carries on from wherever it
-    /// is, as fast as it's going.
-    fn drop_out(&mut self, _trip: FastTravel) {
-        self.mode = Mode::Normal;
-        let speed = self.ship.vel.length() / 1000.0;
-        self.say(format!("Dropped out of fast travel at {speed:.0} km/s"));
-    }
-
-    fn arrive_fast_travel(&mut self, target: Place) {
-        // At rest relative to the target, within a few m/s: carry on from
-        // exactly there.
-        self.enter_frame(target);
-        self.mode = Mode::Normal;
-        let name = self.name(target);
-        self.say(format!("Arrived at {name}"));
-    }
-
-    fn steer(&mut self, dt: f64, c: Controls) {
-        let target = c.stick * TURN_RATES * self.handling().1;
-        let k = 1.0 - (-6.0 * dt).exp();
-        self.ship.spin += (target - self.ship.spin) * k;
-        let s = self.ship.spin;
-        // Local axes: x = pitch, y = yaw (negated: + yaw turns right), z = roll.
-        let delta = DQuat::from_scaled_axis(DVec3::new(s.x, -s.y, -s.z) * dt);
-        self.ship.rot = (self.ship.rot * delta).normalize();
-        self.ship.throttle = (self.ship.throttle + c.throttle_delta * dt * 0.4).clamp(-0.3, 1.0);
-    }
-
-    fn fly(&mut self, dt: f64, c: Controls) {
-        // Boost only helps in the fine-control range.
-        let boost = if c.boost && self.ship.throttle <= 0.5 {
-            BOOST
-        } else {
-            1.0
-        };
-        let forward = if self.ship.throttle >= 0.0 {
-            throttle_speed(self.ship.throttle)
-        } else {
-            self.ship.throttle / 0.5 * COMBAT_SPEED
-        };
-        let local = DVec3::new(
-            c.strafe * STRAFE_SPEED,
-            c.lift * STRAFE_SPEED,
-            -forward * boost,
-        );
-        let desired = self.ship.rot * local;
-        // Acceleration scales with the speed being asked for, so cruise
-        // speeds are reached in a few seconds without making fine control
-        // twitchy.
-        let accel = (ACCEL * boost * self.handling().0)
-            .max(desired.length().max(self.ship.vel.length()) * 0.5);
-        if self.ship.flight_assist {
-            let step = (desired - self.ship.vel).clamp_length_max(accel * dt);
-            self.ship.vel += step;
-        } else {
-            let thrust = self.ship.rot * DVec3::new(c.strafe, c.lift, -c.throttle_delta.max(0.0));
-            self.ship.vel += thrust * accel * dt;
-        }
-        self.ship.rel += self.ship.vel * dt;
-        self.collide();
-    }
-
-    /// Push the ship out of the star, bodies, stations and rocks.
-    fn collide(&mut self) {
-        let pos = self.ship_position();
-        let mut solids: Vec<(DVec3, f64)> = vec![(DVec3::ZERO, self.star_radius_m() * 1.02)];
-        for &b in &self.view.bodies {
-            solids.push((
-                self.position(Place::Body(b)),
-                self.place_radius(Place::Body(b)) + 30.0,
-            ));
-        }
-        for &s in &self.view.stations {
-            solids.push((
-                self.position(Place::Station(s)),
-                self.station_size_m(s) * 0.35,
-            ));
-        }
-        if let Some((field, rocks)) = &self.field_rocks {
-            let center = self.position(Place::Field(*field));
-            for (i, rock) in rocks.iter().enumerate() {
-                if !self.mining.is_broken(*field, i) {
-                    solids.push((center + rock_offset(rock), rock.radius_m + 8.0));
-                }
-            }
-            for (pos, radius) in self.mining.frag_solids(*field) {
-                solids.push((center + pos, radius + 4.0));
-            }
-        }
-        for (center, radius) in solids {
-            let d = pos - center;
-            let len = d.length();
-            if len < radius && len > 0.0 {
-                let n = d / len;
-                self.ship.rel += n * (radius - len);
-                let into = self.ship.vel.dot(n);
-                if into < 0.0 {
-                    self.bump = self.bump.max(-into);
-                    self.ship.vel -= n * into * 1.3;
-                }
-            }
-        }
-    }
-
-    fn update_field(&mut self) {
-        let pos = self.ship_position();
-        let inside = self.view.fields.iter().copied().find(|&f| {
-            (self.position(Place::Field(f)) - pos).length()
-                < self.place_radius(Place::Field(f)) + 50e3
-        });
-        match (inside, &self.field_rocks) {
-            (Some(f), Some((current, _))) if f == *current => {}
-            (Some(f), _) => self.field_rocks = Some((f, rocks(&self.galaxy.fields[f]))),
-            (None, Some((left, _))) => {
-                self.mining.leave(*left);
-                self.field_rocks = None;
-            }
-            (None, None) => {}
-        }
-    }
-
-    /// Where the mining laser's muzzle is, in ship space (metres, nose
-    /// toward -Z): the first fitted mining laser's slot, else the nose.
-    pub fn laser_muzzle(&self) -> DVec3 {
-        use retrox_sim::ship::Function;
-        self.player
-            .ship
-            .fit
-            .mounts()
-            .filter_map(|(_, s)| s)
-            .flat_map(|s| s.slots())
-            .find_map(|(slot, module)| {
-                matches!(module?.function, Function::MiningLaser { .. }).then(|| {
-                    let [x, y, z] = slot.position_m;
-                    DVec3::new(x, y, -z)
-                })
-            })
-            .unwrap_or(DVec3::new(0.0, 0.0, -self.stats().length_m / 2.0))
-    }
-
-    /// One frame of the mining laser and the tractor.
-    fn mine(&mut self, dt: f64, fire: bool) {
-        let stats = self.stats();
-        self.beam = None;
-        let Some((field, rocks)) = &self.field_rocks else {
-            if let Some(text) = self
-                .mining
-                .idle(dt, &stats, fire && self.mode == Mode::Normal)
-            {
-                self.say(text);
-            }
-            if self.mining.firing {
-                let muzzle = self.ship.rot * self.laser_muzzle();
-                let forward = self.ship.rot * DVec3::NEG_Z;
-                self.beam = Some((muzzle, muzzle + forward * stats.mining_range_m));
-            }
-            return;
-        };
-        let field = *field;
-        let centre = self.position(Place::Field(field));
-        let ship = self.ship_position() - centre;
-        let muzzle = self.ship.rot * self.laser_muzzle();
-        let forward = self.ship.rot * DVec3::NEG_Z;
-        let miner = mining::Miner {
-            nose: ship + muzzle,
-            forward,
-            centre: ship,
-            reach: stats.length_m * 0.6 + 6.0,
-            free_t: (stats.cargo_t - self.player.cargo_t()).max(0.0),
-            firing: fire && self.mode == Mode::Normal,
-        };
-        let out = self.mining.update(
-            dt,
-            field,
-            &self.galaxy.fields[field],
-            rocks,
-            self.clock_s,
-            &stats,
-            miner,
-        );
-        for (good, t) in out.collected {
-            self.player.cargo[good] += t;
-        }
-        self.ship.vel += out.kick;
-        if let Some(text) = out.messages.into_iter().last() {
-            self.say(text);
-        }
-        if self.mining.firing {
-            let end = match self.mining.aim {
-                Some(aim) if aim.distance <= stats.mining_range_m => aim.point - ship,
-                _ => muzzle + forward * stats.mining_range_m,
-            };
-            self.beam = Some((muzzle, end));
-        }
-    }
-
-    fn scan(&mut self) {
-        if self.mode != Mode::Normal {
-            return;
-        }
-        let Some((field, rocks)) = &self.field_rocks else {
-            self.say("Nothing to prospect: fly into an asteroid field");
-            return;
-        };
-        let centre = self.position(Place::Field(*field));
-        let from = self.ship_position() - centre;
-        let found = self.mining.scan(
-            *field,
-            &self.galaxy.fields[*field],
-            rocks,
-            self.clock_s,
-            from,
-        );
-        if let Some(n) = found {
-            self.say(format!("Prospector: {n} rocks read"));
-        }
+        let mut progress = std::mem::take(&mut self.player.progress);
+        progress.observe(self);
+        self.player.progress = progress;
     }
 
     /// The best price a tonne of `good` sells for in this system, and
@@ -1325,6 +978,56 @@ impl World {
         true
     }
 
+    /// Start in space alongside a trader fleet, drifting with it (for
+    /// testing the bubble's traffic). Returns false if none is flying.
+    pub fn start_by_traffic(&mut self) -> bool {
+        for _ in 0..4 {
+            self.traffic.update(&self.galaxy, self.system, self.clock_s);
+            if !self.traffic.contacts.is_empty() {
+                break;
+            }
+            let Some(system) = self
+                .galaxy
+                .bubble
+                .flights
+                .values()
+                .find_map(|f| match f.stage {
+                    bubble::Stage::Flying { system, .. } => Some(system),
+                    bubble::Stage::Jumping { .. } => None,
+                })
+            else {
+                return false;
+            };
+            self.arrive_jump(system);
+        }
+        let Some(c) = self
+            .traffic
+            .contacts
+            .iter()
+            .max_by_key(|c| c.ships)
+            .cloned()
+        else {
+            return false;
+        };
+        // Off its flank and a little above, looking across at it, moving
+        // with it, flight assist off so we keep pace.
+        let length = c.fit.stats().length_m.max(10.0);
+        let across = c.vel.cross(DVec3::Y).normalize_or(DVec3::X);
+        let at = c.pos
+            + (across * 2.2 + DVec3::Y * 0.5 - c.vel.normalize_or(DVec3::Z) * 0.6)
+                * (length * (3.0 + f64::from(c.ships)));
+        self.mode = Mode::Normal;
+        self.ship.frame = Place::Star;
+        self.ship.rel = at;
+        self.ship.vel = c.vel;
+        self.ship.throttle = 0.0;
+        self.ship.flight_assist = false;
+        self.ship.rot = look_rotation(c.pos - at);
+        self.cam_rot = self.ship.rot;
+        self.message = None;
+        true
+    }
+
     /// Move to the first system with a station and dock there (for
     /// testing). Does nothing if there are no stations anywhere.
     pub fn start_at_station(&mut self) {
@@ -1337,40 +1040,6 @@ impl World {
             self.message = None;
             self.mode = Mode::Docked(station);
         }
-    }
-
-    fn arrive_jump(&mut self, to: SystemId) {
-        let from = self.system;
-        let days = self
-            .lanes()
-            .iter()
-            .find(|l| l.to == to)
-            .map_or(3.0, |l| l.days);
-        self.advance_clock(days * SECONDS_PER_DAY);
-
-        self.system = to;
-        self.view = SystemView::new(&self.galaxy, to);
-        self.system_generation += 1;
-        if let Some((left, _)) = self.field_rocks.take() {
-            self.mining.leave(left);
-        }
-        self.target = None;
-        if self.course == Some(to) {
-            self.course = None;
-        }
-        // Arrive on the side facing the system we came from, outside the
-        // star's well, facing the star.
-        let entry = galaxy_direction(&self.galaxy, to, from);
-        let distance = (self.well_radius(Place::Star) * 3.0).max(0.3 * AU);
-        self.ship.frame = Place::Star;
-        self.ship.rel = entry * distance;
-        self.ship.rot = look_rotation(-entry);
-        self.cam_rot = self.ship.rot;
-        self.ship.vel = DVec3::ZERO;
-        self.ship.throttle = 0.0;
-        self.mode = Mode::Normal;
-        let name = self.galaxy.systems[to].name.clone();
-        self.say(format!("Arrived at {name} after {days} days in transit"));
     }
 
     fn update_camera(&mut self, dt: f64) {
@@ -1417,478 +1086,4 @@ pub fn to_metres(p: [f64; 3]) -> DVec3 {
 
 pub fn rock_offset(rock: &Rock) -> DVec3 {
     DVec3::new(rock.offset[0], rock.offset[2], rock.offset[1])
-}
-
-/// Direction from one system toward another on the galaxy map, mapped into
-/// a system's frame.
-pub fn galaxy_direction(galaxy: &GalaxyState, here: SystemId, there: SystemId) -> DVec3 {
-    let (a, b) = (
-        galaxy.systems[here].position,
-        galaxy.systems[there].position,
-    );
-    DVec3::new(b.x - a.x, b.z - a.z, b.y - a.y).normalize_or(DVec3::Z)
-}
-
-/// Star radius in solar radii, by class (the sim doesn't model it).
-pub fn star_radius_suns(class: StarClass) -> f64 {
-    use StarClass::*;
-    match class {
-        O => 10.0,
-        B => 4.0,
-        A => 1.7,
-        F => 1.3,
-        G => 1.0,
-        K => 0.8,
-        M => 0.4,
-        WhiteDwarf => 0.012,
-        Neutron => 1.5e-5,
-        BlackHole => 4.3e-5,
-    }
-}
-
-/// Galaxy days a hyperlane jump takes (DESIGN §3: 2–14 days by length).
-pub fn jump_days(length_ly: f64) -> f64 {
-    (length_ly * 0.6).clamp(2.0, 14.0).round()
-}
-
-/// Rotation that points -Z along `dir`, keeping +Y roughly up.
-pub fn look_rotation(dir: DVec3) -> DQuat {
-    let f = dir.normalize_or(DVec3::NEG_Z);
-    let r = f.cross(DVec3::Y).normalize_or(DVec3::X);
-    let u = r.cross(f);
-    DQuat::from_mat3(&glam::DMat3::from_cols(r, u, -f))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn run(world: &mut World, seconds: f64) {
-        let dt = 1.0 / 60.0;
-        for _ in 0..(seconds / dt) as usize {
-            world.update(dt, Controls::default());
-        }
-    }
-
-    /// Somewhere outside every gravity well.
-    fn open_space(world: &mut World) {
-        world.ship.frame = Place::Star;
-        world.ship.rel = DVec3::new(0.0, 5.0 * AU, 0.0);
-        world.mode = Mode::Normal;
-        assert_eq!(world.current_well(), None);
-    }
-
-    #[test]
-    fn throttle_curve() {
-        assert_eq!(throttle_speed(0.0), 0.0);
-        assert!((throttle_speed(0.5) - COMBAT_SPEED).abs() < 1e-9);
-        assert!((throttle_speed(1.0) - CRUISE_SPEED).abs() < 1e-6);
-    }
-
-    #[test]
-    fn starts_landed_at_a_capital_city() {
-        let world = World::new(1);
-        let Mode::Landed { city, .. } = world.mode else {
-            panic!("should start landed");
-        };
-        assert!(world.galaxy.factions.values().any(|f| f.capital == city));
-    }
-
-    #[test]
-    fn can_leave_a_planets_well_after_launch() {
-        let mut world = World::new(1);
-        world.act(Action::Launch);
-        let well = world
-            .current_well()
-            .expect("launch puts us in orbit, inside the well");
-        let away = world.ship_position() - world.position(well);
-        world.ship.rot = look_rotation(away);
-        world.ship.throttle = 1.0;
-        run(&mut world, 180.0);
-        assert_eq!(
-            world.current_well(),
-            None,
-            "still in a well after 3 minutes"
-        );
-    }
-
-    #[test]
-    fn fast_travel_reaches_every_place_and_cannot_start_in_a_well() {
-        let mut world = World::new(1);
-        world.act(Action::Launch);
-        world.target = Some(Place::Star);
-        world.act(Action::FastTravel);
-        assert_eq!(
-            world.mode,
-            Mode::Normal,
-            "fast travel must not start inside a well"
-        );
-
-        for target in world.nav_places().into_iter().filter(|p| *p != Place::Star) {
-            open_space(&mut world);
-            world.target = Some(target);
-            let before = world.clock_s;
-            world.act(Action::FastTravel);
-            assert!(matches!(world.mode, Mode::FastTravel(_)), "{target:?}");
-            run(&mut world, 30.0);
-            assert_eq!(world.mode, Mode::Normal, "{target:?}");
-            let (d, expected) = (world.distance_to(target), world.arrival_distance(target));
-            assert!(
-                (d - expected).abs() < expected * 0.05 + 1.0,
-                "{}: arrived {d:.3e} m away, expected {expected:.3e}",
-                world.name(target)
-            );
-            assert!(world.clock_s > before, "galaxy time must pass");
-        }
-    }
-
-    #[test]
-    fn buy_and_refit_a_ship_at_the_starting_yard() {
-        let mut world = World::new(1);
-        let here = world.docked_at().expect("starts landed");
-        assert!(hangar::services(&world.galaxy.settlements[here].economy).shipyard);
-        // The yard builds hull over time; the cheapest ship is soon in stock.
-        let cheapest = hangar::lot().remove(0);
-        for _ in 0..60 {
-            if hangar::can_build(&world.galaxy.settlements[here].economy, &cheapest) {
-                break;
-            }
-            world.act(Action::Wait(1));
-        }
-        let credits = world.player.credits;
-        world.act(Action::Hangar(Job::BuyShip(cheapest.hull)));
-        assert_eq!(world.player.ship.fit.hull().id, cheapest.hull.id);
-        assert_eq!(world.player.credits, credits - cheapest.price);
-        assert_eq!(world.player.stored.len(), 1);
-
-        // Strip the engine: the ship can't leave until one is fitted again.
-        let (mount, slot) = engine_slot(&world);
-        let engine = hangar::module_in(&world.player.ship.fit, mount, slot).unwrap();
-        world.act(Action::Hangar(Job::Strip { mount, slot }));
-        world.act(Action::Launch);
-        assert!(matches!(world.mode, Mode::Landed { .. }));
-        world.act(Action::Hangar(Job::Fit {
-            mount,
-            slot,
-            module: engine,
-        }));
-        world.act(Action::Launch);
-        assert_eq!(world.mode, Mode::Normal);
-    }
-
-    #[test]
-    fn trading_from_the_station_menu() {
-        let mut world = World::new(1);
-        assert_eq!(world.screen, Screen::Hub);
-        world.act(Action::Open(Screen::Trade));
-        assert_eq!(world.screen, Screen::Trade);
-        let credits = world.player.credits;
-        world.act(Action::Trade(Good::Food, 5.0));
-        assert_eq!(world.player.cargo[Good::Food], 5.0);
-        assert!(world.player.credits < credits);
-        // More than the hold takes is refused.
-        world.act(Action::Trade(Good::Food, 1000.0));
-        assert_eq!(world.player.cargo[Good::Food], 5.0);
-        world.act(Action::Open(Screen::Hub));
-        world.act(Action::Launch);
-        // Screens only open while docked or landed.
-        world.act(Action::Open(Screen::Trade));
-        assert_eq!(world.mode, Mode::Normal);
-        assert_eq!(world.docked_at(), None);
-    }
-
-    #[test]
-    fn handling_follows_the_fit() {
-        let mut world = World::new(1);
-        assert_eq!(world.handling(), (1.0, 1.0));
-        world.player.ship.fit = retrox_content::ships::stock("bulk-freighter").unwrap();
-        let (thrust, turn) = world.handling();
-        assert!(thrust < 1.0 && turn < 1.0, "{thrust} {turn}");
-    }
-
-    #[test]
-    fn mine_a_rock_and_sell_the_ore() {
-        let mut world = World::new(1);
-        assert!(
-            world.stats().mining_cut > 0.0,
-            "the courier comes with a laser"
-        );
-        assert!(world.start_at_field());
-        world.act(Action::Scan);
-        let (field, _) = world.field_rocks.clone().expect("in a field");
-        let mine = Controls {
-            fire: true,
-            ..Default::default()
-        };
-        let dt = 1.0 / 60.0;
-        // Fire until something fractures, letting the laser vent.
-        let mut frames = 0;
-        while world
-            .mining
-            .field(field)
-            .is_none_or(|s| s.nuggets.is_empty())
-        {
-            frames += 1;
-            assert!(frames < 60 * 180, "nothing fractured in three minutes");
-            world.update(dt, mine);
-        }
-        // Sweep up: park by each loose chunk in turn and let the tractor
-        // pull it in.
-        for _ in 0..200 {
-            let Some(next) = world
-                .mining
-                .field(field)
-                .and_then(|s| s.nuggets.first())
-                .map(|n| n.pos)
-            else {
-                break;
-            };
-            world.ship.frame = Place::Field(field);
-            world.ship.rel = next + DVec3::Y * 20.0;
-            world.ship.vel = DVec3::ZERO;
-            run(&mut world, 3.0);
-        }
-        let mined = world.player.cargo[Good::Ore] + world.player.cargo[Good::Ice];
-        assert!(mined > 0.1, "hold has {mined} t");
-        assert!(world.player.cargo_t() <= world.stats().cargo_t + 1e-9);
-
-        // Sell it at a station.
-        world.start_at_station();
-        let credits = world.player.credits;
-        for good in [Good::Ore, Good::Ice] {
-            let t = world.player.cargo[good].floor();
-            if t >= 1.0 {
-                world.act(Action::Trade(good, -t));
-            }
-        }
-        if mined >= 1.0 {
-            assert!(world.player.credits > credits);
-        }
-    }
-
-    fn engine_slot(world: &World) -> (usize, usize) {
-        let fit = &world.player.ship.fit;
-        fit.mounts()
-            .enumerate()
-            .find_map(|(m, (_, section))| {
-                let s = section?.slots().position(|(slot, module)| {
-                    slot.kind == retrox_sim::ship::SlotKind::Engine && module.is_some()
-                })?;
-                Some((m, s))
-            })
-            .expect("an engine")
-    }
-
-    #[test]
-    fn fast_travel_is_a_real_flight() {
-        let mut world = World::new(1);
-        world.act(Action::Launch);
-        for target in world.nav_places().into_iter().filter(|p| *p != Place::Star) {
-            open_space(&mut world);
-            world.target = Some(target);
-            world.act(Action::FastTravel);
-            let name = world.name(target);
-            let dt = 1.0 / 60.0;
-            for frame in 0.. {
-                assert!(frame < 60 * 60, "{name}: still flying after a minute");
-                let (pos, vel, clock) = (world.ship_position(), world.ship.vel, world.clock_s);
-                world.update(dt, Controls::default());
-                // Moved only as far as its speed allows in the galaxy time
-                // that passed: no teleporting.
-                let moved = (world.ship_position() - pos).length();
-                let flown = world.clock_s - clock;
-                let reach = vel.length().max(world.ship.vel.length()) * flown;
-                if matches!(world.mode, Mode::FastTravel(_)) {
-                    assert!(
-                        moved <= reach * 1.01 + 1.0,
-                        "{name}: jumped {moved:.3e} m in a {flown:.0} s step"
-                    );
-                } else {
-                    break;
-                }
-            }
-            // At rest next to the target, carrying on in its frame.
-            assert_eq!(world.ship.frame, target);
-            assert!(
-                world.ship.vel.length() <= flight::ARRIVE_SPEED + 1.0,
-                "{name}"
-            );
-        }
-    }
-
-    #[test]
-    fn dropping_out_keeps_position_and_speed() {
-        let mut world = World::new(1);
-        world.act(Action::Launch);
-        open_space(&mut world);
-        let target = world.view.bodies[0];
-        world.target = Some(Place::Body(target));
-        world.act(Action::FastTravel);
-        run(&mut world, 1.0);
-        let (pos, vel) = (world.ship_position(), world.ship.vel);
-        assert!(
-            vel.length() > COMBAT_SPEED,
-            "should be flying fast mid-trip"
-        );
-        world.act(Action::FastTravel);
-        assert_eq!(world.mode, Mode::Normal);
-        assert_eq!((world.ship_position(), world.ship.vel), (pos, vel));
-    }
-
-    #[test]
-    fn fast_travel_from_a_fast_drop_out_still_takes_seconds() {
-        // Dropping out of a trip leaves the ship near its target at
-        // thousands of km/s. Going again must still play out in seconds,
-        // braking included, not crawl at the warp a short hop would get.
-        let mut world = World::new(1);
-        world.act(Action::Launch);
-        let field = world
-            .nav_places()
-            .into_iter()
-            .find(|p| matches!(p, Place::Field(_)))
-            .expect("a field");
-        world.ship.frame = field;
-        world.ship.rel = DVec3::X * 1e6;
-        world.ship.vel = DVec3::new(0.7, 0.7, 0.0) * 1e6;
-        world.mode = Mode::Normal;
-        world.target = Some(field);
-        world.act(Action::FastTravel);
-        assert!(matches!(world.mode, Mode::FastTravel(_)));
-        run(&mut world, 10.0);
-        assert_eq!(world.mode, Mode::Normal, "still flying after 10 s");
-        assert_eq!(world.ship.frame, field);
-    }
-
-    #[test]
-    fn jumping_needs_open_space_and_takes_days() {
-        let mut world = World::new(1);
-        world.act(Action::Launch);
-        let lane = world.lanes()[0].clone();
-        world.act(Action::Jump(lane.to));
-        assert_eq!(world.mode, Mode::Normal, "can't jump inside a well");
-
-        open_space(&mut world);
-        let before = world.date();
-        world.act(Action::Jump(lane.to));
-        run(&mut world, 5.0);
-        assert_eq!(world.system, lane.to);
-        assert_eq!(world.current_well(), None, "arrive outside the star's well");
-        assert!(world.date().days() >= before.days() + lane.days as u64);
-    }
-
-    #[test]
-    fn a_plotted_course_is_followed_hop_by_hop() {
-        let mut world = World::new(1);
-        // Somewhere a few jumps away.
-        let far = world
-            .galaxy
-            .systems
-            .iter()
-            .map(|(s, _)| s)
-            .filter_map(|s| world.route(s).map(|r| (s, r)))
-            .find(|(_, r)| r.len() >= 4)
-            .map(|(s, _)| s)
-            .expect("a system several jumps away");
-        world.act(Action::PlotCourse(Some(far)));
-        assert_eq!(world.course, Some(far));
-        let route = world.route(far).unwrap();
-        assert_eq!(route.first(), Some(&world.system));
-        assert_eq!(route.last(), Some(&far));
-        assert!(world.route_days(&route) > 0.0);
-
-        world.act(Action::Launch);
-        world.act(Action::ToggleMap);
-        assert!(world.map_open);
-        for &expected in &route[1..] {
-            open_space(&mut world);
-            let hop = world.next_hop().expect("course has a next hop");
-            assert_eq!(hop, expected);
-            world.act(Action::Jump(hop));
-            assert!(!world.map_open, "jumping closes the map");
-            run(&mut world, 5.0);
-            assert_eq!(world.system, hop);
-        }
-        assert_eq!(world.course, None, "arriving clears the course");
-        world.act(Action::PlotCourse(Some(world.system)));
-        assert_eq!(world.course, None, "no course to where you are");
-    }
-
-    #[test]
-    fn the_starting_board_carries_real_shortages() {
-        for seed in 1..=3 {
-            let world = World::new(seed);
-            let here = world.docked_at().unwrap();
-            assert!(!world.board.is_empty(), "seed {seed}: empty board");
-            let origin = &world.galaxy.settlements[here].economy.market;
-            for o in &world.board {
-                let dest = &world.galaxy.settlements[o.to].economy.market;
-                let coming = world.galaxy.traffic.inbound(o.to, o.good);
-                // The consignee is short even counting what's on the way,
-                // and this market can spare the goods without going short.
-                assert!(dest.stock[o.good] + coming + o.amount <= dest.target(o.good));
-                assert!(origin.stock[o.good] - o.amount >= 0.75 * origin.target(o.good) - 1e-6);
-                assert!(o.fee > 0.0 && o.deadline > world.date());
-            }
-        }
-    }
-
-    #[test]
-    fn take_a_contract_and_deliver_it_in_another_system() {
-        let mut world = World::new(1);
-        let i = world
-            .board
-            .iter()
-            .position(|o| o.jumps > 0)
-            .expect("a contract to another system");
-        let offer = world.board[i].clone();
-        let credits = world.player.credits;
-        let before = world.galaxy.settlements[offer.to].economy.market.stock[offer.good];
-        world.act(Action::Open(Screen::Contracts));
-        world.act(Action::AcceptContract(i));
-        assert_eq!(world.player.contracts.len(), 1);
-        assert_eq!(world.player.credits, credits - offer.value);
-        assert_eq!(world.player.contract_t(), offer.amount);
-
-        // Fly it there, hop by hop.
-        let dest = world.galaxy.settlements[offer.to].system;
-        world.act(Action::Launch);
-        world.act(Action::PlotCourse(Some(dest)));
-        while let Some(hop) = world.next_hop() {
-            world.arrive_jump(hop);
-        }
-        assert_eq!(world.system, dest);
-        assert!(world.date() <= offer.deadline, "should arrive on time");
-        let flow = world.galaxy.settlements[offer.to].economy.market.stock[offer.good];
-        world.mode = match world.galaxy.settlements[offer.to].site {
-            Site::Region(r) => Mode::Landed {
-                city: offer.to,
-                body: world.galaxy.regions[r].body,
-                timer: 0.0,
-            },
-            _ => Mode::Docked(offer.to),
-        };
-        world.update(1.0 / 60.0, Controls::default());
-        assert!(world.player.contracts.is_empty());
-        assert_eq!(world.player.contract_t(), 0.0);
-        assert!((world.player.credits - (credits + offer.fee)).abs() < 1e-6);
-        let after = world.galaxy.settlements[offer.to].economy.market.stock[offer.good];
-        assert!(
-            (after - flow - offer.amount).abs() < 1e-6,
-            "{before} {flow} {after}"
-        );
-    }
-
-    #[test]
-    fn waiting_stops_when_a_contract_falls_due() {
-        let mut world = World::new(1);
-        let offer = world.board[0].clone();
-        world.act(Action::AcceptContract(0));
-        world.act(Action::Wait(1000));
-        assert_eq!(world.date(), offer.deadline);
-        assert_eq!(world.player.contracts.len(), 1);
-        // Waiting on past the grace period fails it: the goods are ours.
-        world.act(Action::Wait(1000));
-        assert!(world.player.contracts.is_empty());
-        assert_eq!(world.player.cargo[offer.good], offer.amount);
-    }
 }

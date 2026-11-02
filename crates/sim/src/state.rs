@@ -41,6 +41,9 @@ pub struct GalaxyState {
     /// Remembered lane distances; see [`crate::haul::ReachCache`].
     #[serde(skip)]
     pub reach_cache: crate::haul::ReachCache,
+    /// The agent tier around the player; see [`crate::bubble`].
+    #[serde(default)]
+    pub bubble: crate::bubble::Bubble,
     pub colony_ships: Pool<crate::colonize::ColonyShipId, crate::colonize::ColonyShip>,
     pub history: History,
 }
@@ -262,6 +265,23 @@ impl StarClass {
             WhiteDwarf => 0.6,
             Neutron => 1.4,
             BlackHole => 10.0,
+        }
+    }
+
+    /// Typical radius in solar radii.
+    pub const fn radius_suns(self) -> f64 {
+        use StarClass::*;
+        match self {
+            O => 10.0,
+            B => 4.0,
+            A => 1.7,
+            F => 1.3,
+            G => 1.0,
+            K => 0.8,
+            M => 0.4,
+            WhiteDwarf => 0.012,
+            Neutron => 1.5e-5,
+            BlackHole => 4.3e-5,
         }
     }
 

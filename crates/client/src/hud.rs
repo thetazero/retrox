@@ -10,6 +10,7 @@ use egui::{
 use glam::{DVec3, Mat4, Vec4};
 use retrox_sim::{BodyKind, EconomyModel};
 
+pub(crate) mod guide;
 mod map;
 mod mining;
 
@@ -128,6 +129,10 @@ pub struct HudInput<'a> {
     pub camera: DVec3,
     pub stick: glam::DVec2,
     pub captured: bool,
+    /// The controls card is up (H).
+    pub controls_card: bool,
+    /// Show the first-steps notes (a setting).
+    pub notes: bool,
 }
 
 pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
@@ -144,7 +149,8 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
     // first) and skipped where they'd overlap one already drawn.
     if matches!(w.mode, Mode::Normal | Mode::FastTravel(_)) {
         let painter = ctx.layer_painter(egui::LayerId::background());
-        let mut labels: Vec<(bool, f64, Pos2, String)> = Vec::new();
+        // (targeted, distance, where, text, colour)
+        let mut labels: Vec<(bool, f64, Pos2, String, Color32)> = Vec::new();
         for place in w.nav_places() {
             let pos = w.position(place);
             let rel = (pos - h.camera).as_vec3();
@@ -181,15 +187,36 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
                 dist,
                 p,
                 format!("{}  {}", w.name(place).to_uppercase(), distance(dist)),
+                CREAM_DIM,
             ));
+        }
+        // Traffic: the bubble's fleets, as small squares in the VFD's
+        // colour, labelled once they're near enough to matter.
+        let me = w.ship_position();
+        for c in &w.traffic.contacts {
+            let rel = (c.pos - h.camera).as_vec3();
+            let Some(p) = project(h.view_proj, rel, screen) else {
+                continue;
+            };
+            let dist = (c.pos - me).length();
+            let r = 3.0;
+            painter.rect_stroke(
+                Rect::from_center_size(p, Vec2::splat(2.0 * r)),
+                0.0,
+                Stroke::new(1.0, VFD),
+                egui::StrokeKind::Middle,
+            );
+            if dist < TRAFFIC_LABEL_M {
+                labels.push((false, dist, p, contact_label(c, dist), VFD));
+            }
         }
         labels.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.total_cmp(&b.1)));
         let mut taken: Vec<Rect> = Vec::new();
-        for (targeted, _, p, text) in labels {
+        for (targeted, _, p, text, color) in labels {
             let (font, color) = if targeted {
                 (mono(13.0), AMBER)
             } else {
-                (mono(11.0), CREAM_DIM)
+                (mono(11.0), color)
             };
             let galley = painter.layout_no_wrap(text, font, color);
             let rect =
@@ -478,7 +505,7 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
                 egui::Order::Foreground,
                 egui::Id::unique("jump"),
             ));
-            let t = 1.0 - timer / 4.0;
+            let t = 1.0 - timer / crate::world::JUMP_DURATION;
             let alpha = (255.0 * (t * 1.4).min(1.0)) as u8;
             painter.rect_filled(
                 screen,
@@ -529,19 +556,14 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
         _ => {}
     }
 
-    // Controls help.
-    egui::Area::new(egui::Id::unique("help"))
-        .anchor(Align2::LEFT_BOTTOM, [18.0, -14.0])
-        .show(ctx, |ui| {
-            let text = if h.captured {
-                "mouse steer · W/S throttle · X stop · A/D strafe · SPACE/CTRL lift · Q/E roll · SHIFT boost\n\
-                 J fast travel · T next target · M galaxy map · V camera · Z flight assist · TAB free mouse\n\
-                 LMB or R mining laser · G prospect · ESC menu"
-            } else {
-                "TAB or click the view to fly with the mouse · arrow keys also steer · M galaxy map · ESC menu"
-            };
-            ui.label(RichText::new(text).size(11.0).color(CREAM_DIM));
-        });
+    // Help for new pilots.
+    if h.notes {
+        guide::notes(ctx, w);
+    }
+    guide::key_strip(ctx, w, h.captured);
+    if h.controls_card {
+        guide::controls_card(ctx);
+    }
 
     actions
 }
@@ -950,6 +972,28 @@ fn edge_arrow(painter: &egui::Painter, view_proj: Mat4, rel: glam::Vec3, screen:
 }
 
 /// Credits with thin-space thousands separators.
+/// Fleets nearer than this get a label.
+const TRAFFIC_LABEL_M: f64 = 2.0e9;
+
+/// "KESSA HAULERS · 3× LIGHT TRADER · 120 T FOOD  42 KM"
+fn contact_label(c: &crate::traffic::Contact, dist: f64) -> String {
+    let class = c.fit.hull().name.to_uppercase();
+    let ships = if c.ships > 1 {
+        format!("{}× {class}", c.ships)
+    } else {
+        class
+    };
+    let hold = match c.cargo {
+        Some((good, t)) => format!("{:.0} T {}", t, good.name().to_uppercase()),
+        None => "EMPTY".into(),
+    };
+    format!(
+        "{} · {ships} · {hold}  {}",
+        c.company.to_uppercase(),
+        distance(dist)
+    )
+}
+
 pub fn credits(cr: f64) -> String {
     let n = cr.round() as i64;
     let digits = n.unsigned_abs().to_string();
