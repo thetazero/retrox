@@ -5,8 +5,8 @@
 //! of [`Slot`]s. Each slot takes one [`Module`] of the same [`SlotKind`] and
 //! the same or a smaller [`Size`]. Two budgets tie a fit together:
 //!
-//! - **Power:** reactors produce it; weapons, shields, radar and engines
-//!   draw it while active.
+//! - **Power:** reactors produce it; weapons, shields, radar, engines and
+//!   RCS thrusters draw it while active.
 //! - **Heat:** every active module makes heat; the hull sheds some on its
 //!   own and radiators shed more. Surplus heat fills the hull's heat
 //!   capacity, and when that's full the ship is overheating.
@@ -15,8 +15,12 @@
 //! everything at once is a choice the pilot manages in flight, so
 //! [`ShipStats`] reports both budgets rather than rejecting the fit.
 //!
-//! Units: tonnes, kilonewtons (so kN / t = m/s²), megawatts, megajoules,
-//! metres, kilometres.
+//! Turning comes from RCS (reaction control system) thrusters: their
+//! torque against the hull's moment of inertia, which grows with mass and
+//! with the square of the hull's length. Heavy or long ships turn slowly.
+//!
+//! Units: tonnes, kilonewtons (so kN / t = m/s²), kilonewton-metres,
+//! megawatts, megajoules, metres, kilometres.
 
 use std::fmt;
 
@@ -33,6 +37,8 @@ pub enum Size {
 pub enum SlotKind {
     Weapon,
     Engine,
+    /// Attitude thrusters, for turning.
+    Rcs,
     Power,
     Shield,
     Radar,
@@ -55,6 +61,8 @@ pub struct Hull {
     pub name: &'static str,
     pub size: Size,
     pub mass_t: f64,
+    /// Nose to tail. Sets the moment of inertia, so long hulls turn slower.
+    pub length_m: f64,
     pub structure: f64,
     /// Heat the hull can soak before it overheats.
     pub heat_capacity_mj: f64,
@@ -93,6 +101,9 @@ pub enum Function {
     Engine {
         thrust_kn: f64,
     },
+    Rcs {
+        torque_knm: f64,
+    },
     Power {
         output_mw: f64,
     },
@@ -113,6 +124,7 @@ impl Function {
         match self {
             Self::Weapon { .. } => SlotKind::Weapon,
             Self::Engine { .. } => SlotKind::Engine,
+            Self::Rcs { .. } => SlotKind::Rcs,
             Self::Power { .. } => SlotKind::Power,
             Self::Shield { .. } => SlotKind::Shield,
             Self::Radar { .. } => SlotKind::Radar,
@@ -211,6 +223,7 @@ impl<'a> Loadout<'a> {
         let hull = self.hull;
         let mut stats = ShipStats {
             mass_t: hull.mass_t,
+            length_m: hull.length_m,
             structure: hull.structure,
             heat_capacity_mj: hull.heat_capacity_mj,
             heat_dissipation_mw: hull.base_dissipation_mw,
@@ -234,6 +247,7 @@ impl<'a> Loadout<'a> {
                     stats.weapon_range_km = stats.weapon_range_km.max(range_km);
                 }
                 Function::Engine { thrust_kn } => stats.thrust_kn += thrust_kn,
+                Function::Rcs { torque_knm } => stats.rcs_torque_knm += torque_knm,
                 Function::Power { output_mw } => stats.power_supply_mw += output_mw,
                 Function::Shield {
                     capacity,
@@ -265,8 +279,10 @@ pub struct Load {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ShipStats {
     pub mass_t: f64,
+    pub length_m: f64,
     pub structure: f64,
     pub thrust_kn: f64,
+    pub rcs_torque_knm: f64,
     pub power_supply_mw: f64,
     pub heat_capacity_mj: f64,
     pub heat_dissipation_mw: f64,
@@ -289,6 +305,24 @@ impl ShipStats {
         } else {
             0.0
         }
+    }
+
+    /// Angular acceleration at full RCS, in rad/s². The hull is treated
+    /// as a uniform rod about its middle: I = m L² / 12.
+    pub fn angular_acceleration(&self) -> f64 {
+        let inertia = self.mass_t * self.length_m * self.length_m / 12.0;
+        if inertia > 0.0 {
+            self.rcs_torque_knm / inertia
+        } else {
+            0.0
+        }
+    }
+
+    /// Seconds to turn through `degrees` from rest to rest: full RCS one
+    /// way to spin up, then the other way to stop. `None` with no RCS.
+    pub fn time_to_turn(&self, degrees: f64) -> Option<f64> {
+        let alpha = self.angular_acceleration();
+        (alpha > 0.0).then(|| 2.0 * (degrees.to_radians() / alpha).sqrt())
     }
 
     /// Power left over under `load`; negative means the reactor can't keep
@@ -346,6 +380,7 @@ mod tests {
         name: "test",
         size: Size::Small,
         mass_t: 8.0,
+        length_m: 6.0,
         structure: 100.0,
         heat_capacity_mj: 30.0,
         base_dissipation_mw: 1.0,
@@ -428,7 +463,30 @@ mod tests {
         assert_eq!(stats.time_to_overheat(stats.combat), Some(6.0));
         assert_eq!(stats.time_to_overheat(Load::default()), None);
 
+        // No RCS fitted: the ship can't turn.
+        assert_eq!(stats.time_to_turn(180.0), None);
+
         assert_eq!(fit.remove(2), Some(&ENGINE));
         assert_eq!(fit.stats().thrust_kn, 0.0);
+    }
+
+    #[test]
+    fn turning_slows_with_mass_and_length() {
+        let stats = ShipStats {
+            mass_t: 12.0,
+            length_m: 6.0,
+            rcs_torque_knm: 36.0,
+            ..ShipStats::default()
+        };
+        // I = 12 * 36 / 12 = 36, so α = 1 rad/s²; π rad takes 2√π s.
+        assert_eq!(stats.angular_acceleration(), 1.0);
+        let flip = stats.time_to_turn(180.0).unwrap();
+        assert!((flip - 2.0 * std::f64::consts::PI.sqrt()).abs() < 1e-9);
+
+        let longer = ShipStats {
+            length_m: 12.0,
+            ..stats
+        };
+        assert_eq!(longer.angular_acceleration(), 0.25);
     }
 }

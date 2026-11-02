@@ -250,7 +250,7 @@ rather than space bugs.
 
 ### 7.4 Ships
 
-- **Hull + slots** for small ships. Slot kinds: weapon, engine, power,
+- **Hull + slots** for small ships. Slot kinds: weapon, engine, RCS, power,
   shield, radar, radiator. A slot takes a module of its kind at its size
   or smaller.
 - Two budgets tie a fit together: **power** (reactors vs. everything that
@@ -259,6 +259,8 @@ rather than space bugs.
   e.g. an interceptor that can't fire, shield and burn all at once — and
   the pilot manages that in flight.
 - **Fitting only while docked.**
+- Turning comes from **RCS thrusters** working against the hull's moment
+  of inertia (mass × length²), so heavy or long ships turn slowly.
 - **Large ships: hull compartments + slots** — a capital ship is a stack of
   modules (habitation, cargo, reactor, hangar, weapons…), each with its
   own slots, and each a damage location.

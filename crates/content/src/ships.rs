@@ -14,6 +14,7 @@ pub static MODULES: &[Module] = &[
     LIGHT_LASER,
     INTERCEPTOR_DRIVE,
     LIGHT_DRIVE,
+    LIGHT_RCS,
     SMALL_REACTOR,
     LIGHT_DEFLECTOR,
     SHORT_RANGE_RADAR,
@@ -41,6 +42,7 @@ pub const INTERCEPTOR: Hull = Hull {
     name: "Interceptor",
     size: Size::Small,
     mass_t: 14.0,
+    length_m: 10.0,
     structure: 300.0,
     heat_capacity_mj: 120.0,
     base_dissipation_mw: 2.0,
@@ -48,6 +50,7 @@ pub const INTERCEPTOR: Hull = Hull {
         slot(SlotKind::Weapon, Size::Small, [-1.6, -0.3, 3.0]),
         slot(SlotKind::Weapon, Size::Small, [1.6, -0.3, 3.0]),
         slot(SlotKind::Engine, Size::Medium, [0.0, 0.0, -4.5]),
+        slot(SlotKind::Rcs, Size::Small, [0.0, 0.0, 0.0]),
         slot(SlotKind::Power, Size::Small, [0.0, 0.0, -1.5]),
         slot(SlotKind::Shield, Size::Small, [0.0, 0.4, 0.0]),
         slot(SlotKind::Radar, Size::Small, [0.0, 0.6, 2.5]),
@@ -63,6 +66,7 @@ pub fn stock_interceptor() -> Loadout<'static> {
         &LIGHT_AUTOCANNON,
         &LIGHT_AUTOCANNON,
         &INTERCEPTOR_DRIVE,
+        &LIGHT_RCS,
         &SMALL_REACTOR,
         &LIGHT_DEFLECTOR,
         &SHORT_RANGE_RADAR,
@@ -124,6 +128,17 @@ pub const LIGHT_DRIVE: Module = Module {
     power_mw: 1.5,
     heat_mw: 4.0,
     function: Function::Engine { thrust_kn: 400.0 },
+};
+
+/// Quad thruster blocks at nose and tail.
+pub const LIGHT_RCS: Module = Module {
+    id: "light-rcs",
+    name: "Light RCS",
+    size: Size::Small,
+    mass_t: 0.8,
+    power_mw: 1.0,
+    heat_mw: 1.0,
+    function: Function::Rcs { torque_knm: 1300.0 },
 };
 
 pub const SMALL_REACTOR: Module = Module {
@@ -210,6 +225,12 @@ mod tests {
         assert!(stats.power_margin(stats.combat) < 0.0);
         let secs = stats.time_to_overheat(stats.combat).unwrap();
         assert!((10.0..120.0).contains(&secs), "overheats in {secs}s");
+    }
+
+    #[test]
+    fn stock_interceptor_flips_quickly() {
+        let flip = stock_interceptor().stats().time_to_turn(180.0).unwrap();
+        assert!((1.0..2.0).contains(&flip), "flips in {flip}s");
     }
 
     #[test]

@@ -39,6 +39,14 @@ fn print_fit(fit: &Loadout) {
         s.acceleration(),
         s.acceleration() / 9.81
     );
+    if let Some(flip) = s.time_to_turn(180.0) {
+        println!(
+            "  turning     {:.0} kN·m RCS, 180° in {flip:.2} s",
+            s.rcs_torque_knm
+        );
+    } else {
+        println!("  turning     no RCS");
+    }
     println!("  structure   {:.0}", s.structure);
     println!(
         "  shield      {:.0}  (+{:.0}/s)",
