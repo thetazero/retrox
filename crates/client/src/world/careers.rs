@@ -129,7 +129,15 @@ impl Bot {
                 ..Default::default()
             });
             n += 1;
-            assert!(n < 30 * 300, "couldn't shake raiders in 5 minutes: at {:.0} s, anchor {:?}, frame {:?}, {:.0} m from anchor, {:.0} m/s, target {place:?}", self.real_s, self.w.combat_anchor(), self.w.ship.frame, self.w.combat_position().length(), self.w.ship.vel.length());
+            assert!(
+                n < 30 * 300,
+                "couldn't shake raiders in 5 minutes: at {:.0} s, anchor {:?}, frame {:?}, {:.0} m from anchor, {:.0} m/s, target {place:?}",
+                self.real_s,
+                self.w.combat_anchor(),
+                self.w.ship.frame,
+                self.w.combat_position().length(),
+                self.w.ship.vel.length()
+            );
         }
         self.w.target = Some(place);
         self.w.act(Action::FastTravel);
