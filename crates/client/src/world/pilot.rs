@@ -3,6 +3,7 @@
 
 use glam::{DQuat, DVec3};
 use retrox_sim::flight::{self, Goal, Kinematics};
+use retrox_sim::ship::ShipStats;
 
 use super::{Controls, FastTravel, Mode, Place, REFERENCE, SECONDS_PER_DAY, World, rock_offset};
 
@@ -12,7 +13,7 @@ pub const COMBAT_SPEED: f64 = 500.0;
 pub const CRUISE_SPEED: f64 = 150_000.0;
 const BOOST: f64 = 2.0;
 const ACCEL: f64 = 90.0;
-const STRAFE_SPEED: f64 = 80.0;
+pub const STRAFE_SPEED: f64 = 80.0;
 /// Pitch, yaw, roll rates at full stick, rad/s.
 const TURN_RATES: DVec3 = DVec3::new(1.3, 0.9, 2.2);
 /// The ship's main drive under autopilot, m/s²: about a day per AU.
@@ -36,6 +37,49 @@ pub fn look_rotation(dir: DVec3) -> DQuat {
     DQuat::from_mat3(&glam::DMat3::from_cols(r, u, -f))
 }
 
+/// Turn a ship for one frame of stick input: its spin eases toward the
+/// stick's rates (scaled by `turn`, see [`handling`]), and it rotates by
+/// its spin. The player and every ship flown near them turn this way.
+pub fn steer(rot: &mut DQuat, spin: &mut DVec3, stick: DVec3, turn: f64, dt: f64) {
+    let target = stick * TURN_RATES * turn;
+    let k = 1.0 - (-6.0 * dt).exp();
+    *spin += (target - *spin) * k;
+    let s = *spin;
+    // Local axes: x = pitch, y = yaw (negated: + yaw turns right), z = roll.
+    let delta = DQuat::from_scaled_axis(DVec3::new(s.x, -s.y, -s.z) * dt);
+    *rot = (*rot * delta).normalize();
+}
+
+/// Flight assist for one frame: thrust the velocity toward `local` (the
+/// velocity asked for, in ship axes), as hard as the ship can (`thrust`,
+/// see [`handling`]). Returns how hard the engines burned, 0..1.
+pub fn assist(vel: &mut DVec3, rot: DQuat, local: DVec3, boost: bool, thrust: f64, dt: f64) -> f64 {
+    let boost = if boost { BOOST } else { 1.0 };
+    let desired = rot * (local * DVec3::new(1.0, 1.0, boost));
+    // Acceleration scales with the speed being asked for, so cruise
+    // speeds are reached in a few seconds without making fine control
+    // twitchy.
+    let accel = (ACCEL * boost * thrust).max(desired.length().max(vel.length()) * 0.5);
+    let step = (desired - *vel).clamp_length_max(accel * dt);
+    *vel += step;
+    if dt > 0.0 {
+        (step.length() / (accel * dt)).min(1.0)
+    } else {
+        0.0
+    }
+}
+
+/// How a ship handles next to the starting ship: thrust and turning
+/// multipliers, within limits so every ship stays flyable.
+pub fn handling(s: &ShipStats) -> (f64, f64) {
+    let r = &*REFERENCE;
+    let thrust = (s.acceleration() / r.acceleration()).clamp(0.3, 2.5);
+    let turn = (s.angular_acceleration() / r.angular_acceleration())
+        .sqrt()
+        .clamp(0.3, 1.8);
+    (thrust, turn)
+}
+
 impl World {
     /// Where the autopilot brings the ship to rest for `place` at galaxy
     /// day `t`: on the arrival sphere, on the ship's side of it.
@@ -54,15 +98,15 @@ impl World {
         DRIVE_ACCEL * self.handling().0
     }
 
-    /// How the ship handles next to the starting ship: thrust and turning
-    /// multipliers, within limits so every ship stays flyable.
+    /// How the ship handles: see [`handling`]. Sections wrecked in a fight
+    /// take their modules with them.
     pub fn handling(&self) -> (f64, f64) {
-        let (s, r) = (self.stats(), &*REFERENCE);
-        let thrust = (s.acceleration() / r.acceleration()).clamp(0.3, 2.5);
-        let turn = (s.angular_acceleration() / r.angular_acceleration())
-            .sqrt()
-            .clamp(0.3, 1.8);
-        (thrust, turn)
+        if self.combat.player.fit == self.player.ship.fit {
+            handling(&self.combat.player.stats)
+        } else {
+            // Refitted since the last frame of flight.
+            handling(&self.stats())
+        }
     }
 
     pub(super) fn start_fast_travel(&mut self, target: Place) {
@@ -154,46 +198,31 @@ impl World {
     }
 
     pub(super) fn steer(&mut self, dt: f64, c: Controls) {
-        let target = c.stick * TURN_RATES * self.handling().1;
-        let k = 1.0 - (-6.0 * dt).exp();
-        self.ship.spin += (target - self.ship.spin) * k;
-        let s = self.ship.spin;
-        // Local axes: x = pitch, y = yaw (negated: + yaw turns right), z = roll.
-        let delta = DQuat::from_scaled_axis(DVec3::new(s.x, -s.y, -s.z) * dt);
-        self.ship.rot = (self.ship.rot * delta).normalize();
+        let turn = self.handling().1;
+        steer(&mut self.ship.rot, &mut self.ship.spin, c.stick, turn, dt);
         self.ship.throttle = (self.ship.throttle + c.throttle_delta * dt * 0.4).clamp(-0.3, 1.0);
     }
 
     pub(super) fn fly(&mut self, dt: f64, c: Controls) {
-        // Boost only helps in the fine-control range.
-        let boost = if c.boost && self.ship.throttle <= 0.5 {
-            BOOST
-        } else {
-            1.0
-        };
         let forward = if self.ship.throttle >= 0.0 {
             throttle_speed(self.ship.throttle)
         } else {
             self.ship.throttle / 0.5 * COMBAT_SPEED
         };
-        let local = DVec3::new(
-            c.strafe * STRAFE_SPEED,
-            c.lift * STRAFE_SPEED,
-            -forward * boost,
-        );
-        let desired = self.ship.rot * local;
-        // Acceleration scales with the speed being asked for, so cruise
-        // speeds are reached in a few seconds without making fine control
-        // twitchy.
-        let accel = (ACCEL * boost * self.handling().0)
-            .max(desired.length().max(self.ship.vel.length()) * 0.5);
-        if self.ship.flight_assist {
-            let step = (desired - self.ship.vel).clamp_length_max(accel * dt);
-            self.ship.vel += step;
+        // Boost only helps in the fine-control range.
+        let boost = c.boost && self.ship.throttle <= 0.5;
+        let local = DVec3::new(c.strafe * STRAFE_SPEED, c.lift * STRAFE_SPEED, -forward);
+        let thrust = self.handling().0;
+        self.burn = if self.ship.flight_assist {
+            assist(&mut self.ship.vel, self.ship.rot, local, boost, thrust, dt)
         } else {
-            let thrust = self.ship.rot * DVec3::new(c.strafe, c.lift, -c.throttle_delta.max(0.0));
-            self.ship.vel += thrust * accel * dt;
-        }
+            let boost = if boost { BOOST } else { 1.0 };
+            let desired = (local * DVec3::new(1.0, 1.0, boost)).length();
+            let accel = (ACCEL * boost * thrust).max(desired.max(self.ship.vel.length()) * 0.5);
+            let push = DVec3::new(c.strafe, c.lift, -c.throttle_delta.max(0.0));
+            self.ship.vel += self.ship.rot * push * accel * dt;
+            push.length().min(1.0)
+        };
         self.ship.rel += self.ship.vel * dt;
         self.collide();
     }

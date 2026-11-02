@@ -475,3 +475,43 @@ fn a_jumps_days_pass_during_the_sequence() {
         lane.days
     );
 }
+
+#[test]
+fn a_fresh_game_has_raiders_within_reach_and_they_come() {
+    let mut world = World::new(1);
+    let start = world.system;
+    assert!(world.start_by_raiders(), "some field has raiders");
+    let jumps = world.route(start).map_or(0, |r| r.len());
+    assert!(
+        jumps <= 3,
+        "the nearest raiders are {jumps} jumps from the start"
+    );
+    world.update(0.02, Controls::default());
+    assert!(!world.combat.raiders.is_empty(), "the band comes out");
+    assert!(world.hostiles_near() > 0);
+    assert!(
+        crate::save::can_save(&world).is_err(),
+        "no saving with raiders near"
+    );
+    world.act(Action::FastTravel);
+    assert_eq!(world.mode, Mode::Normal, "no fast travel either");
+    // Sitting still, the ship takes fire.
+    for _ in 0..(60 * 30) {
+        world.update(1.0 / 60.0, Controls::default());
+    }
+    assert!(
+        world.player.ship.damage.total() > 0.0 || world.combat.lost.is_some(),
+        "the raiders attacked"
+    );
+}
+
+#[test]
+fn docking_repairs_the_hull_for_a_price() {
+    let mut world = World::new(1);
+    world.start_at_station();
+    world.player.ship.damage.sections = vec![100.0];
+    let credits = world.player.credits;
+    world.update(0.02, Controls::default());
+    assert_eq!(world.player.ship.damage.total(), 0.0);
+    assert!(world.player.credits < credits);
+}

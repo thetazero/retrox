@@ -25,6 +25,7 @@
 //! so nearby things hold still while you fly.
 
 mod field;
+mod fight;
 mod pilot;
 mod routing;
 #[cfg(test)]
@@ -37,6 +38,7 @@ use glam::{DQuat, DVec3};
 use retrox_sim::ship::ShipStats;
 use serde::{Deserialize, Serialize};
 
+use crate::combat::Combat;
 use crate::contracts;
 use crate::hangar::{self, Job, Player};
 use crate::mining::Mining;
@@ -57,7 +59,7 @@ const SOLAR_RADIUS_M: f64 = 6.957e8;
 
 /// Gravity wells extend this many radii from the centre of a star or body.
 pub const WELL_RADII: f64 = 4.0;
-pub use pilot::{COMBAT_SPEED, look_rotation};
+pub use pilot::{COMBAT_SPEED, STRAFE_SPEED, assist, handling, look_rotation, steer};
 
 /// Real seconds the hyperlane sequence plays for.
 pub const JUMP_DURATION: f32 = 4.0;
@@ -224,6 +226,8 @@ pub enum Action {
     AbandonContract(usize),
     /// Ping the prospector: read the rocks around the ship.
     Scan,
+    /// Point the guns at the next hostile.
+    CycleHostile,
 }
 
 /// The screens of a station or city, while docked or landed.
@@ -297,6 +301,10 @@ pub struct World {
     /// The galaxy clock when the current hyperlane jump began: the jump's
     /// days pass over its sequence, not all in its last frame.
     jump_start_s: Option<f64>,
+    /// Guns, shields and hulls, and whoever is fighting near the ship.
+    pub combat: Combat,
+    /// How hard the ship's engines burned this frame, 0..1.
+    pub burn: f64,
 }
 
 /// A wait in progress (DESIGN §3): docked or landed only, a day at a time,
@@ -383,7 +391,6 @@ impl World {
             beam: None,
             message: None,
             bump: 0.0,
-            player,
             screen: Screen::Hub,
             inspect: None,
             system_generation: 0,
@@ -394,6 +401,9 @@ impl World {
             waiting: None,
             jump_start_s: None,
             traffic: Traffic::default(),
+            combat: Combat::new(player.ship.fit.clone(), player.ship.damage.clone()),
+            burn: 0.0,
+            player,
         };
         // Traders near the player are ships (DESIGN §5.2).
         bubble::set_centre(&mut world.galaxy, Some(system));
@@ -557,7 +567,7 @@ impl World {
             }
         }
         p.well = self.current_well();
-        if p.well.is_none() {
+        if p.well.is_none() && self.hostiles_near() == 0 {
             p.fast_travel = self
                 .target
                 .filter(|&t| self.distance_to(t) > self.arrival_distance(t) * 1.2);
@@ -566,6 +576,10 @@ impl World {
     }
 
     pub fn act(&mut self, action: Action) {
+        if self.combat.lost.is_some() {
+            // Nothing to fly any more.
+            return;
+        }
         let prompts = self.prompts();
         match action {
             Action::ToggleCamera => self.cockpit = !self.cockpit,
@@ -591,6 +605,9 @@ impl World {
                 self.target = Some(next);
             }
             Action::FastTravel => match (self.mode, prompts.fast_travel, prompts.well) {
+                (Mode::Normal, _, _) if self.hostiles_near() > 0 => {
+                    self.say("Can't fast travel: hostiles within 20 km");
+                }
                 (Mode::Normal, Some(target), _) => self.start_fast_travel(target),
                 (Mode::Normal, None, Some(well)) => {
                     let name = self.name(well);
@@ -603,6 +620,13 @@ impl World {
                 _ => {}
             },
             Action::Scan => self.scan(),
+            Action::CycleHostile => {
+                let me = self.combat_position();
+                self.combat.cycle_target(me);
+                if self.combat.raiders.is_empty() {
+                    self.say("No hostiles in range");
+                }
+            }
             Action::Dock => {
                 if let Some(s) = prompts.dock {
                     self.mining.haul = Default::default();
@@ -655,7 +679,9 @@ impl World {
                 if self.mode != Mode::Normal {
                     return;
                 }
-                if let Some(well) = prompts.well {
+                if self.hostiles_near() > 0 {
+                    self.say("Can't jump: hostiles within 20 km");
+                } else if let Some(well) = prompts.well {
                     let name = self.name(well);
                     self.say(format!("Can't jump inside the gravity well of {name}"));
                 } else if self.stats().drive_tier == 0 {
@@ -885,6 +911,12 @@ impl World {
         }
 
         match self.mode {
+            Mode::Normal if self.combat.lost.is_some() => {
+                // What's left drifts on.
+                self.ship.rel += self.ship.vel * dt;
+                self.burn = 0.0;
+                self.advance_clock(dt);
+            }
             Mode::Normal => {
                 self.steer(dt, controls);
                 self.fly(dt, controls);
@@ -916,7 +948,12 @@ impl World {
         self.settle_contracts();
         self.refresh_board();
         self.update_field();
-        self.mine(dt, controls.fire);
+        let trigger = controls.fire && self.mode == Mode::Normal && self.combat.lost.is_none();
+        // Mid-fight the trigger is the guns' alone.
+        let fighting = self.hostiles_near() > 0 && !self.combat.player.guns.is_empty();
+        self.mine(dt, trigger && !fighting);
+        self.fight(dt, trigger);
+        self.repair_docked();
         self.update_camera(dt);
         let mut progress = std::mem::take(&mut self.player.progress);
         progress.observe(self);
@@ -955,6 +992,12 @@ impl World {
             self.arrive_jump(system);
         }
         let field = self.view.fields[0];
+        self.park_in(field)
+    }
+
+    /// Park in `field` (of this system) facing a mid-sized rock a few
+    /// hundred metres off. Returns whether there was one.
+    pub fn park_in(&mut self, field: FieldId) -> bool {
         let rocks = rocks(&self.galaxy.fields[field]);
         let Some(rock) = rocks
             .iter()

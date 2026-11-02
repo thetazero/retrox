@@ -422,6 +422,61 @@ rather than space bugs.
   turret direction, damage per compartment, possibly crew-less
   "station" switching. Exact design open (§11).
 
+#### 7.2.1 Basic combat as built (#70)
+
+- **Guns.** One trigger (LMB or R) fires every gun in a weapon slot,
+  and the mining laser too except while hostiles are near (then the
+  trigger is the guns' alone; the laser keeps its own gauge, §7.3).
+  Autocannons throw shells at 1.6 km/s on top of the ship's velocity;
+  lasers hit along their line at once. Fixed guns swing up to 4° to
+  meet the target's lead, so putting the boresight on the HUD's **lead
+  pip** hits. Y picks the next hostile; the nearest is picked for you.
+- **Budgets (§7.4) in flight.** Engines draw power and make heat in
+  proportion to how hard they burn, shields while recharging, guns while
+  firing; the reactor feeds the rest first and the guns last, so an
+  over-budget fit fires slower while it burns and recharges. Heat the
+  radiators can't shed fills the sections' capacity; at the top the guns
+  lock out until half of it is gone.
+- **Damage.** Shields take hits first and recharge 3 s after the last
+  one. Past them a hit lands on the section it struck, by where along the
+  hull. A section run out of structure is wrecked and its modules die
+  with it (lose the stern, lose the engines). A small ship is one section;
+  a framed ship's further hits on wreckage go to the frame, and it is lost
+  when the frame gives out or every section is gone. Hull damage stays
+  with the ship until a dock or city repairs it, automatically, at
+  3 cr per point, paid to the settlement's treasury.
+- **Raiders.** Pirate bands lurk at asteroid fields, preying on miners:
+  never in a faction's capital system, at 45% of fields in settled
+  systems (1–2 light fighters), 85% where no one lives (2–3, sometimes a
+  gunship). Each field has a band or not for each 20-day stretch,
+  decided from the field and the date, so a restored checkpoint meets the
+  same band; ships killed stay dead for the stretch. The navigation list
+  marks fields with a band. A band closes in from ~7 km when a ship
+  arrives. Raiders fly the player's own arcade flight model (shared
+  code) and stock fits under the same budgets, attack along the lead,
+  break off after overshooting, jink when someone is on their tail, fire
+  in bursts, run when badly hurt, and give up 16 km out from their field.
+  Until raiders are agents of the bubble (§5.2) bands are kept by the
+  client, like the mining laser's work on a field.
+- **Stakes.** With a hostile within 20 km there's no fast travel, no
+  jump and no saving: fight or run. Wrecks spill components and metal
+  for the tractor.
+- **The starting courier** carries a light autocannon in a belly mount
+  besides its chin mining laser, so a new pilot can defend themselves.
+- **Looks (§8).** Tracers are streaks of light, cream for the player's
+  guns and red for everyone else's; lasers are brief beams. Shields are
+  a faint bubble of scan bands that flares round each hit. Hull hits
+  spark. Damage scorches the paint in soot patches. Ships blow up in a
+  churning fireball with secondaries, a white core flash, a shockwave
+  ring, flung hull plates and embers, and leave a burnt-out wreck with
+  embers in its cracks, tumbling, for three minutes.
+- **Sounds (§8).** Synthesized like the rest: a thump and crack per
+  autocannon round (raiders' quieter and lower), a falling zap for
+  lasers, an electric fizz on the shield, a metal clang and hull creak
+  when shots get through, and the volatile-rock blast for ships going up.
+- **Losing the ship** shows a "ship lost" card and restores the last
+  checkpoint (§7.7); everything else about death is its own issue.
+
 ### 7.3 Mining
 
 - An **activity**, not a timer: fracture asteroids, cut into them, collect

@@ -107,6 +107,7 @@ pub static STOCK: &[StockFit] = &[
                 &CARGO_RACK,
                 &CARGO_RACK,
                 &JUMP_DRIVE_S,
+                &LIGHT_AUTOCANNON,
             ],
         )],
     },
