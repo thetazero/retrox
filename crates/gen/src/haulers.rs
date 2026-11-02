@@ -105,27 +105,9 @@ pub fn seed_harvesters(rng: &mut Rng, state: &mut GalaxyState, classes: &[ShipCl
     use retrox_sim::economy::{FacilityKind, Good};
     use retrox_sim::harvest::{self, Plan};
 
-    const MARGIN: f64 = 1.2;
+    const MARGIN: f64 = 1.5;
     const SHIPS_PER_COMPANY: u32 = 6;
     const MAX_SHIPS: u32 = 48;
-    // Small holds for small gaps, haulers for the rest.
-    let by_cargo = |small: bool| {
-        classes
-            .iter()
-            .copied()
-            .filter(|&c| {
-                let cargo = state.ship_classes[c].cargo_t;
-                if small { cargo < 100.0 } else { (100.0..1000.0).contains(&cargo) }
-            })
-            .max_by(|&a, &b| {
-                state.ship_classes[a]
-                    .cargo_t
-                    .total_cmp(&state.ship_classes[b].cargo_t)
-            })
-    };
-    let (Some(small), Some(big)) = (by_cargo(true), by_cargo(false)) else {
-        return;
-    };
     let homes: Vec<SettlementId> = state.settlements.keys().collect();
     for (i, home) in homes.into_iter().enumerate() {
         let mut r = rng.fork(i as u64);
@@ -133,14 +115,12 @@ pub fn seed_harvesters(rng: &mut Rng, state: &mut GalaxyState, classes: &[ShipCl
         let sources = harvest::sources_in(state, system);
         // Ice from space only where nobody in the system mines it on the
         // ground; generation already sizes those facilities to the galaxy.
-        let ice_mined = state
-            .settlements_in(system)
-            .any(|(_, s)| {
-                s.economy
-                    .facilities
-                    .iter()
-                    .any(|f| f.kind == FacilityKind::IceHarvester)
-            });
+        let ice_mined = state.settlements_in(system).any(|(_, s)| {
+            s.economy
+                .facilities
+                .iter()
+                .any(|f| f.kind == FacilityKind::IceHarvester)
+        });
         for good in [Good::Gas, Good::Ice] {
             if good == Good::Ice && ice_mined {
                 continue;
@@ -160,13 +140,25 @@ pub fn seed_harvesters(rng: &mut Rng, state: &mut GalaxyState, classes: &[ShipCl
             else {
                 continue;
             };
-            let class = if gap < 10.0 { small } else { big };
-            let c = &state.ship_classes[class];
             let plan = Plan {
                 source,
                 good,
                 market: home,
             };
+            // The hull that clears the most a day per ship at base prices;
+            // none, and nobody would harvest here.
+            let Some(class) = classes
+                .iter()
+                .copied()
+                .filter(|&c| state.ship_classes[c].cargo_t < 1000.0)
+                .map(|c| (c, harvest::base_profit_per_day(state, c, 1, home, &plan)))
+                .filter(|&(_, p)| p > 0.0)
+                .max_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(c, _)| c)
+            else {
+                continue;
+            };
+            let c = &state.ship_classes[class];
             let (out, work, back) = harvest::run_days(state, c.accel_laden, home, &plan);
             let per_ship = c.cargo_t / (out + work + back);
             let mut ships = ((gap / per_ship).ceil() as u32).clamp(1, MAX_SHIPS);

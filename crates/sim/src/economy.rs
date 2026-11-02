@@ -51,7 +51,7 @@ impl Good {
             Good::Food => 15.0,
             Good::Fuel => 20.0,
             Good::Components => 80.0,
-            Good::Gas => 7.0,
+            Good::Gas => 10.0,
         }
     }
 
