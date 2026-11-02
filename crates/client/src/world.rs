@@ -104,8 +104,9 @@ pub enum Place {
     Convoy(retrox_sim::bubble::FleetKey),
 }
 
-/// The current system's contents, indexed once on arrival.
-#[derive(Clone, Debug, Default)]
+/// The current system's contents, indexed on arrival and again whenever
+/// the sim founds something here while we're in the system (issue #154).
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct SystemView {
     /// Planets, gas giants and moons (belts are only drawn as their fields).
     pub bodies: Vec<BodyId>,
@@ -642,8 +643,24 @@ impl World {
     pub fn advance_clock(&mut self, seconds: f64) {
         self.clock_s += seconds;
         let target_day = self.t_days() as u64;
+        if self.galaxy.time.days() >= target_day {
+            return;
+        }
         while self.galaxy.time.days() < target_day {
             tick(&mut self.galaxy);
+        }
+        self.refresh_view();
+    }
+
+    /// Index the current system again, in case the days just passed
+    /// founded a city or station in it (issue #154): it belongs in
+    /// NAVIGATION, under [T] and [L], straight away, not on the next visit.
+    fn refresh_view(&mut self) {
+        let view = SystemView::new(&self.galaxy, self.system);
+        if view != self.view {
+            self.view = view;
+            // The renderer's station meshes follow `view.stations`.
+            self.system_generation += 1;
         }
     }
 
@@ -1645,6 +1662,49 @@ impl World {
         true
     }
 
+    /// Send colonists to found a city at the next day's turn on the planet we're landed
+    /// on, in a region nobody has settled or is headed for: a city founded
+    /// while the player is in the system (issue #154, for `--colony`).
+    /// Returns the planet, or None if it has no free region.
+    pub fn colony_due_here(&mut self) -> Option<BodyId> {
+        let Mode::Landed { city, body, .. } = self.mode else {
+            return None;
+        };
+        let g = &self.galaxy;
+        let taken = |r| {
+            g.settlements.values().any(|s| s.site == Site::Region(r))
+                || g.colony_ships.values().any(|c| c.site == Site::Region(r))
+        };
+        let region = g.bodies[body]
+            .regions
+            .iter()
+            .copied()
+            .filter(|&r| !taken(r))
+            .max_by(|&a, &b| {
+                g.regions[a]
+                    .habitability
+                    .total_cmp(&g.regions[b].habitability)
+            })?;
+        let from = &g.settlements[city];
+        let mut cargo = retrox_sim::economy::GoodMap::splat(0.0);
+        cargo[Good::Food] = 300.0;
+        cargo[Good::Fuel] = 100.0;
+        let ship = retrox_sim::colonize::ColonyShip {
+            owner: from.owner,
+            from: city,
+            system: self.system,
+            site: Site::Region(region),
+            name: g.regions[region].name.clone(),
+            population: 3.0,
+            cargo,
+            credits: 0.0,
+            // Due now: the colonists land as the day turns over.
+            arrive: g.time,
+        };
+        self.galaxy.colony_ships.insert(ship);
+        Some(body)
+    }
+
     /// In orbit of the first planet with two cities or more (this system's
     /// or the nearest system's), with a contract for 12 t of food to the
     /// last of them and nothing targeted: the case of issue #116 (for
@@ -1820,6 +1880,7 @@ impl World {
             }
             tick(&mut self.galaxy);
             self.clock_s = self.galaxy.time.days() as f64 * SECONDS_PER_DAY;
+            self.refresh_view();
             found = at_work(self);
         }
         let Some(system) = found else {

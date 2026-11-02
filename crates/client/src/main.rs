@@ -13,7 +13,8 @@
 //! station to go back to), `--rewind` (rewinding to a checkpoint),
 //! `--arrival` (back at the checkpoint), `--harvesters <gas|ice>` (by a
 //! harvester at work), `--skim` (in a giant's clouds), `--cities` (over a
-//! planet with two cities), `--interdict` (flying past a gang's lair until
+//! planet with two cities), `--colony` (a city due to be founded on the
+//! starting planet at the day's turn), `--interdict` (flying past a gang's lair until
 //! it interdicts), `--convoy` (alongside a trader fleet; with
 //! `--hostile-convoy`, its faction hostile),
 //! `--ship-view <deg>`, `--screenshot <path.ppm>`. `--menu <page>` opens a
@@ -79,6 +80,9 @@ struct Flags {
     undocked: bool,
     /// In orbit of a planet with two cities, cargo bound for one (#116).
     cities: bool,
+    /// Landed at the start, with colonists due to found a city on the same
+    /// planet when the day turns over (#154).
+    colony: bool,
     /// Start docked at a station, in the first system that has one.
     station: bool,
     /// Start in an asteroid field, facing a rock, prospected.
@@ -164,6 +168,7 @@ impl Flags {
             seed: value("--seed").and_then(|s| s.parse().ok()),
             undocked: has("--undocked"),
             cities: has("--cities"),
+            colony: has("--colony"),
             station: has("--station"),
             field: has("--field") || has("--sunward"),
             sunward: has("--sunward"),
@@ -214,6 +219,7 @@ impl Flags {
                 self.seed.is_some()
                     || self.undocked
                     || self.cities
+                    || self.colony
                     || self.station
                     || self.field
                     || self.traffic
@@ -282,6 +288,9 @@ impl Flags {
             // Look back at the station.
             world.ship.rot *= DQuat::from_rotation_y(2.6);
             world.cam_rot = world.ship.rot;
+        }
+        if self.colony && world.colony_due_here().is_none() {
+            eprintln!("--colony: no free region on the starting planet");
         }
         if self.cities && world.start_by_cities().is_none() {
             eprintln!("--cities: no planet with two cities anywhere");

@@ -593,7 +593,8 @@ fn ports_near(w: &World, jumps: usize) -> Vec<SettlementId> {
 
 /// Whether a player could pick this settlement in NAVIGATION: anywhere
 /// in another system (listed on arrival), or here if this system's list
-/// has it. A city founded since the player arrived isn't listed yet.
+/// has it. A city founded while the player is here is listed as soon as
+/// it's founded (#154), so the bench trades with it too.
 fn listed(w: &World, id: SettlementId) -> bool {
     let s = &w.galaxy.settlements[id];
     s.system != w.system
