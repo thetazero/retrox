@@ -115,6 +115,10 @@ starting galaxy (§5.1).
 - **Hyperlanes** connect systems into a graph. The graph is deliberately
   uneven: dense cores, sparse frontiers, chokepoints and long bridges.
   Lane topology drives trade routes, war fronts and piracy.
+- **Every lane has a tier.** A ship's drive has a tier too, and can use
+  every lane at or below it. Low tiers form a sparse, slow backbone;
+  higher tiers add shortcuts and long bridges. Which network you can use
+  depends on your drive.
 - Each system: star(s), planets, moons, asteroid belts/fields, stations,
   lane entry points, optional anomalies. Real-ish scale ("huge worlds"),
   traversed by supercruise.
@@ -135,7 +139,7 @@ starting galaxy (§5.1).
   step (§5.1), so the galaxy the player enters is a state the live sim can
   sustain — not a hand-balanced snapshot.
 - What the player inherits is all output: factions and their family tree,
-  borders, populations, facilities, markets, tech levels, known lanes,
+  borders, populations, facilities, markets, tech levels (and so which lane tiers they can use),
   ship designs, remnants (ruins, wrecks, abandoned colonies), and the
   history record itself (§5.7).
 - **The player starts at that fixed present day and picks where.** A
@@ -253,8 +257,8 @@ What prehistory (§4.2) needs from the sim — and what keeps running during
 play:
 
 - **Population** grows when fed and shrinks under shortfall.
-- **Colonization:** factions expand along known lanes toward resources and
-  room.
+- **Colonization:** factions expand along the lanes their drives can use,
+  toward resources and room.
 - **Construction:** facilities are built where prices and shortfalls call
   for them.
 - **Politics:** stability, overextension and secession (§5.5); relations,
@@ -268,9 +272,10 @@ play:
   contact — and **losable**. Collapse brings dark ages, so ruins of an
   earlier era can hold better tech than anyone has now. Modules carry a
   tech requirement.
-- **Lane discovery:** each faction knows its own set of lanes. The player
-  starts with their faction's charts; charts are information that can be
-  bought and traded (§5.6). A discovered lane can reshape a region.
+- **Lane tiers follow drive tech.** There is no per-faction lane
+  discovery: a faction can use every lane up to its drive tier. Reaching a
+  new drive tier opens a new layer of the network at once; losing it in a
+  dark age cuts regions off from the routes that held them together.
 - **Ship designs evolve.** Factions generate designs from the section and
   module kit (§7.4) within their tech and economy, in lineages; old hull
   classes stay in service. Stock ships become examples, not the catalog.
@@ -284,7 +289,7 @@ play:
   systems, factions, ships and historical figures involved.
 
 Rough build order, each step adding to the world on its own: factions and
-politics → remnants → tech → lane discovery → ship designs (which needs
+politics → remnants → tech and lane tiers → ship designs (which needs
 tech).
 
 ## 6. Events
@@ -471,6 +476,7 @@ retrox/
 - Does the player's character age over a ~30-year save? (Probably ignored.)
 - History tuning: default `history_years`, prehistory step size, and how
   strong the secession loop and shock rates should be.
-- How tech is lost and recovered in detail; how charts are traded.
+- How tech is lost and recovered in detail.
+- How many lane tiers, and how lanes are split between them.
 - How historical figures are generated (lifespans, which events earn a
   name).
