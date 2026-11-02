@@ -188,6 +188,14 @@ pub struct Pirates {
     /// lair itself. Rebuilt when empty.
     #[serde(skip)]
     near: HashMap<SystemId, (GangId, bool)>,
+    /// Settled places, counted when there were this many settlements:
+    /// founding one is the only thing that changes it.
+    #[serde(skip)]
+    places: Option<(usize, usize)>,
+    /// Each system's asteroid fields, by system index, in field order.
+    /// Fields don't change, so it's made once, when first wanted.
+    #[serde(skip)]
+    fields: Vec<Vec<FieldId>>,
 }
 
 mod prowl_pairs {
@@ -218,14 +226,16 @@ fn settlement_bits(id: SettlementId) -> u64 {
     slotmap::Key::data(&id).as_ffi()
 }
 
-/// The fields in a system.
-fn fields_in(state: &GalaxyState, system: SystemId) -> Vec<FieldId> {
-    state
-        .fields
-        .iter()
-        .filter(|(_, f)| state.bodies[f.belt].system == system)
-        .map(|(id, _)| id)
-        .collect()
+/// Make the index of fields by system, if it isn't made yet.
+fn index_fields(state: &mut GalaxyState) {
+    if !state.pirates.fields.is_empty() || state.fields.is_empty() {
+        return;
+    }
+    let mut by_system = vec![Vec::new(); state.systems.len()];
+    for (id, f) in state.fields.iter() {
+        by_system[state.bodies[f.belt].system.index()].push(id);
+    }
+    state.pirates.fields = by_system;
 }
 
 /// The gang that lairs in `system`, if any.
@@ -275,16 +285,6 @@ pub fn ship_bounty(state: &GalaxyState, gang: &Gang, ship: usize) -> f64 {
     }
 }
 
-/// Whether a faction keeps its capital in `system`.
-fn capital_system(state: &GalaxyState, system: SystemId) -> bool {
-    state.factions.values().any(|f| {
-        state
-            .settlements
-            .get(f.capital)
-            .is_some_and(|s| s.system == system)
-    })
-}
-
 /// Choose a lair within two jumps of `origin`'s system, or `None` if
 /// nowhere will do.
 fn choose_lair(
@@ -306,12 +306,21 @@ fn choose_lair(
         }
         frontier = next;
     }
+    let capitals: Vec<SystemId> = state
+        .factions
+        .values()
+        .filter_map(|f| Some(state.settlements.get(f.capital)?.system))
+        .collect();
     let mut options: Vec<(SystemId, FieldId, f64)> = Vec::new();
     for &s in &seen {
-        if capital_system(state, s) || gang_in(state, s).is_some() {
+        if capitals.contains(&s) || gang_in(state, s).is_some() {
             continue;
         }
-        let fields = fields_in(state, s);
+        let fields = state
+            .pirates
+            .fields
+            .get(s.index())
+            .map_or(&[][..], Vec::as_slice);
         if fields.is_empty() {
             continue;
         }
@@ -371,6 +380,7 @@ pub fn found(state: &mut GalaxyState, origin: SettlementId, rng: &mut Rng) -> Op
         return None;
     }
     let home = state.settlements.get(origin)?.system;
+    index_fields(state);
     let (lair, field) = choose_lair(state, rng, home)?;
     let name = NAMES[rng.below(NAMES.len())].replace("{}", &state.systems[lair].name);
     let ships = (0..2)
@@ -440,26 +450,46 @@ fn hardship(state: &GalaxyState, id: SettlementId) -> f64 {
         .fold(0.0, f64::max)
 }
 
+/// How many gangs the galaxy holds: a few, plus one per so many settled
+/// places. Counting places looks at every settlement, so the count is
+/// kept until a settlement is founded.
+fn gang_cap(state: &mut GalaxyState) -> usize {
+    let settlements = state.settlements.len();
+    let places = match state.pirates.places {
+        Some((n, places)) if n == settlements => places,
+        _ => {
+            let places = state.places();
+            state.pirates.places = Some((settlements, places));
+            places
+        }
+    };
+    places / SETTLEMENTS_PER_GANG + 3
+}
+
 /// The monthly reviews: settlements whose crews may turn pirate, and gangs
 /// that grow, starve, or draw a bounty. Runs in the planning phase.
 pub fn review(state: &mut GalaxyState) {
     let day = state.time.days();
-    let cap = state.places() / SETTLEMENTS_PER_GANG + 3;
-    if !state.pirates.hulls.is_empty() && state.pirates.gangs.len() < cap {
-        let due: Vec<SettlementId> = state
-            .settlements
-            .iter()
-            .filter(|&(id, s)| {
-                (settlement_bits(id).wrapping_add(7)) % 30 == day % 30 && !state.is_port(s)
-            })
-            .map(|(id, _)| id)
-            .collect();
-        for id in due {
-            let p = BASE_CHANCE + HARDSHIP_CHANCE * hardship(state, id);
-            let mut rng = Rng::stream(state.seed, "gang-found", day, settlement_bits(id));
-            if rng.chance(p) && state.pirates.gangs.len() < cap {
-                found(state, id, &mut rng);
-            }
+    if !state.pirates.hulls.is_empty() {
+        // A settlement's crews think about it a week after its other
+        // reviews: a stride through the slots, not a test of each one.
+        let slots = state.settlements.slot_count();
+        for i in crate::settlement::review_slots(day, 7, slots) {
+            let Some(id) = state.settlements.key_at(i) else {
+                continue;
+            };
+            crate::decisions::time(crate::decisions::Decision::Pirates, || {
+                let p = BASE_CHANCE + HARDSHIP_CHANCE * hardship(state, id);
+                let mut rng = Rng::stream(state.seed, "gang-found", day, settlement_bits(id));
+                // Highports don't breed gangs; looking costs a walk of
+                // the system, so only for crews that would.
+                if !rng.chance(p) || state.is_port(&state.settlements[id]) {
+                    return;
+                }
+                if state.pirates.gangs.len() < gang_cap(state) {
+                    found(state, id, &mut rng);
+                }
+            });
         }
     }
     let gangs: Vec<GangId> = state

@@ -458,7 +458,9 @@ pub(crate) fn review(state: &mut GalaxyState, key: CompanyId, n: usize, here: Se
         }
         return;
     }
-    let plan = choose(state, key, n, here);
+    let plan = crate::decisions::time(crate::decisions::Decision::Harvest, || {
+        choose(state, key, n, here)
+    });
     let fleet = &mut state.companies[key].fleets[n];
     fleet.idle = plan.is_none();
     if let Some(h) = fleet.harvest.as_mut() {
@@ -597,9 +599,6 @@ pub(crate) fn found(state: &mut GalaxyState) {
     const WEALTH: f64 = 3.0;
     const CREDITS_PER_T: f64 = 10.0;
     let today = state.time;
-    // Systems where harvesters already sit idle: a scan of every fleet, so
-    // made only once a settlement is otherwise ready to found.
-    let mut idle: Option<std::collections::HashSet<SystemId>> = None;
     for i in crate::settlement::review_slots(today.days(), 0, state.settlements.slot_count()) {
         let Some(id) = state.settlements.key_at(i) else {
             continue;
@@ -650,25 +649,18 @@ pub(crate) fn found(state: &mut GalaxyState) {
         else {
             continue;
         };
-        let idle = idle.get_or_insert_with(|| {
-            state
-                .companies
-                .values()
-                .flat_map(|c| c.fleets.iter())
-                .filter(|f| f.harvest.is_some() && (f.idle || f.slack > 0))
-                .filter_map(|f| match f.at {
-                    Location::Docked(at) => Some(state.settlements.get(at)?.system),
-                    _ => None,
-                })
-                .collect()
-        });
-        if idle.contains(&system) {
+        // Harvesters already sat idle here this month.
+        if state
+            .idle_ports
+            .as_ref()
+            .is_some_and(|p| p.harvesters(system))
+        {
             continue;
         }
         let mass = state.ship_classes[class].mass_t;
         // The crew fetches its hull from the nearest yard with one and
         // flies it home.
-        let yard = match haul::hull_source(state, id, class) {
+        let yard = match haul::hull_source(state, &state.board, id, class) {
             Ok(yard) => yard,
             Err(order) => {
                 state.settlements[order].economy.hull_wanted += mass;

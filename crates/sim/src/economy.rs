@@ -648,6 +648,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn facility_kinds_are_listed_in_order() {
+        // Construction indexes per-kind tables by `kind as usize`.
+        for (i, kind) in FacilityKind::ALL.into_iter().enumerate() {
+            assert_eq!(kind as usize, i);
+        }
+    }
+
+    #[test]
     fn a_project_saved_without_its_start_loads_as_unknown() {
         let project = Project {
             kind: FacilityKind::Refinery,

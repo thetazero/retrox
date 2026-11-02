@@ -67,46 +67,62 @@ fn reachable_resources(state: &GalaxyState, id: SettlementId) -> Resources {
         })
 }
 
-/// Facility kinds this settlement could sensibly build now: the resources
-/// are there, the inputs are on hand, existing facilities of the kind are
-/// busy, and it isn't over its cap.
-fn buildable(state: &GalaxyState, id: SettlementId) -> impl Iterator<Item = FacilityKind> + '_ {
-    let resources = reachable_resources(state, id);
+/// Each kind's total scale in a settlement, and whether all of it runs
+/// busy: one pass over its facilities.
+fn by_kind(facilities: &[Facility]) -> [(f64, bool); FacilityKind::ALL.len()] {
+    let mut out = [(0.0, true); FacilityKind::ALL.len()];
+    for f in facilities {
+        let (scale, busy) = &mut out[f.kind as usize];
+        *scale += f.scale;
+        *busy &= f.utilization >= BUSY;
+    }
+    out
+}
+
+/// Facility kinds this settlement could sensibly build now, with the
+/// scale of the kind it already has: the resources are there, the inputs
+/// are on hand, existing facilities of the kind are busy, and it isn't
+/// over its cap. Read from the settlement's own books; the system's
+/// bodies are looked at only for the kinds that need a resource.
+fn buildable(
+    state: &GalaxyState,
+    id: SettlementId,
+) -> impl Iterator<Item = (FacilityKind, f64)> + '_ {
     let economy = &state.settlements[id].economy;
     let market = &economy.market;
-    FacilityKind::ALL
-        .into_iter()
-        .filter(move |&kind| {
-            let (scale, busy) = economy
-                .facilities
+    let kinds = by_kind(&economy.facilities);
+    let cap = SCALE_PER_POPULATION * economy.population + SCALE_BASE;
+    let mut resources: Option<Resources> = None;
+    FacilityKind::ALL.into_iter().filter_map(move |kind| {
+        let (scale, busy) = kinds[kind as usize];
+        let ready = busy
+            && scale < cap
+            && kind
+                .recipe()
+                .inputs
                 .iter()
-                .filter(|f| f.kind == kind)
-                .fold((0.0, true), |(scale, busy), f| {
-                    (scale + f.scale, busy && f.utilization >= BUSY)
-                });
-            busy && scale < SCALE_PER_POPULATION * economy.population + SCALE_BASE
-                && kind
-                    .recipe()
-                    .inputs
-                    .iter()
-                    .all(|&(g, _)| market.fill(g) >= INPUT_FILL)
-        })
-        .filter(move |&kind| match kind {
-            FacilityKind::Mine => resources.ore > MINEABLE,
-            FacilityKind::IceHarvester => resources.ice > MINEABLE,
+                .all(|&(g, _)| market.fill(g) >= INPUT_FILL);
+        if !ready {
+            return None;
+        }
+        let mut rich = |pick: fn(&Resources) -> f64| {
+            pick(resources.get_or_insert_with(|| reachable_resources(state, id))) > MINEABLE
+        };
+        let possible = match kind {
+            FacilityKind::Mine => rich(|r| r.ore),
+            FacilityKind::IceHarvester => rich(|r| r.ice),
             // Gas plants sit by a giant their harvesters can skim.
-            FacilityKind::GasPlant => resources.gas > MINEABLE,
+            FacilityKind::GasPlant => rich(|r| r.gas),
             // Only where captains want more hull than there is.
             FacilityKind::Shipyard => {
                 economy.hull_wanted > economy.hull_t
                     && economy.population > SHIPYARD_POPULATION
-                    && economy
-                        .facilities
-                        .iter()
-                        .any(|f| f.kind == FacilityKind::Factory)
+                    && kinds[FacilityKind::Factory as usize].0 > 0.0
             }
             _ => true,
-        })
+        };
+        possible.then_some((kind, scale))
+    })
 }
 
 /// Daily margin per unit of scale at local prices.
@@ -138,59 +154,51 @@ fn materials(scale: f64) -> GoodMap<f64> {
     needs
 }
 
-/// How much to add: a fifth of what's there, at least a little.
-fn increment(state: &GalaxyState, id: SettlementId, kind: FacilityKind) -> f64 {
-    let economy = &state.settlements[id].economy;
-    let existing: f64 = economy
-        .facilities
-        .iter()
-        .filter(|f| f.kind == kind)
-        .map(|f| f.scale)
-        .sum();
-    (0.2 * existing).max(0.02 * economy.population).max(1.0)
+/// How much to add to `existing` scale of a kind: a fifth of it, at least
+/// a little.
+fn increment(population: f64, existing: f64) -> f64 {
+    (0.2 * existing).max(0.02 * population).max(1.0)
 }
 
 /// What this settlement should build next, if anything.
 pub fn choose(state: &GalaxyState, id: SettlementId) -> Option<Project> {
     let settlement = &state.settlements[id];
     let market = &settlement.economy.market;
+    let population = settlement.economy.population;
     let kinds = buildable(state, id);
-    let kind = match state.factions[settlement.owner].economy {
+    // What a unit of scale's materials cost here.
+    let material_cost = METAL_PER_SCALE * market.price[Good::Metal]
+        + COMPONENTS_PER_SCALE * market.price[Good::Components];
+    let (kind, existing) = match state.factions[settlement.owner].economy {
         EconomyModel::Market => kinds
-            .into_iter()
-            .filter_map(|kind| {
+            .filter_map(|(kind, existing)| {
                 let good = kind.recipe().outputs.first().map(|o| o.0);
                 if good.is_some_and(|g| market.fill(g) >= MARKET_FILL) {
                     return None;
                 }
                 let m = margin(state, id, kind);
-                let scale = increment(state, id, kind);
-                let cost: f64 = Good::ALL
-                    .iter()
-                    .map(|&g| materials(scale)[g] * market.price[g])
-                    .sum();
-                (m > 0.0 && cost / (m * scale) < PAYBACK_DAYS).then_some((kind, m))
+                // Payback: a unit's materials over a unit's daily margin.
+                (m > 0.0 && material_cost / m < PAYBACK_DAYS).then_some((kind, existing, m))
             })
-            .max_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|(kind, _)| kind)?,
+            .max_by(|a, b| a.2.total_cmp(&b.2))
+            .map(|(kind, existing, _)| (kind, existing))?,
         EconomyModel::Planned => {
             // The plan: build for the good we're shortest of. Hull counts
             // as a good: how much of what captains want is on hand.
             let economy = &settlement.economy;
             kinds
-                .into_iter()
-                .filter_map(|kind| {
+                .filter_map(|(kind, existing)| {
                     let fill = match kind.recipe().outputs.first() {
                         Some(&(good, _)) => market.fill(good),
                         None => economy.hull_t / economy.hull_wanted.max(1e-9),
                     };
-                    (fill < PLAN_FILL).then_some((kind, fill))
+                    (fill < PLAN_FILL).then_some((kind, existing, fill))
                 })
-                .min_by(|a, b| a.1.total_cmp(&b.1))
-                .map(|(kind, _)| kind)?
+                .min_by(|a, b| a.2.total_cmp(&b.2))
+                .map(|(kind, existing, _)| (kind, existing))?
         }
     };
-    let scale = increment(state, id, kind);
+    let scale = increment(population, existing);
     Some(Project {
         kind,
         scale,
@@ -206,7 +214,9 @@ pub fn review(state: &mut GalaxyState) {
     let day = state.time.days();
     for i in crate::settlement::review_slots(day, 0, state.settlements.slot_count()) {
         if let Some(id) = state.settlements.key_at(i) {
-            review_one(state, id);
+            crate::decisions::time(crate::decisions::Decision::Construction, || {
+                review_one(state, id);
+            });
         }
     }
 }

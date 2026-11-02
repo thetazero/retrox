@@ -9,6 +9,7 @@ pub mod bodies;
 pub mod bubble;
 pub mod colonize;
 pub mod construction;
+pub mod decisions;
 pub mod demography;
 pub mod economy;
 pub mod fields;

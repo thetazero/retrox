@@ -38,10 +38,15 @@ pub struct GalaxyState {
     pub calendar: crate::haul::Calendar,
     /// Cargo on its way to each market.
     pub traffic: crate::haul::Traffic,
-    /// Each system's best buyers and sellers, rebuilt in place every trade
-    /// phase; see [`crate::haul`].
-    #[serde(skip)]
+    /// What traders choose routes from: each system's best buyers and
+    /// sellers today, and its monthly trade lists; see
+    /// [`crate::haul::Board`].
+    #[serde(default)]
     pub(crate) board: crate::haul::Board,
+    /// Systems with ships docked idle as of the start of the month, sorted;
+    /// see [`crate::haul`]'s company founding.
+    #[serde(default)]
+    pub(crate) idle_ports: Option<crate::haul::IdlePorts>,
     /// Remembered lane distances; see [`crate::haul::ReachCache`].
     #[serde(skip)]
     pub reach_cache: crate::haul::ReachCache,
@@ -62,6 +67,10 @@ pub struct GalaxyState {
     #[serde(default)]
     pub pirates: crate::pirates::Pirates,
     pub colony_ships: Pool<crate::colonize::ColonyShipId, crate::colonize::ColonyShip>,
+    /// Which sites are taken and where colonists could go; see
+    /// [`crate::colonize::Sites`].
+    #[serde(skip)]
+    pub(crate) sites: crate::colonize::Sites,
     pub history: History,
 }
 
@@ -116,6 +125,7 @@ impl GalaxyState {
     /// Found a settlement, keeping its system's settlement list in sync.
     pub fn add_settlement(&mut self, settlement: Settlement) -> SettlementId {
         let system = settlement.system;
+        self.sites.settle(settlement.site);
         let id = self.settlements.insert(settlement);
         self.systems[system].settlements.push(id);
         id

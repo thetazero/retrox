@@ -14,7 +14,7 @@
 //!
 //! Every movement of money and goods goes through [`crate::ledger`].
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -238,24 +238,92 @@ impl<'de> Deserialize<'de> for Traffic {
 
 pub(crate) type Contracts = SecondaryMap<FactionId, f64>;
 
-/// Each system's best buyer of every good, and its most valuable surplus:
-/// what route choice reads instead of scanning every market. Rebuilt at the
-/// start of every trade phase in one pass over settlements, in place: it
-/// lives on the [`GalaxyState`] between days so the pass allocates
-/// nothing. Only settled systems have an entry.
-#[derive(Clone, Debug, Default)]
+/// What traders read when they choose a route (DESIGN §5.1.1). Two
+/// layers:
+///
+/// - **Today's listings:** each settled system's best buyer of every good,
+///   and its most valuable surplus. Rebuilt at the start of every trade
+///   phase in one pass over settlements, in place, so the pass allocates
+///   nothing. Not saved.
+/// - **Trade lists:** for each settled system, the best few buyers of
+///   every good and the best few surpluses among its nearest settled
+///   systems, with their lane distances. Each system refreshes its lists
+///   from the listings once a month, on its own day, and a trader picks
+///   from them instead of searching. Saved, since they depend on the
+///   prices of the day they were made.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub(crate) struct Board {
-    /// By system index.
+    /// Today's listings, by system index.
+    #[serde(skip)]
     systems: Vec<Option<Listing>>,
+    /// Trade lists, by system index.
+    #[serde(default)]
+    lists: Vec<Option<TradeLists>>,
 }
 
 #[derive(Clone, Copy, Debug)]
 struct Listing {
-    /// The settlement paying the most for each good.
-    buyers: GoodMap<Option<(SettlementId, f64)>>,
+    /// The settlement paying the most for each good, and that price.
+    /// Single precision: listings only rank, and kept small, a month's
+    /// trade lists read fewer cache lines.
+    buyers: GoodMap<Option<(SettlementId, f32)>>,
     /// The settlement whose surplus would fetch the most at base prices,
-    /// with that surplus and its margin per unit.
-    source: Option<(SettlementId, f64, f64)>,
+    /// with the good, and what it would fetch.
+    source: Option<(SettlementId, Good, f32)>,
+}
+
+/// Buyers listed per good, surpluses and shipyards listed, in a system's
+/// trade lists.
+const LISTED_BUYERS: usize = 4;
+const LISTED_SOURCES: usize = 4;
+const LISTED_YARDS: usize = 4;
+
+/// A system's trade lists; see [`Board`].
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub(crate) struct TradeLists {
+    /// For each good, the nearby settlements paying most for it, best
+    /// first.
+    wanted: GoodMap<[Option<Listed>; LISTED_BUYERS]>,
+    /// The nearby surpluses that would fetch most at base prices, best
+    /// first.
+    sources: [Option<Listed>; LISTED_SOURCES],
+    /// The nearest settlements with a shipyard, nearest first: where new
+    /// crews fetch hulls, and where orders for them go.
+    #[serde(default)]
+    yards: [Option<Listed>; LISTED_YARDS],
+    /// The system's own settlements with a shipyard, as of these lists:
+    /// what its neighbours' lists read, rather than every neighbour's
+    /// facilities.
+    #[serde(default)]
+    own_yards: [Option<SettlementId>; LISTED_YARDS],
+}
+
+/// A settlement on a trade list, with how far it is.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+struct Listed {
+    at: SettlementId,
+    /// Lane distance from the list's system, and the lanes crossed.
+    ly: f64,
+    jumps: u32,
+    /// What it ranked by when listed: price for a buyer, value at base
+    /// prices for a surplus.
+    rank: f64,
+}
+
+/// Put `entry` into `list`, kept best first; ties keep the nearer.
+fn insert_ranked<const N: usize>(list: &mut [Option<Listed>; N], entry: Listed) {
+    // Most candidates don't make a full list: check the last place first.
+    if list[N - 1].is_some_and(|last| entry.rank <= last.rank) {
+        return;
+    }
+    let Some(at) = list
+        .iter()
+        .position(|e| e.is_none_or(|e| entry.rank > e.rank))
+    else {
+        return;
+    };
+    list[at..].rotate_right(1);
+    list[at] = Some(entry);
 }
 
 impl Board {
@@ -269,15 +337,15 @@ impl Board {
             });
             let market = &s.economy.market;
             for good in Good::ALL {
-                let price = market.price[good];
+                let price = market.price[good] as f32;
                 if listing.buyers[good].is_none_or(|(_, best)| price > best) {
                     listing.buyers[good] = Some((id, price));
                 }
                 let surplus = market.surplus(good);
-                let margin = (good.base_price() - price).max(0.0);
-                let value = surplus * margin;
-                if value > 0.0 && listing.source.is_none_or(|(_, s, m)| value > s * m) {
-                    listing.source = Some((id, surplus, margin));
+                let margin = (good.base_price() - market.price[good]).max(0.0);
+                let value = (surplus * margin) as f32;
+                if value > 0.0 && listing.source.is_none_or(|(_, _, v)| value > v) {
+                    listing.source = Some((id, good, value));
                 }
             }
         }
@@ -286,6 +354,123 @@ impl Board {
     fn get(&self, system: SystemId) -> Option<&Listing> {
         self.systems.get(system.index())?.as_ref()
     }
+
+    /// Monthly: the settled systems whose day it is refresh their trade
+    /// lists from today's listings. A stride through the systems, like the
+    /// settlements' reviews. Systems in the bubble refresh daily, so
+    /// traders near the player answer the markets the player is changing.
+    fn refresh_lists(&mut self, state: &GalaxyState) {
+        let n = state.systems.len();
+        if self.lists.len() != n {
+            self.lists.resize(n, None);
+        }
+        let first = (state.time.days() % REVIEW_DAYS) as usize;
+        let due = (first..n).step_by(REVIEW_DAYS as usize);
+        let near_player = state.bubble.systems.iter().map(|s| s.index());
+        for i in due.chain(near_player) {
+            let system = SystemId::from_index(i as u32);
+            self.lists[i] = if self.systems[i].is_some() {
+                Some(crate::decisions::time(
+                    crate::decisions::Decision::TradeLists,
+                    || self.make_lists(state, system),
+                ))
+            } else {
+                None
+            };
+        }
+    }
+
+    /// `system`'s trade lists as of today's listings.
+    fn make_lists(&self, state: &GalaxyState, system: SystemId) -> TradeLists {
+        let mut lists = TradeLists::default();
+        let mut considered = 0;
+        for &(near, ly, jumps) in reach(state, system, listing_reach_ly(state)).iter() {
+            let Some(listing) = self.get(near) else {
+                continue;
+            };
+            considered += 1;
+            if considered > ROUTE_SYSTEMS {
+                break;
+            }
+            for good in Good::ALL {
+                if let Some((at, price)) = listing.buyers[good] {
+                    let entry = Listed {
+                        at,
+                        ly,
+                        jumps,
+                        rank: f64::from(price),
+                    };
+                    insert_ranked(&mut lists.wanted[good], entry);
+                }
+            }
+            if let Some((at, _, value)) = listing.source {
+                let entry = Listed {
+                    at,
+                    ly,
+                    jumps,
+                    rank: f64::from(value),
+                };
+                insert_ranked(&mut lists.sources, entry);
+            }
+            // Nearest first already, so yards just fill up in order.
+            let theirs = match self.lists.get(near.index()) {
+                Some(Some(l)) if near != system => l.own_yards,
+                _ => own_yards(state, near),
+            };
+            if near == system {
+                lists.own_yards = theirs;
+            }
+            let free = lists.yards.iter().filter(|y| y.is_none()).count();
+            let start = LISTED_YARDS - free;
+            for (slot, at) in lists.yards[start..]
+                .iter_mut()
+                .zip(theirs.into_iter().flatten())
+            {
+                *slot = Some(Listed {
+                    at,
+                    ly,
+                    jumps,
+                    rank: -ly,
+                });
+            }
+        }
+        lists
+    }
+
+    /// `system`'s trade lists, or, for a system settled since its day came
+    /// round, ones made from today's listings.
+    fn lists(&self, state: &GalaxyState, system: SystemId) -> std::borrow::Cow<'_, TradeLists> {
+        match self.lists.get(system.index()) {
+            Some(Some(lists)) => std::borrow::Cow::Borrowed(lists),
+            _ => std::borrow::Cow::Owned(self.make_lists(state, system)),
+        }
+    }
+}
+
+/// The settlements in `system` with a shipyard, as many as a list holds.
+fn own_yards(state: &GalaxyState, system: SystemId) -> [Option<SettlementId>; LISTED_YARDS] {
+    let mut out = [None; LISTED_YARDS];
+    let yards = state.settlements_in(system).filter(|(_, s)| {
+        s.economy
+            .facilities
+            .iter()
+            .any(|f| f.kind == crate::economy::FacilityKind::Shipyard)
+    });
+    for (slot, (id, _)) in out.iter_mut().zip(yards) {
+        *slot = Some(id);
+    }
+    out
+}
+
+/// How far trade lists look: as far as the longest-legged class goes in a
+/// trip. Each trader keeps to its own class's range.
+fn listing_reach_ly(state: &GalaxyState) -> f64 {
+    let fastest = state
+        .ship_classes
+        .iter()
+        .map(|(_, c)| c.jump_laden)
+        .fold(0.0, f64::max);
+    MAX_TRIP_DAYS * fastest
 }
 
 /// Route choice looks at no more than this many settled systems, nearest
@@ -529,6 +714,7 @@ pub fn trade(state: &mut GalaxyState) {
     let contracts = crate::fiscal::open_contracts(state);
     let mut board = std::mem::take(&mut state.board);
     board.rebuild(state);
+    board.refresh_lists(state);
     for event in state.calendar.take(today) {
         let Some(n) = fleet_index(state, event.company, event.fleet) else {
             continue;
@@ -597,7 +783,7 @@ pub(crate) fn dock(
         .cargo
         .is_some_and(|c| c.amount >= FULL_HOLDS * capacity(state, fleet));
     sell(state, contracts, key, n, to);
-    buy_ship(state, key, n, to, full);
+    buy_ship(state, board, key, n, to, full);
     let review_due = state.companies[key].fleets[n].review_due;
     if review_due && retire(state, key, n, to) {
         return;
@@ -800,6 +986,19 @@ fn choose_route(
     n: usize,
     here: SettlementId,
 ) {
+    crate::decisions::time(crate::decisions::Decision::Route, || {
+        choose_route_timed(state, contracts, board, key, n, here);
+    });
+}
+
+fn choose_route_timed(
+    state: &mut GalaxyState,
+    contracts: &Contracts,
+    board: &Board,
+    key: CompanyId,
+    n: usize,
+    here: SettlementId,
+) {
     let company = &state.companies[key];
     let fleet = &company.fleets[n];
     let class = &state.ship_classes[fleet.class];
@@ -810,57 +1009,60 @@ fn choose_route(
     // Cargo still aboard comes first: the route is wherever it sells
     // best, and what it cost is already spent.
     let aboard = fleet.cargo;
-    let offers: Vec<(Good, f64, f64)> = match aboard {
-        Some(cargo) => vec![(cargo.good, cargo.amount, 0.0)],
-        None => Good::ALL
-            .into_iter()
-            .filter_map(|good| {
+    // What it could load, as (good, amount, price): on the stack, since
+    // there are few goods.
+    let mut offers = [(Good::Ore, 0.0, 0.0); Good::COUNT];
+    let mut offered = 0;
+    match aboard {
+        Some(cargo) => {
+            offers[0] = (cargo.good, cargo.amount, 0.0);
+            offered = 1;
+        }
+        None => {
+            for good in Good::ALL {
                 let price = market.price[good];
                 let amount = capacity
                     .min(market.surplus(good))
                     .min(company.credits.max(0.0) * MAX_STAKE_SHARE / price);
-                (amount >= 1.0).then_some((good, amount, price))
-            })
-            .collect(),
-    };
+                if amount >= 1.0 {
+                    offers[offered] = (good, amount, price);
+                    offered += 1;
+                }
+            }
+        }
+    }
+    let offers = &offers[..offered];
 
     let mut best: Option<(f64, Route)> = None;
     let mut fallback: Option<(f64, SettlementId, u32, bool)> = None;
-    let mut considered = 0;
-    for &(system, ly, lanes) in reach(state, origin.system, MAX_TRIP_DAYS * class.jump_laden).iter()
-    {
-        let Some(listing) = board.get(system) else {
-            continue;
-        };
-        considered += 1;
-        if considered > ROUTE_SYSTEMS {
-            break;
-        }
-        let jumps = system != origin.system;
-        // No leg to this system is shorter than its jump plus handling.
-        let shortest = ly / class.jump_laden + HANDLING_DAYS;
-        for &(good, amount, buy) in &offers {
-            let Some((to, price)) = listing.buyers[good] else {
-                continue;
-            };
-            if to == here {
+    let lists = board.lists(state, origin.system);
+    let range_ly = MAX_TRIP_DAYS * class.jump_laden;
+    for &(good, amount, buy) in offers {
+        for listed in lists.wanted[good].iter().flatten() {
+            let to = listed.at;
+            if to == here || listed.ly > range_ly {
                 continue;
             }
+            let Some(dest) = state.settlements.get(to) else {
+                continue;
+            };
+            // No leg there is shorter than its jump plus handling.
+            let shortest = listed.ly / class.jump_laden + HANDLING_DAYS;
             // Cheap bound first: today's price is at least what it will be
             // once more cargo arrives, and the premium is at most its cap.
-            let owner = state.settlements[to].owner;
-            let premium_cap =
-                crate::fiscal::max_premium(good) * contracts.get(owner).copied().unwrap_or(0.0);
+            let price = dest.economy.market.price[good];
+            let premium_cap = crate::fiscal::max_premium(good)
+                * contracts.get(dest.owner).copied().unwrap_or(0.0);
             let bound = amount * (price + premium_cap - buy) / (2.0 * shortest);
             if bound <= MIN_PROFIT_PER_DAY || best.as_ref().is_some_and(|(b, _)| bound <= *b) {
                 continue;
             }
-            let leg = leg_days(state, class, here, to, ly, lanes);
+            let leg = leg_days(state, class, here, to, listed.ly, listed.jumps);
             if leg > MAX_TRIP_DAYS {
                 continue;
             }
             let sell = expected_sale(state, contracts, to, good, amount);
-            let treasury = state.settlements[to].economy.treasury.max(0.0);
+            let treasury = dest.economy.treasury.max(0.0);
             let amount = amount.min(treasury * MAX_SPEND_SHARE / sell.max(1e-9));
             if amount < 1.0 {
                 continue;
@@ -872,28 +1074,44 @@ fn choose_route(
                     to,
                     good,
                     leg_days: leg.ceil() as u32,
-                    jumps,
+                    jumps: dest.system != origin.system,
                 };
                 best = Some((per_day, route));
             }
         }
-        // Somewhere better to load? Rough guide: what the system's best
-        // surplus would fetch at base prices.
-        if let Some((to, surplus, margin)) = listing.source
-            && to != here
-            && aboard.is_none()
-            && best.is_none()
-            && fallback
+    }
+    // Nothing worth carrying from here: somewhere better to load? Rough
+    // guide: what the surplus there would fetch at base prices today.
+    if best.is_none() && aboard.is_none() {
+        for listed in lists.sources.iter().flatten() {
+            let to = listed.at;
+            if to == here || listed.ly > range_ly {
+                continue;
+            }
+            let Some(at) = state.settlements.get(to) else {
+                continue;
+            };
+            let value = Good::ALL
+                .into_iter()
+                .map(|g| {
+                    let m = &at.economy.market;
+                    capacity.min(m.surplus(g)) * (g.base_price() - m.price[g]).max(0.0)
+                })
+                .fold(0.0, f64::max);
+            let shortest = listed.ly / class.jump_laden + HANDLING_DAYS;
+            if fallback
                 .as_ref()
-                .is_none_or(|(b, ..)| capacity.min(surplus) * margin / (2.0 * shortest) > *b)
-        {
-            let leg = leg_days(state, class, here, to, ly, lanes);
-            let per_day = (capacity.min(surplus) * margin - leg * fuel) / (2.0 * leg);
+                .is_some_and(|(b, ..)| value / (2.0 * shortest) <= *b)
+            {
+                continue;
+            }
+            let leg = leg_days(state, class, here, to, listed.ly, listed.jumps);
+            let per_day = (value - leg * fuel) / (2.0 * leg);
             if leg <= MAX_TRIP_DAYS
                 && per_day > MIN_PROFIT_PER_DAY
                 && fallback.as_ref().is_none_or(|(b, ..)| per_day > *b)
             {
-                fallback = Some((per_day, to, leg.ceil() as u32, jumps));
+                fallback = Some((per_day, to, leg.ceil() as u32, at.system != origin.system));
             }
         }
     }
@@ -1097,7 +1315,14 @@ fn sell(
 /// A prosperous company with no idle fleets, whose fleet came in full, adds
 /// a ship to it if the port has the hull; if not, the port hears that hull
 /// is wanted, which is what shipyards build to.
-fn buy_ship(state: &mut GalaxyState, key: CompanyId, n: usize, here: SettlementId, full: bool) {
+fn buy_ship(
+    state: &mut GalaxyState,
+    board: &Board,
+    key: CompanyId,
+    n: usize,
+    here: SettlementId,
+    full: bool,
+) {
     let company = &state.companies[key];
     if !full || company.fleets.iter().any(|f| f.idle || f.slack > 0) {
         return;
@@ -1109,7 +1334,7 @@ fn buy_ship(state: &mut GalaxyState, key: CompanyId, n: usize, here: SettlementI
     }
     if state.settlements[here].economy.hull_t < mass {
         let class = company.fleets[n].class;
-        let order = hull_source(state, here, class).unwrap_or_else(|o| o);
+        let order = hull_source(state, board, here, class).unwrap_or_else(|o| o);
         state.settlements[order].economy.hull_wanted += mass;
         return;
     }
@@ -1188,153 +1413,189 @@ fn pay_upkeep(state: &mut GalaxyState, key: CompanyId, n: usize) {
 
 /// At their monthly review, settlements with hull to sell, money to spare
 /// and a hold's worth of freight may found a company with one ship of the
-/// biggest class they can build, unless ships already sit idle in their
-/// system.
+/// biggest class they can build, unless ships sat idle in their system
+/// at the start of the month.
 fn found_companies(state: &mut GalaxyState) {
     let today = state.time;
-    // Systems where ships already sit with nothing to carry: a scan of
-    // every fleet, so made only once a settlement is otherwise ready to
-    // found, which most days none is.
-    let mut idle_systems: Option<HashSet<SystemId>> = None;
+    if today.days().is_multiple_of(REVIEW_DAYS) || state.idle_ports.is_none() {
+        state.idle_ports = Some(IdlePorts::new(state));
+    }
     for i in crate::settlement::review_slots(today.days(), 0, state.settlements.slot_count()) {
         let Some(id) = state.settlements.key_at(i) else {
             continue;
         };
-        let entity = slotmap::Key::data(&id).as_ffi();
-        let economy = &state.settlements[id].economy;
-        if economy.population <= 0.0
-            || !Rng::stream(state.seed, "found-company", today.days(), entity)
-                .chance(FOUND_COMPANY_CHANCE)
-        {
-            continue;
-        }
-        let cost = |c: &ShipClass| {
-            c.mass_t * crate::economy::HULL_PRICE_PER_T
-                + c.cargo_t * FOUNDING_HOLDS * FOUNDING_CREDITS_PER_T
-        };
-        // The biggest class it can afford that there's a hold's worth of
-        // freight for.
-        let market = &economy.market;
-        let freight = Good::ALL
-            .iter()
-            .map(|&g| market.surplus(g))
-            .fold(0.0, f64::max);
-        let Some((class, founding)) = state
-            .ship_classes
-            .iter()
-            .filter(|(_, c)| c.cargo_t <= freight && cost(c) * FOUNDING_WEALTH <= economy.treasury)
-            .max_by(|a, b| a.1.cargo_t.total_cmp(&b.1.cargo_t))
-            .map(|(cid, c)| (cid, cost(c)))
-        else {
-            continue;
-        };
-        let idle = idle_systems.get_or_insert_with(|| {
-            state
-                .companies
-                .values()
-                .flat_map(|c| c.fleets.iter())
-                .filter_map(|f| match f.at {
-                    Location::Docked(at) if f.idle || f.slack > 0 => {
-                        Some(state.settlements.get(at)?.system)
-                    }
-                    _ => None,
-                })
-                .collect()
+        crate::decisions::time(crate::decisions::Decision::Founding, || {
+            found_one(state, id, today);
         });
-        if idle.contains(&state.settlements[id].system) {
-            continue;
-        }
-        // The crew fetches the hull from the nearest yard that has it;
-        // with none in reach, the order goes to the nearest yard (or here),
-        // which is what shipyards build to.
-        let mass = state.ship_classes[class].mass_t;
-        let yard = match hull_source(state, id, class) {
-            Ok(yard) => yard,
-            Err(order) => {
-                state.settlements[order].economy.hull_wanted += mass;
-                continue;
-            }
-        };
-        let base = state.settlements[id]
-            .name
-            .split(' ')
-            .next()
-            .unwrap_or("Free")
-            .to_owned();
-        state.settlements[yard].economy.hull_t -= mass;
-        let company = add_company(
-            state,
-            Company {
-                name: format!("{base} Haulers {}", today.year()),
-                home: id,
-                credits: 0.0,
-                fleets: vec![Fleet {
-                    id: 0,
-                    class,
-                    ships: 1,
-                    at: Location::Docked(yard),
-                    cargo: None,
-                    route: None,
-                    review_due: false,
-                    idle: false,
-                    loaded: false,
-                    slack: 0,
-                    harvest: None,
-                }],
-                next_fleet: 0,
-            },
-        );
-        // The settlement stakes the company, which buys its hull from the
-        // yard.
-        let (home, company) = (Account::Settlement(id), Account::Company(company));
-        ledger::pay(state, home, company, founding);
-        ledger::pay(
-            state,
-            company,
-            Account::Settlement(yard),
-            mass * crate::economy::HULL_PRICE_PER_T,
-        );
     }
 }
 
-/// Where a ship of `class` for a company founded at `id` comes from: the
-/// nearest settlement in trading reach with the hull for it (`Ok`), or, if
-/// none has, where to order it (`Err`): the nearest shipyard in reach, or
-/// `id` itself.
+/// Systems where ships sat docked with nothing to carry at the start of
+/// the month: what founding a company, or a harvesting crew, checks
+/// first. Made in one scan of every fleet on the first day of each month
+/// (by [`found_companies`], which runs first), not by each settlement that
+/// asks.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct IdlePorts {
+    /// Where any fleet sat idle, sorted.
+    any: Vec<SystemId>,
+    /// Where a harvester sat idle, sorted.
+    harvesters: Vec<SystemId>,
+}
+
+impl IdlePorts {
+    fn new(state: &GalaxyState) -> Self {
+        let mut ports = Self::default();
+        for f in state.companies.values().flat_map(|c| c.fleets.iter()) {
+            let Location::Docked(at) = f.at else {
+                continue;
+            };
+            if !(f.idle || f.slack > 0) {
+                continue;
+            }
+            let Some(s) = state.settlements.get(at) else {
+                continue;
+            };
+            ports.any.push(s.system);
+            if f.harvest.is_some() {
+                ports.harvesters.push(s.system);
+            }
+        }
+        for list in [&mut ports.any, &mut ports.harvesters] {
+            list.sort_unstable();
+            list.dedup();
+        }
+        ports
+    }
+
+    /// Whether any fleet sat idle in `system`.
+    pub(crate) fn any(&self, system: SystemId) -> bool {
+        self.any.binary_search(&system).is_ok()
+    }
+
+    /// Whether a harvester sat idle in `system`.
+    pub(crate) fn harvesters(&self, system: SystemId) -> bool {
+        self.harvesters.binary_search(&system).is_ok()
+    }
+}
+
+/// One settlement's monthly review of whether to found a company.
+fn found_one(state: &mut GalaxyState, id: SettlementId, today: GalaxyTime) {
+    let entity = slotmap::Key::data(&id).as_ffi();
+    let economy = &state.settlements[id].economy;
+    if economy.population <= 0.0
+        || !Rng::stream(state.seed, "found-company", today.days(), entity)
+            .chance(FOUND_COMPANY_CHANCE)
+    {
+        return;
+    }
+    let cost = |c: &ShipClass| {
+        c.mass_t * crate::economy::HULL_PRICE_PER_T
+            + c.cargo_t * FOUNDING_HOLDS * FOUNDING_CREDITS_PER_T
+    };
+    // The biggest class it can afford that there's a hold's worth of
+    // freight for.
+    let market = &economy.market;
+    let freight = Good::ALL
+        .iter()
+        .map(|&g| market.surplus(g))
+        .fold(0.0, f64::max);
+    let Some((class, founding)) = state
+        .ship_classes
+        .iter()
+        .filter(|(_, c)| c.cargo_t <= freight && cost(c) * FOUNDING_WEALTH <= economy.treasury)
+        .max_by(|a, b| a.1.cargo_t.total_cmp(&b.1.cargo_t))
+        .map(|(cid, c)| (cid, cost(c)))
+    else {
+        return;
+    };
+    let system = state.settlements[id].system;
+    let idle = state.idle_ports.as_ref().is_some_and(|p| p.any(system));
+    if idle {
+        return;
+    }
+    // The crew fetches the hull from the nearest yard that has it;
+    // with none in reach, the order goes to the nearest yard (or here),
+    // which is what shipyards build to.
+    let mass = state.ship_classes[class].mass_t;
+    let yard = match hull_source(state, &state.board, id, class) {
+        Ok(yard) => yard,
+        Err(order) => {
+            state.settlements[order].economy.hull_wanted += mass;
+            return;
+        }
+    };
+    let base = state.settlements[id]
+        .name
+        .split(' ')
+        .next()
+        .unwrap_or("Free")
+        .to_owned();
+    state.settlements[yard].economy.hull_t -= mass;
+    let company = add_company(
+        state,
+        Company {
+            name: format!("{base} Haulers {}", today.year()),
+            home: id,
+            credits: 0.0,
+            fleets: vec![Fleet {
+                id: 0,
+                class,
+                ships: 1,
+                at: Location::Docked(yard),
+                cargo: None,
+                route: None,
+                review_due: false,
+                idle: false,
+                loaded: false,
+                slack: 0,
+                harvest: None,
+            }],
+            next_fleet: 0,
+        },
+    );
+    // The settlement stakes the company, which buys its hull from the
+    // yard.
+    let (home, company) = (Account::Settlement(id), Account::Company(company));
+    ledger::pay(state, home, company, founding);
+    ledger::pay(
+        state,
+        company,
+        Account::Settlement(yard),
+        mass * crate::economy::HULL_PRICE_PER_T,
+    );
+}
+
+/// Where a ship of `class` for a company founded at `id` comes from: `id`
+/// itself or the nearest listed yard in trading reach with the hull for it
+/// (`Ok`), or, if none has, where to order it (`Err`): the nearest listed
+/// yard in reach, or `id` itself. Read from `id`'s system's trade lists
+/// ([`Board`]), not searched for.
 pub(crate) fn hull_source(
     state: &GalaxyState,
+    board: &Board,
     id: SettlementId,
     class: ShipClassId,
 ) -> Result<SettlementId, SettlementId> {
-    let c = &state.ship_classes[class];
+    let mass = state.ship_classes[class].mass_t;
+    let range_ly = MAX_TRIP_DAYS * state.ship_classes[class].jump_laden;
+    let here = &state.settlements[id];
+    if here.economy.hull_t >= mass {
+        return Ok(id);
+    }
+    let lists = board.lists(state, here.system);
     let mut order = None;
-    let origin = state.settlements[id].system;
-    let mut settled = 0;
-    for &(system, _, _) in reach(state, origin, MAX_TRIP_DAYS * c.jump_laden).iter() {
-        let here = &state.systems[system].settlements;
-        if here.is_empty() {
+    for yard in lists.yards.iter().flatten() {
+        if yard.ly > range_ly {
             continue;
         }
-        settled += 1;
-        if settled > ROUTE_SYSTEMS {
-            break;
+        let Some(s) = state.settlements.get(yard.at) else {
+            continue;
+        };
+        if s.economy.hull_t >= mass {
+            return Ok(yard.at);
         }
-        for &s in here {
-            let Some(settlement) = state.settlements.get(s) else {
-                continue;
-            };
-            let e = &settlement.economy;
-            if e.hull_t >= c.mass_t {
-                return Ok(s);
-            }
-            let yard = e
-                .facilities
-                .iter()
-                .any(|f| f.kind == crate::economy::FacilityKind::Shipyard);
-            if yard && order.is_none() {
-                order = Some(s);
-            }
-        }
+        order.get_or_insert(yard.at);
     }
     Err(order.unwrap_or(id))
 }

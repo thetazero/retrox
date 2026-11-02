@@ -21,6 +21,7 @@ use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use retrox_gen::{GalaxyConfig, generate, generate_cradle};
+use retrox_sim::decisions::{self, Decision};
 use retrox_sim::{GalaxyState, PIPELINE, tick_profiled};
 
 /// Phases whose work scales with settlements, and with fleets.
@@ -84,6 +85,19 @@ fn sum(totals: &Totals, names: &[&str]) -> Duration {
         .sum()
 }
 
+/// Each kind of decision: how many, ns each, and the whole of it.
+fn print_decisions(totals: &[(Duration, u64)]) {
+    for (d, &(took, n)) in Decision::ALL.iter().zip(totals) {
+        println!(
+            "    {:<13} {:>9} made, {:>7.0} ns each, {:>7.1} ms in all",
+            d.name(),
+            n,
+            ns(took, n as f64),
+            took.as_secs_f64() * 1000.0
+        );
+    }
+}
+
 fn ns(d: Duration, per: f64) -> f64 {
     d.as_nanos() as f64 / per.max(1.0)
 }
@@ -126,7 +140,11 @@ pub fn run_bench(seed: u64, years: u64) {
     // Actors, on the static galaxy.
     let mut state = generate(seed, &GalaxyConfig::default());
     run(&mut state, 30, |_, _| {});
+    decisions::set_timing(true);
+    decisions::take();
     let actors = run(&mut state, retrox_sim::time::DAYS_PER_YEAR, |_, _| {});
+    let actor_decisions = decisions::take();
+    decisions::set_timing(false);
     let per_settlement = ns(sum(&actors, SETTLEMENT_PHASES), actors.settlement_days);
     let books = ns(sum(&actors, BOOKS_PHASES), actors.settlement_days);
     let per_fleet = ns(sum(&actors, FLEET_PHASES), actors.fleet_days);
@@ -149,6 +167,8 @@ pub fn run_bench(seed: u64, years: u64) {
         println!("  {:<12} {:>10.0} ns per {unit}", phase.name, per);
     }
     println!("  settlement books (production + prices): {books:.0} ns per settlement-day");
+    println!("  decisions (aim ~100 ns each):");
+    print_decisions(&actor_decisions);
 
     // The bubble, on the same galaxy.
     let bubble = bubble(&mut state);
@@ -159,6 +179,8 @@ pub fn run_bench(seed: u64, years: u64) {
 
     // Prehistory, from the cradle.
     let mut state = generate_cradle(seed, &GalaxyConfig::default());
+    decisions::set_timing(true);
+    decisions::take();
     let history = run(
         &mut state,
         years * retrox_sim::time::DAYS_PER_YEAR,
@@ -174,6 +196,8 @@ pub fn run_bench(seed: u64, years: u64) {
             }
         },
     );
+    let history_decisions = decisions::take();
+    decisions::set_timing(false);
     let seconds = history.wall.as_secs_f64();
     println!(
         "prehistory (seed {seed}, {years} years): {seconds:.1} s, {:.2} s per simulated year",
@@ -188,6 +212,8 @@ pub fn run_bench(seed: u64, years: u64) {
         state.settlements.len(),
         fleets(&state)
     );
+    println!("  decisions:");
+    print_decisions(&history_decisions);
 
     let phases: Vec<String> = PIPELINE
         .iter()
@@ -196,8 +222,14 @@ pub fn run_bench(seed: u64, years: u64) {
             format!("\"{}\":{:.3}", p.name, d.as_secs_f64())
         })
         .collect();
+    let decision_ns: Vec<String> = Decision::ALL
+        .iter()
+        .zip(actor_decisions)
+        .map(|(d, (took, n))| format!("\"{}\":{:.0}", d.name(), ns(took, n as f64)))
+        .collect();
     println!(
-        "BENCH {{\"seed\":{seed},\"ns_per_settlement_day\":{per_settlement:.0},\"ns_books_per_settlement_day\":{books:.0},\"ns_per_fleet_day\":{per_fleet:.0},\"static_ms_per_day\":{per_day_ms:.3},\"bubble_ms_per_day\":{:.3},\"bubble_steps_per_flight_day\":{:.0},\"prehistory_years\":{years},\"prehistory_seconds\":{seconds:.2},\"prehistory_settlements\":{},\"prehistory_phases_s\":{{{}}}}}",
+        "BENCH {{\"seed\":{seed},\"ns_per_decision\":{{{}}},\"ns_per_settlement_day\":{per_settlement:.0},\"ns_books_per_settlement_day\":{books:.0},\"ns_per_fleet_day\":{per_fleet:.0},\"static_ms_per_day\":{per_day_ms:.3},\"bubble_ms_per_day\":{:.3},\"bubble_steps_per_flight_day\":{:.0},\"prehistory_years\":{years},\"prehistory_seconds\":{seconds:.2},\"prehistory_settlements\":{},\"prehistory_phases_s\":{{{}}}}}",
+        decision_ns.join(","),
         bubble.ms_per_day,
         bubble.steps_per_flight_day,
         state.settlements.len(),
