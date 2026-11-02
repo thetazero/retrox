@@ -160,20 +160,27 @@ pub fn key_strip(ctx: &egui::Context, w: &World, captured: bool) {
         keys.push(("TAB", "fly with the mouse"));
     }
     egui::Area::new(egui::Id::unique("key-strip"))
-        .anchor(Align2::LEFT_BOTTOM, [20.0, -14.0])
+        .anchor(Align2::LEFT_BOTTOM, [14.0, -10.0])
         .interactable(false)
         .show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                for (key, what) in keys {
-                    keycap(ui, key);
-                    ui.label(
-                        RichText::new(what.to_uppercase())
-                            .font(mono(12.0))
-                            .color(CREAM_DIM),
-                    );
-                    ui.add_space(10.0);
-                }
-            });
+            // A dark backing keeps the labels legible over bright scenes
+            // (the hangar floor, planets).
+            egui::Frame::new()
+                .fill(Color32::from_rgba_premultiplied(9, 7, 14, 200))
+                .inner_margin(egui::Margin::symmetric(6, 4))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        for (key, what) in keys {
+                            keycap(ui, key);
+                            ui.label(
+                                RichText::new(what.to_uppercase())
+                                    .font(mono(12.0))
+                                    .color(CREAM_DIM),
+                            );
+                            ui.add_space(10.0);
+                        }
+                    })
+                });
         });
 }
 

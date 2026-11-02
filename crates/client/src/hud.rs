@@ -211,7 +211,20 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
             }
         }
         labels.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.total_cmp(&b.1)));
-        let mut taken: Vec<Rect> = Vec::new();
+        // Keep labels off the HUD panels (as laid out last frame) and on
+        // the screen.
+        let mut taken: Vec<Rect> = ctx.memory(|m| {
+            m.areas()
+                .visible_layer_ids()
+                .into_iter()
+                .filter(|l| l.order == egui::Order::Middle)
+                .filter_map(|l| m.area_rect(l.id))
+                .map(|r| r.expand(4.0))
+                .collect()
+        });
+        let on_screen = screen.shrink(4.0);
+        // The crosshair and its ticks: only the target's label may sit near.
+        let crosshair = Rect::from_center_size(screen.center(), Vec2::splat(60.0));
         for (targeted, _, p, text, color) in labels {
             let (font, color) = if targeted {
                 (mono(13.0), AMBER)
@@ -219,19 +232,30 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
                 (mono(11.0), color)
             };
             let galley = painter.layout_no_wrap(text, font, color);
-            let rect =
-                Rect::from_min_size(p + Vec2::new(16.0, -galley.size().y / 2.0), galley.size())
-                    .expand(2.0);
-            if taken.iter().any(|t| t.intersects(rect)) {
+            // The target's label sits out past the crosshair's ticks.
+            let gap = if targeted { 32.0 } else { 16.0 };
+            let size = galley.size();
+            let free = |r: Rect| {
+                on_screen.contains_rect(r)
+                    && !taken.iter().any(|t| t.intersects(r))
+                    && (targeted || !crosshair.intersects(r))
+            };
+            // Right of the marker, or failing that, left of it.
+            let right = Rect::from_min_size(p + Vec2::new(gap, -size.y / 2.0), size).expand(2.0);
+            let left =
+                Rect::from_min_size(p + Vec2::new(-gap - size.x, -size.y / 2.0), size).expand(2.0);
+            let Some(rect) = [right, left].into_iter().find(|&r| free(r)) else {
                 continue;
-            }
+            };
             taken.push(rect);
             if targeted {
                 // A leader line out to the label.
-                painter.line_segment(
-                    [p + Vec2::new(11.0, 0.0), rect.left_center()],
-                    Stroke::new(1.0, AMBER.gamma_multiply(0.6)),
-                );
+                let (from, to) = if rect.left() > p.x {
+                    (p + Vec2::new(11.0, 0.0), rect.left_center())
+                } else {
+                    (p - Vec2::new(11.0, 0.0), rect.right_center())
+                };
+                painter.line_segment([from, to], Stroke::new(1.0, AMBER.gamma_multiply(0.6)));
             }
             painter.galley(rect.min + Vec2::splat(2.0), galley, color);
         }
