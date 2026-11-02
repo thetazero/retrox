@@ -29,10 +29,13 @@ use std::sync::LazyLock;
 use glam::{DQuat, DVec3};
 use retrox_sim::ship::ShipStats;
 
+use crate::contracts;
 use crate::hangar::{self, Job, Player};
+use crate::mining::{self, Mining};
 use retrox_gen::{GalaxyConfig, Rock, generate, rocks};
 use retrox_sim::economy::Good;
 use retrox_sim::flight::{self, Goal, Kinematics};
+use retrox_sim::freight::{self, Offer};
 use retrox_sim::{
     BodyId, BodyKind, FieldId, GalaxyState, GalaxyTime, SettlementId, Site, StarClass, SystemId,
     tick,
@@ -57,6 +60,8 @@ pub const WELL_RADII: f64 = 4.0;
 const DRIVE_ACCEL: f64 = ACCEL;
 const JUMP_DURATION: f32 = 4.0;
 const LANDING_DURATION: f32 = 3.0;
+/// Days the galaxy runs before the player starts (see [`World::new`]).
+const WARM_UP_DAYS: f64 = 30.0;
 /// The ship the flight model is tuned for: the starting ship, stock.
 static REFERENCE: LazyLock<ShipStats> = LazyLock::new(|| {
     retrox_content::ships::stock(hangar::STARTING_HULL)
@@ -184,6 +189,8 @@ pub struct Controls {
     pub strafe: f64,
     pub lift: f64,
     pub boost: bool,
+    /// The mining laser's trigger is held.
+    pub fire: bool,
 }
 
 /// One-shot actions.
@@ -212,6 +219,13 @@ pub enum Action {
     Inspect(&'static retrox_sim::ship::Hull),
     /// Buy (positive) or sell (negative) tonnes of a good.
     Trade(Good, f64),
+    /// Take a contract off the dispatch board (by index into
+    /// [`World::board`]).
+    AcceptContract(usize),
+    /// Give up one of the player's contracts (by index).
+    AbandonContract(usize),
+    /// Ping the prospector: read the rocks around the ship.
+    Scan,
 }
 
 /// The screens of a station or city, while docked or landed.
@@ -225,6 +239,8 @@ pub enum Screen {
     Hangar,
     /// Ships for sale, on the bay floor.
     Shipyard,
+    /// The dispatch board: freight contracts.
+    Contracts,
 }
 
 /// What the player could do right now (shown as prompts).
@@ -260,6 +276,11 @@ pub struct World {
     pub cam_rot: DQuat,
     /// Rocks of the asteroid field the ship is in, if any.
     pub field_rocks: Option<(FieldId, Vec<Rock>)>,
+    /// The mining laser and what it has done to every field.
+    pub mining: Mining,
+    /// The mining laser's beam this frame, as offsets from the ship's
+    /// position: muzzle to where it stops.
+    pub beam: Option<(DVec3, DVec3)>,
     pub message: Option<(String, f32)>,
     /// The player's money and ships.
     pub player: Player,
@@ -273,6 +294,11 @@ pub struct World {
     pub map_open: bool,
     /// The system the plotted course leads to, if any.
     pub course: Option<SystemId>,
+    /// The dispatch board where we're docked or landed.
+    pub board: Vec<Offer>,
+    /// What the board was drawn up for: settlement, day, and the player's
+    /// hold and contracts then.
+    board_key: Option<(SettlementId, u64, u64, usize)>,
 }
 
 impl World {
@@ -297,7 +323,7 @@ impl World {
         let system = galaxy.settlements[city].system;
         let view = SystemView::new(&galaxy, system);
         let clock_s = galaxy.time.days() as f64 * SECONDS_PER_DAY;
-        Self {
+        let mut world = Self {
             galaxy,
             system,
             view,
@@ -320,6 +346,8 @@ impl World {
             cockpit: false,
             cam_rot: DQuat::IDENTITY,
             field_rocks: None,
+            mining: Mining::default(),
+            beam: None,
             message: None,
             player: Player::new(),
             screen: Screen::Hub,
@@ -327,7 +355,15 @@ impl World {
             system_generation: 0,
             map_open: false,
             course: None,
-        }
+            board: Vec::new(),
+            board_key: None,
+        };
+        // Generation leaves every market exactly on target. Let the galaxy
+        // run for a while first, so the player arrives in a going concern:
+        // traders under way, some markets short, others with goods to spare.
+        world.advance_clock(WARM_UP_DAYS * SECONDS_PER_DAY);
+        world.refresh_board();
+        world
     }
 
     fn t_days(&self) -> f64 {
@@ -637,8 +673,10 @@ impl World {
                 (Mode::FastTravel(trip), _, _) => self.drop_out(trip),
                 _ => {}
             },
+            Action::Scan => self.scan(),
             Action::Dock => {
                 if let Some(s) = prompts.dock {
+                    self.mining.haul = Default::default();
                     self.mode = Mode::Docked(s);
                     self.screen = Screen::Hub;
                     self.ship.frame = Place::Station(s);
@@ -703,11 +741,31 @@ impl World {
             }
             Action::Wait(days) => {
                 if matches!(self.mode, Mode::Docked(_) | Mode::Landed { .. }) {
-                    self.advance_clock(days as f64 * SECONDS_PER_DAY);
-                    self.say(format!(
-                        "Waited {days} day{}",
-                        if days == 1 { "" } else { "s" }
-                    ));
+                    // Waiting stops when a contract falls due (DESIGN §3).
+                    let mut waited = 0;
+                    let mut due = None;
+                    while waited < days {
+                        self.advance_clock(SECONDS_PER_DAY);
+                        waited += 1;
+                        let today = self.galaxy.time;
+                        due = self
+                            .player
+                            .contracts
+                            .iter()
+                            .find(|c| c.offer.deadline == today || c.fails_on() == today)
+                            .map(|c| self.galaxy.settlements[c.offer.to].name.clone());
+                        if due.is_some() {
+                            break;
+                        }
+                    }
+                    let plural = if waited == 1 { "" } else { "s" };
+                    match due {
+                        Some(to) if waited < days => self.say(format!(
+                            "Stopped waiting after {waited} day{plural}: a contract to {to} is due"
+                        )),
+                        _ => self.say(format!("Waited {waited} day{plural}")),
+                    }
+                    self.settle_contracts();
                 }
             }
             Action::Open(screen) => {
@@ -735,6 +793,27 @@ impl World {
                     Ok(text) | Err(text) => self.say(text),
                 }
             }
+            Action::AcceptContract(i) => {
+                let Some(offer) = self.board.get(i).cloned() else {
+                    return;
+                };
+                if self.docked_at() != Some(offer.from) {
+                    return;
+                }
+                let capacity = self.stats().cargo_t;
+                match contracts::accept(&mut self.player, capacity, &mut self.galaxy, &offer) {
+                    Ok(text) => {
+                        self.board.remove(i);
+                        self.say(text);
+                    }
+                    Err(text) => self.say(text),
+                }
+            }
+            Action::AbandonContract(i) => {
+                if let Some(text) = contracts::abandon(&mut self.player, &mut self.galaxy, i) {
+                    self.say(text);
+                }
+            }
             Action::Hangar(job) => {
                 let Some(here) = self.docked_at() else {
                     return;
@@ -749,6 +828,44 @@ impl World {
                 }
             }
         }
+    }
+
+    /// Deliver contracts bound for where we're docked or landed, and fail
+    /// the ones past their grace period.
+    fn settle_contracts(&mut self) {
+        if self.player.contracts.is_empty() {
+            return;
+        }
+        let mut said = contracts::expire(&mut self.player, &mut self.galaxy);
+        if let Some(here) = self.docked_at() {
+            said.extend(contracts::deliver(&mut self.player, &mut self.galaxy, here));
+        }
+        if !said.is_empty() {
+            self.say(said.join(" · "));
+        }
+    }
+
+    /// Draw up the dispatch board again if anything it depends on changed:
+    /// where we are, the day, the hold, or the player's contracts.
+    fn refresh_board(&mut self) {
+        let Some(here) = self.docked_at() else {
+            self.board_key = None;
+            self.board.clear();
+            return;
+        };
+        let lot = self.stats().cargo_t;
+        let key = (
+            here,
+            self.galaxy.time.days(),
+            lot.to_bits(),
+            self.player.contracts.len(),
+        );
+        if self.board_key == Some(key) {
+            return;
+        }
+        self.board_key = Some(key);
+        let pending = contracts::pending(&self.player);
+        self.board = freight::board(&self.galaxy, here, lot, |ly| self.jump_days(ly), &pending);
     }
 
     /// The settlement we're docked at, or landed at (once down).
@@ -894,7 +1011,10 @@ impl World {
             }
         }
 
+        self.settle_contracts();
+        self.refresh_board();
         self.update_field();
+        self.mine(dt, controls.fire);
         self.update_camera(dt);
     }
 
@@ -988,8 +1108,13 @@ impl World {
         }
         if let Some((field, rocks)) = &self.field_rocks {
             let center = self.position(Place::Field(*field));
-            for rock in rocks {
-                solids.push((center + rock_offset(rock), rock.radius_m + 8.0));
+            for (i, rock) in rocks.iter().enumerate() {
+                if !self.mining.is_broken(*field, i) {
+                    solids.push((center + rock_offset(rock), rock.radius_m + 8.0));
+                }
+            }
+            for (pos, radius) in self.mining.frag_solids(*field) {
+                solids.push((center + pos, radius + 4.0));
             }
         }
         for (center, radius) in solids {
@@ -1015,9 +1140,164 @@ impl World {
         match (inside, &self.field_rocks) {
             (Some(f), Some((current, _))) if f == *current => {}
             (Some(f), _) => self.field_rocks = Some((f, rocks(&self.galaxy.fields[f]))),
-            (None, Some(_)) => self.field_rocks = None,
+            (None, Some((left, _))) => {
+                self.mining.leave(*left);
+                self.field_rocks = None;
+            }
             (None, None) => {}
         }
+    }
+
+    /// Where the mining laser's muzzle is, in ship space (metres, nose
+    /// toward -Z): the first fitted mining laser's slot, else the nose.
+    pub fn laser_muzzle(&self) -> DVec3 {
+        use retrox_sim::ship::Function;
+        self.player
+            .ship
+            .fit
+            .mounts()
+            .filter_map(|(_, s)| s)
+            .flat_map(|s| s.slots())
+            .find_map(|(slot, module)| {
+                matches!(module?.function, Function::MiningLaser { .. }).then(|| {
+                    let [x, y, z] = slot.position_m;
+                    DVec3::new(x, y, -z)
+                })
+            })
+            .unwrap_or(DVec3::new(0.0, 0.0, -self.stats().length_m / 2.0))
+    }
+
+    /// One frame of the mining laser and the tractor.
+    fn mine(&mut self, dt: f64, fire: bool) {
+        let stats = self.stats();
+        self.beam = None;
+        let Some((field, rocks)) = &self.field_rocks else {
+            if let Some(text) = self
+                .mining
+                .idle(dt, &stats, fire && self.mode == Mode::Normal)
+            {
+                self.say(text);
+            }
+            if self.mining.firing {
+                let muzzle = self.ship.rot * self.laser_muzzle();
+                let forward = self.ship.rot * DVec3::NEG_Z;
+                self.beam = Some((muzzle, muzzle + forward * stats.mining_range_m));
+            }
+            return;
+        };
+        let field = *field;
+        let centre = self.position(Place::Field(field));
+        let ship = self.ship_position() - centre;
+        let muzzle = self.ship.rot * self.laser_muzzle();
+        let forward = self.ship.rot * DVec3::NEG_Z;
+        let miner = mining::Miner {
+            nose: ship + muzzle,
+            forward,
+            centre: ship,
+            reach: stats.length_m * 0.6 + 6.0,
+            free_t: (stats.cargo_t - self.player.cargo_t()).max(0.0),
+            firing: fire && self.mode == Mode::Normal,
+        };
+        let out = self.mining.update(
+            dt,
+            field,
+            &self.galaxy.fields[field],
+            rocks,
+            self.clock_s,
+            &stats,
+            miner,
+        );
+        for (good, t) in out.collected {
+            self.player.cargo[good] += t;
+        }
+        self.ship.vel += out.kick;
+        if let Some(text) = out.messages.into_iter().last() {
+            self.say(text);
+        }
+        if self.mining.firing {
+            let end = match self.mining.aim {
+                Some(aim) if aim.distance <= stats.mining_range_m => aim.point - ship,
+                _ => muzzle + forward * stats.mining_range_m,
+            };
+            self.beam = Some((muzzle, end));
+        }
+    }
+
+    fn scan(&mut self) {
+        if self.mode != Mode::Normal {
+            return;
+        }
+        let Some((field, rocks)) = &self.field_rocks else {
+            self.say("Nothing to prospect: fly into an asteroid field");
+            return;
+        };
+        let centre = self.position(Place::Field(*field));
+        let from = self.ship_position() - centre;
+        let found = self.mining.scan(
+            *field,
+            &self.galaxy.fields[*field],
+            rocks,
+            self.clock_s,
+            from,
+        );
+        if let Some(n) = found {
+            self.say(format!("Prospector: {n} rocks read"));
+        }
+    }
+
+    /// The best price a tonne of `good` sells for in this system, and
+    /// where.
+    pub fn best_local_price(&self, good: Good) -> Option<(f64, SettlementId)> {
+        self.view
+            .stations
+            .iter()
+            .copied()
+            .chain(self.view.cities.iter().map(|&(c, _)| c))
+            .filter_map(|s| {
+                let settlement = self.galaxy.settlements.get(s)?;
+                let model = self.galaxy.factions.get(settlement.owner)?.economy;
+                let price = crate::trade::sell_value(&settlement.economy.market, model, good, 1.0);
+                Some((price, s))
+            })
+            .max_by(|a, b| a.0.total_cmp(&b.0))
+    }
+
+    /// Park in the first asteroid field of this system (or the nearest
+    /// system with one), facing a mid-sized rock a few hundred metres off
+    /// (for testing). Returns whether it found one.
+    pub fn start_at_field(&mut self) -> bool {
+        let here = SystemView::new(&self.galaxy, self.system);
+        if here.fields.is_empty() {
+            let found = self.galaxy.systems.iter().find_map(|(id, _)| {
+                (!SystemView::new(&self.galaxy, id).fields.is_empty()).then_some(id)
+            });
+            let Some(system) = found else {
+                return false;
+            };
+            self.arrive_jump(system);
+        }
+        let field = self.view.fields[0];
+        let rocks = rocks(&self.galaxy.fields[field]);
+        let Some(rock) = rocks
+            .iter()
+            .filter(|r| (12.0..40.0).contains(&r.radius_m))
+            .min_by(|a, b| rock_offset(a).length().total_cmp(&rock_offset(b).length()))
+        else {
+            return false;
+        };
+        let at = rock_offset(rock);
+        let back = (at.normalize_or(DVec3::Z) + DVec3::new(0.0, 0.3, 0.0)).normalize();
+        self.mode = Mode::Normal;
+        self.ship.frame = Place::Field(field);
+        self.ship.rel = at + back * (rock.radius_m * 3.0 + 150.0);
+        self.ship.vel = DVec3::ZERO;
+        self.ship.throttle = 0.0;
+        self.ship.rot = look_rotation(at - self.ship.rel);
+        self.cam_rot = self.ship.rot;
+        self.target = Some(Place::Field(field));
+        self.message = None;
+        self.update_field();
+        true
     }
 
     /// Move to the first system with a station and dock there (for
@@ -1046,7 +1326,9 @@ impl World {
         self.system = to;
         self.view = SystemView::new(&self.galaxy, to);
         self.system_generation += 1;
-        self.field_rocks = None;
+        if let Some((left, _)) = self.field_rocks.take() {
+            self.mining.leave(left);
+        }
         self.target = None;
         if self.course == Some(to) {
             self.course = None;
@@ -1299,6 +1581,66 @@ mod tests {
         assert!(thrust < 1.0 && turn < 1.0, "{thrust} {turn}");
     }
 
+    #[test]
+    fn mine_a_rock_and_sell_the_ore() {
+        let mut world = World::new(1);
+        assert!(
+            world.stats().mining_cut > 0.0,
+            "the courier comes with a laser"
+        );
+        assert!(world.start_at_field());
+        world.act(Action::Scan);
+        let (field, _) = world.field_rocks.clone().expect("in a field");
+        let mine = Controls {
+            fire: true,
+            ..Default::default()
+        };
+        let dt = 1.0 / 60.0;
+        // Fire until something fractures, letting the laser vent.
+        let mut frames = 0;
+        while world
+            .mining
+            .field(field)
+            .is_none_or(|s| s.nuggets.is_empty())
+        {
+            frames += 1;
+            assert!(frames < 60 * 180, "nothing fractured in three minutes");
+            world.update(dt, mine);
+        }
+        // Sweep up: park by each loose chunk in turn and let the tractor
+        // pull it in.
+        for _ in 0..200 {
+            let Some(next) = world
+                .mining
+                .field(field)
+                .and_then(|s| s.nuggets.first())
+                .map(|n| n.pos)
+            else {
+                break;
+            };
+            world.ship.frame = Place::Field(field);
+            world.ship.rel = next + DVec3::Y * 20.0;
+            world.ship.vel = DVec3::ZERO;
+            run(&mut world, 3.0);
+        }
+        let mined = world.player.cargo[Good::Ore] + world.player.cargo[Good::Ice];
+        assert!(mined > 0.1, "hold has {mined} t");
+        assert!(world.player.cargo_t() <= world.stats().cargo_t + 1e-9);
+
+        // Sell it at a station.
+        world.start_at_station();
+        let credits = world.player.credits;
+        for good in [Good::Ore, Good::Ice] {
+            let t = world.player.cargo[good].floor();
+            if t >= 1.0 {
+                world.act(Action::Trade(good, -t));
+            }
+        }
+        if mined >= 1.0 {
+            assert!(world.player.credits > credits);
+        }
+    }
+
     fn engine_slot(world: &World) -> (usize, usize) {
         let fit = &world.player.ship.fit;
         fit.mounts()
@@ -1444,5 +1786,84 @@ mod tests {
         assert_eq!(world.course, None, "arriving clears the course");
         world.act(Action::PlotCourse(Some(world.system)));
         assert_eq!(world.course, None, "no course to where you are");
+    }
+
+    #[test]
+    fn the_starting_board_carries_real_shortages() {
+        for seed in 1..=3 {
+            let world = World::new(seed);
+            let here = world.docked_at().unwrap();
+            assert!(!world.board.is_empty(), "seed {seed}: empty board");
+            let origin = &world.galaxy.settlements[here].economy.market;
+            for o in &world.board {
+                let dest = &world.galaxy.settlements[o.to].economy.market;
+                let coming = world.galaxy.traffic.inbound(o.to, o.good);
+                // The consignee is short even counting what's on the way,
+                // and this market can spare the goods without going short.
+                assert!(dest.stock[o.good] + coming + o.amount <= dest.target(o.good));
+                assert!(origin.stock[o.good] - o.amount >= 0.75 * origin.target(o.good) - 1e-6);
+                assert!(o.fee > 0.0 && o.deadline > world.date());
+            }
+        }
+    }
+
+    #[test]
+    fn take_a_contract_and_deliver_it_in_another_system() {
+        let mut world = World::new(1);
+        let i = world
+            .board
+            .iter()
+            .position(|o| o.jumps > 0)
+            .expect("a contract to another system");
+        let offer = world.board[i].clone();
+        let credits = world.player.credits;
+        let before = world.galaxy.settlements[offer.to].economy.market.stock[offer.good];
+        world.act(Action::Open(Screen::Contracts));
+        world.act(Action::AcceptContract(i));
+        assert_eq!(world.player.contracts.len(), 1);
+        assert_eq!(world.player.credits, credits - offer.value);
+        assert_eq!(world.player.contract_t(), offer.amount);
+
+        // Fly it there, hop by hop.
+        let dest = world.galaxy.settlements[offer.to].system;
+        world.act(Action::Launch);
+        world.act(Action::PlotCourse(Some(dest)));
+        while let Some(hop) = world.next_hop() {
+            world.arrive_jump(hop);
+        }
+        assert_eq!(world.system, dest);
+        assert!(world.date() <= offer.deadline, "should arrive on time");
+        let flow = world.galaxy.settlements[offer.to].economy.market.stock[offer.good];
+        world.mode = match world.galaxy.settlements[offer.to].site {
+            Site::Region(r) => Mode::Landed {
+                city: offer.to,
+                body: world.galaxy.regions[r].body,
+                timer: 0.0,
+            },
+            _ => Mode::Docked(offer.to),
+        };
+        world.update(1.0 / 60.0, Controls::default());
+        assert!(world.player.contracts.is_empty());
+        assert_eq!(world.player.contract_t(), 0.0);
+        assert!((world.player.credits - (credits + offer.fee)).abs() < 1e-6);
+        let after = world.galaxy.settlements[offer.to].economy.market.stock[offer.good];
+        assert!(
+            (after - flow - offer.amount).abs() < 1e-6,
+            "{before} {flow} {after}"
+        );
+    }
+
+    #[test]
+    fn waiting_stops_when_a_contract_falls_due() {
+        let mut world = World::new(1);
+        let offer = world.board[0].clone();
+        world.act(Action::AcceptContract(0));
+        world.act(Action::Wait(1000));
+        assert_eq!(world.date(), offer.deadline);
+        assert_eq!(world.player.contracts.len(), 1);
+        // Waiting on past the grace period fails it: the goods are ours.
+        world.act(Action::Wait(1000));
+        assert!(world.player.contracts.is_empty());
+        assert_eq!(world.player.cargo[offer.good], offer.amount);
     }
 }

@@ -24,7 +24,7 @@ use crate::meshes::{Mesh, ShipShape};
 /// The hand-built model for `fit`'s hull, if it has one.
 pub fn authored(fit: &Loadout) -> Option<(Mesh, ShipShape)> {
     match fit.hull().id {
-        "courier" => Some(small::courier(fit.stats().length_m as f32)),
+        "courier" => Some(small::courier(fit)),
         "light-trader" => Some(small::light_trader(fit)),
         "interceptor" => Some(small::interceptor(fit)),
         "heavy-fighter" => Some(small::heavy_fighter(fit)),

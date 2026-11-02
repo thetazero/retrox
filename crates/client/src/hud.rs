@@ -11,6 +11,7 @@ use glam::{DVec3, Mat4, Vec4};
 use retrox_sim::{BodyKind, EconomyModel};
 
 mod map;
+mod mining;
 
 use crate::world::{AU, Action, COMBAT_SPEED, Mode, Place, SECONDS_PER_DAY, World};
 
@@ -219,6 +220,8 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
         painter.circle_filled(c + s, 2.5, AMBER);
     }
 
+    mining::draw(ctx, &h);
+
     // Top-left: where and when.
     egui::Area::new(egui::Id::unique("where"))
         .anchor(Align2::LEFT_TOP, [18.0, 14.0])
@@ -266,6 +269,10 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
                 RED,
             );
         });
+
+    if matches!(w.mode, Mode::Normal | Mode::FastTravel(_)) {
+        crate::contracts_ui::flight_readout(ctx, w);
+    }
 
     // Bottom: flight instruments.
     if w.mode == Mode::Normal {
@@ -528,7 +535,8 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
         .show(ctx, |ui| {
             let text = if h.captured {
                 "mouse steer · W/S throttle · X stop · A/D strafe · SPACE/CTRL lift · Q/E roll · SHIFT boost\n\
-                 J fast travel · T next target · M galaxy map · V camera · Z flight assist · TAB free mouse"
+                 J fast travel · T next target · M galaxy map · V camera · Z flight assist · TAB free mouse\n\
+                 LMB or R mining laser · G prospect"
             } else {
                 "TAB or click the view to fly with the mouse · arrow keys also steer · M galaxy map"
             };

@@ -1,5 +1,5 @@
 // Tonemap the HDR scene and grade it like period film stock with a
-// sovietwave lean: bloom with red halation, indigo shadows, warm highlights,
+// sovietwave lean: bloom with red halation, warm highlights,
 // a touch of lens fringing, vignette, grain and faint scanlines.
 
 struct Globals {
@@ -8,8 +8,6 @@ struct Globals {
     star_color: vec4<f32>,
     // x: time, y: exposure, z: width, w: height
     misc: vec4<f32>,
-    // xyz: direction to the galactic core, w: how far out we are (0..1)
-    sky: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> g: Globals;
 @group(1) @binding(0) var hdr: texture_2d<f32>;
@@ -56,8 +54,8 @@ fn fs(i: VOut) -> @location(0) vec4<f32> {
     let lum = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
     // A little extra saturation in the mids.
     c = max(mix(vec3<f32>(lum), c, 1.12), vec3<f32>(0.0));
-    // Indigo shadows, warm peach highlights.
-    c = c + vec3<f32>(0.006, 0.002, 0.014) * (1.0 - lum) * (1.0 - lum);
+    // Warm peach highlights. (No lift in the shadows: empty space stays
+    // black, and the only light in the sky is real starlight.)
     c = c * mix(vec3<f32>(0.97, 0.98, 1.03), vec3<f32>(1.05, 0.99, 0.9), smoothstep(0.15, 0.85, lum));
     // Vignette.
     let d = distance(i.uv, vec2<f32>(0.5));

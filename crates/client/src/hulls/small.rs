@@ -42,8 +42,10 @@ fn starter_profile(z0: f32, z1: f32, steps: u32, inflate: f32) -> Vec<(f32, f32)
 /// a cream enamel rocket of the old optimistic school, nose toward -Z, with
 /// a red nose and cheatline, a wraparound windscreen, lit portholes, three
 /// swept radiator fins, a gold-foil service collar and a clustered engine.
-/// Scaled so it is `length` metres from nose to bell exit.
-pub(super) fn courier(length: f32) -> (Mesh, ShipShape) {
+/// Scaled so it is the hull's length from nose to bell exit. Whatever sits
+/// in its chin mount (a mining laser, stock) hangs under the nose.
+pub(super) fn courier(loadout: &Loadout) -> (Mesh, ShipShape) {
+    let length = loadout.stats().length_m as f32;
     const SEGS: u32 = 36;
     let (cyl, ball) = (cylinder(16), icosphere(2));
     let mut m = Mesh::default();
@@ -287,6 +289,21 @@ pub(super) fn courier(length: f32) -> (Mesh, ShipShape) {
         * Mat4::from_translation(Vec3::Z * (COURIER_MODEL_LEN / 2.0 - COURIER_NOZZLE_Z));
     let mut out = Mesh::default();
     out.add(&m, fit, 1.0);
+    for (slot, module, p) in fitted(loadout) {
+        if slot.kind == SlotKind::Weapon {
+            // A pod on a short pylon under the nose.
+            let pod = Vec3::new(p.x, p.y - 0.1, p.z + 0.5);
+            out.paint(
+                &cylinder(10),
+                strut(pod + Vec3::Y * 0.45, pod, 0.08),
+                1.0,
+                Paint::Metal,
+            );
+            out.paint(&icosphere(2), at(pod, 0.24), 1.0, Paint::Red);
+            let k = scale(module.size);
+            gun(&mut out, pod, p.z - 0.9 * k, is_laser(module), k);
+        }
+    }
     let mut nozzles = vec![(fit.transform_point3(Vec3::Z * COURIER_NOZZLE_Z), 1.6 * k)];
     for &at in &verniers {
         nozzles.push((fit.transform_point3(at + Vec3::Z * 9.78), 0.5 * k));

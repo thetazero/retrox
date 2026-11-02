@@ -249,7 +249,8 @@ pub fn arrive(state: &mut GalaxyState) {
         let Some(owner) = owner else {
             // Nobody left to belong to: the colonists scatter, and their
             // money goes to any faction.
-            if let Some(f) = state.factions.keys().next() {
+            let any = state.factions.keys().next();
+            if let Some(f) = any {
                 ledger::pay(
                     state,
                     Account::Colony(key),

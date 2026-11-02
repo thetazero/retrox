@@ -72,8 +72,6 @@ struct Globals {
     inv_view_proj: [[f32; 4]; 4],
     star_color: [f32; 4],
     misc: [f32; 4],
-    /// xyz: direction to the galactic core; w: how far out we are (0..1).
-    sky: [f32; 4],
 }
 
 #[repr(C)]
@@ -113,7 +111,6 @@ pub struct Renderer {
     globals: wgpu::Buffer,
     globals_bind: wgpu::BindGroup,
     mesh_pipeline: wgpu::RenderPipeline,
-    backdrop_pipeline: wgpu::RenderPipeline,
     sky_pipeline: wgpu::RenderPipeline,
     post_pipeline: wgpu::RenderPipeline,
     /// Bright-pass downsample, then blurs: horizontal and vertical, narrow
@@ -123,7 +120,6 @@ pub struct Renderer {
     bloom_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     targets: Targets,
-    sky_params: [f32; 4],
 
     meshes: Vec<MeshRange>,
     vertices: Vec<Vertex>,
@@ -250,8 +246,6 @@ impl Renderer {
         let mesh_shader = device.create_shader_module(wgpu::include_wgsl!("shaders/mesh.wgsl"));
         let sky_shader = device.create_shader_module(wgpu::include_wgsl!("shaders/sky.wgsl"));
         let post_shader = device.create_shader_module(wgpu::include_wgsl!("shaders/post.wgsl"));
-        let backdrop_shader =
-            device.create_shader_module(wgpu::include_wgsl!("shaders/backdrop.wgsl"));
         let bloom_shader = device.create_shader_module(wgpu::include_wgsl!("shaders/bloom.wgsl"));
 
         let scene_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -332,21 +326,33 @@ impl Renderer {
                 compilation_options: Default::default(),
                 buffers: &[Some(wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<SkyVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
+                    // One star per instance, drawn as a small quad.
+                    step_mode: wgpu::VertexStepMode::Instance,
                     attributes: &sky_attrs,
                 })],
             },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::PointList,
-                ..Default::default()
-            },
+            primitive: wgpu::PrimitiveState::default(),
             depth_stencil: depth(false),
             multisample: Default::default(),
             fragment: Some(wgpu::FragmentState {
                 module: &sky_shader,
                 entry_point: Some("fs"),
                 compilation_options: Default::default(),
-                targets: &[Some(HDR_FORMAT.into())],
+                // Additive: stars too faint and close together to resolve
+                // pile their light into the same pixels, which is all the
+                // galaxy's glowing band is.
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: HDR_FORMAT,
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::One,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent::REPLACE,
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
             }),
             multiview_mask: None,
             cache: None,
@@ -381,20 +387,6 @@ impl Renderer {
                 cache: None,
             })
         };
-        let backdrop_pipeline = fullscreen(
-            "backdrop",
-            &scene_layout,
-            &backdrop_shader,
-            "fs",
-            HDR_FORMAT,
-            Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::Always),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-        );
         let bloom_pipelines = [
             "fs_down",
             "fs_blur_h1",
@@ -464,7 +456,6 @@ impl Renderer {
             globals,
             globals_bind,
             mesh_pipeline,
-            backdrop_pipeline,
             sky_pipeline,
             post_pipeline,
             bloom_pipelines,
@@ -472,7 +463,6 @@ impl Renderer {
             bloom_layout,
             sampler,
             targets,
-            sky_params: [1.0, 0.0, 0.0, 0.5],
             meshes: Vec::new(),
             vertices: Vec::new(),
             indices: Vec::new(),
@@ -522,10 +512,9 @@ impl Renderer {
         id
     }
 
-    /// The sky: background stars, the direction to the galactic core and
-    /// how far out from it we are (0 at the core, 1 at the rim).
-    pub fn set_sky(&mut self, stars: &[SkyVertex], core: glam::Vec3, out: f32) {
-        self.sky_params = [core.x, core.y, core.z, out];
+    /// The sky: every other star system, as points at infinity carrying
+    /// the light that reaches us from each.
+    pub fn set_sky(&mut self, stars: &[SkyVertex]) {
         let buffer = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -585,7 +574,6 @@ impl Renderer {
                 1.0,
             ],
             misc: [frame.time, frame.exposure, w as f32, h as f32],
-            sky: self.sky_params,
         };
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
@@ -610,12 +598,8 @@ impl Renderer {
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.0015,
-                            g: 0.002,
-                            b: 0.004,
-                            a: 1.0,
-                        }),
+                        // Space is black; any light comes from the stars.
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -633,13 +617,10 @@ impl Renderer {
             });
             pass.set_bind_group(0, &self.globals_bind, &[]);
 
-            pass.set_pipeline(&self.backdrop_pipeline);
-            pass.draw(0..3, 0..1);
-
             if let Some((buffer, count)) = &self.sky_buffer {
                 pass.set_pipeline(&self.sky_pipeline);
                 pass.set_vertex_buffer(0, buffer.slice(..));
-                pass.draw(0..*count, 0..1);
+                pass.draw(0..6, 0..*count);
             }
 
             if let (Some(vb), Some(ib)) = (&self.vertex_buffer, &self.index_buffer) {
