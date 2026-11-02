@@ -14,8 +14,7 @@
 //!
 //! Every movement of money and goods goes through [`crate::ledger`].
 
-use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -23,6 +22,7 @@ use slotmap::{SecondaryMap, new_key_type};
 
 use crate::economy::{Good, GoodMap};
 use crate::ledger::{self, Account, Supply};
+use crate::routes::{self, Visit};
 use crate::settlement::{SettlementId, Site};
 use crate::{EconomyModel, FactionId, GalaxyState, GalaxyTime, Id, Orbiting, Rng, SystemId};
 
@@ -402,25 +402,19 @@ pub fn reach(state: &GalaxyState, origin: SystemId, max_ly: f64) -> Reached {
 }
 
 fn search(state: &GalaxyState, origin: SystemId, max_ly: f64) -> Vec<(SystemId, f64)> {
-    let mut best: HashMap<SystemId, f64> = HashMap::from([(origin, 0.0)]);
-    let mut heap = BinaryHeap::from([Reverse((0.0f64.to_bits(), origin))]);
     let mut out = Vec::new();
-    while let Some(Reverse((bits, system))) = heap.pop() {
-        let ly = f64::from_bits(bits);
-        if best.get(&system).is_some_and(|&b| b < ly) {
-            continue;
-        }
-        out.push((system, ly));
-        for &lane in &state.systems[system].lanes {
-            let lane = &state.lanes[lane];
-            let next = lane.other(system);
-            let d = ly + lane.length_ly;
-            if d <= max_ly && best.get(&next).is_none_or(|&b| d < b) {
-                best.insert(next, d);
-                heap.push(Reverse((d.to_bits(), next)));
+    routes::search(
+        state,
+        origin,
+        |lane| lane.length_ly,
+        |step| {
+            if step.cost > max_ly {
+                return Visit::Stop;
             }
-        }
-    }
+            out.push((step.system, step.cost));
+            Visit::Expand
+        },
+    );
     out
 }
 

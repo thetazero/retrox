@@ -268,6 +268,23 @@ impl StarClass {
         }
     }
 
+    /// Typical radius in solar radii.
+    pub const fn radius_suns(self) -> f64 {
+        use StarClass::*;
+        match self {
+            O => 10.0,
+            B => 4.0,
+            A => 1.7,
+            F => 1.3,
+            G => 1.0,
+            K => 0.8,
+            M => 0.4,
+            WhiteDwarf => 0.012,
+            Neutron => 1.5e-5,
+            BlackHole => 4.3e-5,
+        }
+    }
+
     /// Typical luminosity in solar luminosities.
     pub const fn luminosity_suns(self) -> f64 {
         use StarClass::*;

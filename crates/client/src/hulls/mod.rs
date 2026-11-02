@@ -1,6 +1,5 @@
-//! Hand-built ships. Most hulls are generated from their fit
-//! ([`meshes::ship`]); the ones here are modelled by hand, each with its
-//! own silhouette, and draw their fitted modules — guns, cargo, radiators,
+//! Hand-built ships: every hull is modelled by hand, each with its own
+//! silhouette (DESIGN §8.1), and each draws its fitted modules — guns, cargo, radiators,
 //! radar, shield emitters, engines — from a shared kit at the slots'
 //! positions, so a refit shows.
 //!

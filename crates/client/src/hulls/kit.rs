@@ -318,3 +318,20 @@ pub(super) fn bell(m: &mut Mesh, throat: Vec3, k: f32, r0: f32) -> (Vec3, f32) {
     );
     (throat + Vec3::Z * len, r1)
 }
+
+/// A lathe profile of a body of revolution: `(z, radius(z) + inflate)`
+/// from `z0` to `z1` in `n` steps.
+pub(super) fn profile(
+    radius: &dyn Fn(f32) -> f32,
+    z0: f32,
+    z1: f32,
+    n: usize,
+    inflate: f32,
+) -> Vec<(f32, f32)> {
+    (0..=n)
+        .map(|i| {
+            let z = z0 + (z1 - z0) * i as f32 / n as f32;
+            (z, radius(z) + inflate)
+        })
+        .collect()
+}

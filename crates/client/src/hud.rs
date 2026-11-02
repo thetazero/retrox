@@ -500,7 +500,7 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
                 egui::Order::Foreground,
                 egui::Id::unique("jump"),
             ));
-            let t = 1.0 - timer / 4.0;
+            let t = 1.0 - timer / crate::world::JUMP_DURATION;
             let alpha = (255.0 * (t * 1.4).min(1.0)) as u8;
             painter.rect_filled(
                 screen,

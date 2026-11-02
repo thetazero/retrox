@@ -29,15 +29,6 @@ fn starter_radius(z: f32) -> f32 {
     }
 }
 
-fn starter_profile(z0: f32, z1: f32, steps: u32, inflate: f32) -> Vec<(f32, f32)> {
-    (0..=steps)
-        .map(|i| {
-            let z = z0 + (z1 - z0) * i as f32 / steps as f32;
-            (z, starter_radius(z) + inflate)
-        })
-        .collect()
-}
-
 /// The courier, everyone's first ship, hand-built rather than generated:
 /// a cream enamel rocket of the old optimistic school, nose toward -Z, with
 /// a red nose and cheatline, a wraparound windscreen, lit portholes, three
@@ -52,11 +43,16 @@ pub(super) fn courier(loadout: &Loadout) -> (Mesh, ShipShape) {
     let id = Mat4::IDENTITY;
 
     // Fuselage: red nose cap, cream body.
-    let mut nose = starter_profile(-12.0, -9.6, 8, 0.0);
+    let mut nose = profile(&starter_radius, -12.0, -9.6, 8, 0.0);
     nose.insert(0, (-12.0, 0.0));
     m.paint(&lathe(&nose, SEGS, 0.0, TAU), id, 1.0, Paint::Red);
     m.add(
-        &lathe(&starter_profile(-9.6, 4.0, 40, 0.0), SEGS, 0.0, TAU),
+        &lathe(
+            &profile(&starter_radius, -9.6, 4.0, 40, 0.0),
+            SEGS,
+            0.0,
+            TAU,
+        ),
         id,
         1.0,
     );
@@ -64,7 +60,7 @@ pub(super) fn courier(loadout: &Loadout) -> (Mesh, ShipShape) {
     for z in [-9.6, -5.0, 2.6] {
         m.paint(
             &lathe(
-                &starter_profile(z - 0.04, z + 0.04, 1, 0.012),
+                &profile(&starter_radius, z - 0.04, z + 0.04, 1, 0.012),
                 SEGS,
                 0.0,
                 TAU,
@@ -80,7 +76,7 @@ pub(super) fn courier(loadout: &Loadout) -> (Mesh, ShipShape) {
     let up = TAU / 4.0;
     m.paint(
         &lathe(
-            &starter_profile(-8.85, -7.75, 6, 0.015),
+            &profile(&starter_radius, -8.85, -7.75, 6, 0.015),
             SEGS,
             up - 0.98,
             up + 0.98,
@@ -93,7 +89,7 @@ pub(super) fn courier(loadout: &Loadout) -> (Mesh, ShipShape) {
         let a = up + (k as f32 - 2.0) * 0.38;
         m.paint(
             &lathe(
-                &starter_profile(-8.75, -7.85, 6, 0.03),
+                &profile(&starter_radius, -8.75, -7.85, 6, 0.03),
                 4,
                 a - 0.16,
                 a + 0.16,
@@ -108,7 +104,7 @@ pub(super) fn courier(loadout: &Loadout) -> (Mesh, ShipShape) {
     for side in [0.0, TAU / 2.0] {
         m.paint(
             &lathe(
-                &starter_profile(-9.6, 3.4, 30, 0.01),
+                &profile(&starter_radius, -9.6, 3.4, 30, 0.01),
                 3,
                 side - 0.11,
                 side + 0.07,
@@ -119,7 +115,7 @@ pub(super) fn courier(loadout: &Loadout) -> (Mesh, ShipShape) {
         );
         m.paint(
             &lathe(
-                &starter_profile(-9.0, 3.4, 30, 0.01),
+                &profile(&starter_radius, -9.0, 3.4, 30, 0.01),
                 2,
                 side - 0.17,
                 side - 0.14,
@@ -581,15 +577,6 @@ fn interceptor_radius(z: f32) -> f32 {
     }
 }
 
-fn interceptor_profile(z0: f32, z1: f32, steps: u32, inflate: f32) -> Vec<(f32, f32)> {
-    (0..=steps)
-        .map(|i| {
-            let z = z0 + (z1 - z0) * i as f32 / steps as f32;
-            (z, interceptor_radius(z) + inflate)
-        })
-        .collect()
-}
-
 /// The interceptor: a nose-heavy military dart. Gunmetal over a pale belly,
 /// a red nose and red tips, a bubble canopy, cheek intakes, forward-swept
 /// wings carrying gun pods, canted radiator fins for a tail and one big
@@ -602,18 +589,23 @@ pub(super) fn interceptor(fit: &Loadout) -> (Mesh, ShipShape) {
 
     // Fuselage: a pale belly under gunmetal, a red nose, and a thin red
     // line where the two meet.
-    let mut body = interceptor_profile(-4.6, 4.3, 30, 0.0);
+    let mut body = profile(&interceptor_radius, -4.6, 4.3, 30, 0.0);
     body.extend([(4.3, 0.65), (4.3, 0.0)]);
     m.add(&lathe(&body, SEGS, 0.0, TAU), id, 0.8);
     m.paint(
-        &lathe(&interceptor_profile(-6.0, -4.6, 10, 0.0), SEGS, 0.0, TAU),
+        &lathe(
+            &profile(&interceptor_radius, -6.0, -4.6, 10, 0.0),
+            SEGS,
+            0.0,
+            TAU,
+        ),
         id,
         1.0,
         Paint::Red,
     );
     m.paint(
         &lathe(
-            &interceptor_profile(-4.6, 4.3, 30, 0.01),
+            &profile(&interceptor_radius, -4.6, 4.3, 30, 0.01),
             16,
             up - 1.3,
             up + 1.3,
@@ -625,7 +617,7 @@ pub(super) fn interceptor(fit: &Loadout) -> (Mesh, ShipShape) {
     for edge in [up - 1.3, up + 1.3] {
         m.paint(
             &lathe(
-                &interceptor_profile(-4.6, 4.3, 30, 0.015),
+                &profile(&interceptor_radius, -4.6, 4.3, 30, 0.015),
                 1,
                 edge - 0.05,
                 edge + 0.05,
@@ -644,7 +636,7 @@ pub(super) fn interceptor(fit: &Loadout) -> (Mesh, ShipShape) {
     // An anti-glare panel ahead of the canopy.
     m.paint(
         &lathe(
-            &interceptor_profile(-4.4, -3.4, 4, 0.02),
+            &profile(&interceptor_radius, -4.4, -3.4, 4, 0.02),
             6,
             up - 0.35,
             up + 0.35,
@@ -796,7 +788,12 @@ pub(super) fn interceptor(fit: &Loadout) -> (Mesh, ShipShape) {
             SlotKind::Radar => {
                 // A dark radome on the nose and a pitot probe.
                 m.paint(
-                    &lathe(&interceptor_profile(-6.0, -5.2, 6, 0.012), SEGS, 0.0, TAU),
+                    &lathe(
+                        &profile(&interceptor_radius, -6.0, -5.2, 6, 0.012),
+                        SEGS,
+                        0.0,
+                        TAU,
+                    ),
                     id,
                     1.0,
                     Paint::Metal,

@@ -43,7 +43,9 @@ pub(super) fn build(fit: &Loadout) -> (Mesh, ShipShape) {
     let mut nozzles = Vec::new();
     let sections = placed(fit);
     if sections.is_empty() {
-        return crate::meshes::generated(fit);
+        // A bare frame: not reachable in play (sections are swapped, never
+        // removed), and nothing to draw.
+        return (m, ShipShape::default());
     }
     let n = sections.len();
 

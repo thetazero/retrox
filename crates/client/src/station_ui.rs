@@ -141,11 +141,20 @@ fn hub(ctx: &egui::Context, w: &World, here: SettlementId, actions: &mut Vec<Act
                     actions.push(leave);
                 }
                 ui.add_space(10.0);
-                ui.label(RichText::new("WAIT").color(CREAM_DIM));
-                for (days, text) in [(1, "1 D"), (7, "7 D"), (30, "30 D")] {
-                    let button = egui::Button::new(text).min_size(Vec2::new(0.0, 34.0));
+                if let Some(wait) = w.waiting {
+                    let text = format!("WAITING · DAY {} OF {}", wait.waited, wait.days);
+                    ui.label(RichText::new(text).color(CREAM));
+                    let button = egui::Button::new("STOP").min_size(Vec2::new(0.0, 34.0));
                     if ui.add(button).clicked() {
-                        actions.push(Action::Wait(days));
+                        actions.push(Action::StopWaiting);
+                    }
+                } else {
+                    ui.label(RichText::new("WAIT").color(CREAM_DIM));
+                    for (days, text) in [(1, "1 D"), (7, "7 D"), (30, "30 D")] {
+                        let button = egui::Button::new(text).min_size(Vec2::new(0.0, 34.0));
+                        if ui.add(button).clicked() {
+                            actions.push(Action::Wait(days));
+                        }
                     }
                 }
             });
