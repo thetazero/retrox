@@ -36,7 +36,12 @@ pub fn rank_color(rank: Rank) -> Color32 {
     }
 }
 
-pub fn bounty_screen(ctx: &egui::Context, w: &World, here: SettlementId, actions: &mut Vec<Action>) {
+pub fn bounty_screen(
+    ctx: &egui::Context,
+    w: &World,
+    here: SettlementId,
+    actions: &mut Vec<Action>,
+) {
     let Some(settlement) = w.galaxy.settlements.get(here) else {
         return;
     };

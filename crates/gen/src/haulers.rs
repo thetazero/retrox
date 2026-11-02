@@ -33,7 +33,11 @@ pub fn classes(state: &mut GalaxyState) -> Vec<ShipClassId> {
 /// The hulls pirate gangs fly (DESIGN §7.2.2): light fighters, and a
 /// gunship for a gang big enough to crew one.
 pub fn raider_hulls(state: &mut GalaxyState) {
-    for (id, heavy) in [("interceptor", false), ("heavy-fighter", false), ("gunship", true)] {
+    for (id, heavy) in [
+        ("interceptor", false),
+        ("heavy-fighter", false),
+        ("gunship", true),
+    ] {
         let Some(fit) = stock(id) else {
             continue;
         };

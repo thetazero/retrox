@@ -43,9 +43,9 @@ fn gangs_live_where_it_makes_sense() {
         // Within two jumps of where the crews came from.
         let home = state.settlements[g.origin].system;
         let near = home == g.lair
-            || state.neighbours(home).any(|n| {
-                n == g.lair || state.neighbours(n).any(|m| m == g.lair)
-            });
+            || state
+                .neighbours(home)
+                .any(|n| n == g.lair || state.neighbours(n).any(|m| m == g.lair));
         assert!(near, "{} lairs far from home", g.name);
     }
     // Lairs lean lawless: fewer settlements than the average settled
@@ -161,12 +161,19 @@ fn a_fight_writes_back() {
     pirates::engage(&mut state, id);
     assert_eq!(state.pirates.prowls[&id].aim, Aim::Engaged);
     tick(&mut state);
-    assert_eq!(state.pirates.prowls[&id].aim, Aim::Engaged, "the sim leaves a fight alone");
+    assert_eq!(
+        state.pirates.prowls[&id].aim,
+        Aim::Engaged,
+        "the sim leaves a fight alone"
+    );
     pirates::fought(&mut state, id, &[0], None);
     assert_eq!(state.pirates.gangs[id].ships.len(), 1);
     assert_eq!(state.pirates.prowls[&id].aim, Aim::Return);
     pirates::fought(&mut state, id, &[0], None);
-    assert!(state.pirates.gangs.get(id).is_none(), "a gang with no ships is gone");
+    assert!(
+        state.pirates.gangs.get(id).is_none(),
+        "a gang with no ships is gone"
+    );
     assert!(!state.pirates.prowls.contains_key(&id));
 }
 

@@ -1217,12 +1217,20 @@ fn diamond(painter: &egui::Painter, c: Pos2, r: f32, color: Color32) {
 
 fn pirate_label(c: &crate::traffic::PirateContact, dist: f64) -> String {
     let n = c.fits.len();
-    let ships = if n == 1 { "1 SHIP".to_owned() } else { format!("{n} SHIPS") };
+    let ships = if n == 1 {
+        "1 SHIP".to_owned()
+    } else {
+        format!("{n} SHIPS")
+    };
     let wanted = c
         .bounty
         .map(|b| format!(" · WANTED {}", credits(b).to_uppercase()))
         .unwrap_or_default();
-    format!("{} · {ships}{wanted}  {}", c.name.to_uppercase(), distance(dist))
+    format!(
+        "{} · {ships}{wanted}  {}",
+        c.name.to_uppercase(),
+        distance(dist)
+    )
 }
 
 fn contact_label(c: &crate::traffic::Contact, dist: f64) -> String {

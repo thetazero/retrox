@@ -109,8 +109,7 @@ impl World {
             }
         }
         // Everyone dead, fled or gone home: the fight is over.
-        if self.fight_left_behind() || (self.mode != Mode::Normal && self.combat.gang.is_some())
-        {
+        if self.fight_left_behind() || (self.mode != Mode::Normal && self.combat.gang.is_some()) {
             self.end_fight();
         }
 
@@ -138,8 +137,7 @@ impl World {
             self.ship_hit(id, peaceful, &mut complaints);
         }
         self.complaints = complaints;
-        self.complaints
-            .retain(|_, t| self.clock_s - *t < 60.0);
+        self.complaints.retain(|_, t| self.clock_s - *t < 60.0);
         for (id, crew) in out.kills {
             match crew {
                 crate::combat::Crew::Pirate => self.raider_killed(id),
@@ -188,7 +186,13 @@ impl World {
             .pirates
             .gangs
             .values()
-            .map(|g| (g.lair, g.field, here.distance(self.galaxy.systems[g.lair].position)))
+            .map(|g| {
+                (
+                    g.lair,
+                    g.field,
+                    here.distance(self.galaxy.systems[g.lair].position),
+                )
+            })
             .min_by(|a, b| a.2.total_cmp(&b.2));
         let Some((system, field, _)) = found else {
             return false;

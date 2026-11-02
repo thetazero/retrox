@@ -141,7 +141,10 @@ pub fn draw(ctx: &egui::Context, h: &HudInput) {
         painter.text(
             Pos2::new(x, y),
             Align2::LEFT_TOP,
-            format!("{who} · {}{status}", r.vessel.fit.hull().name.to_uppercase()),
+            format!(
+                "{who} · {}{status}",
+                r.vessel.fit.hull().name.to_uppercase()
+            ),
             mono(12.0),
             ink,
         );

@@ -17,6 +17,7 @@
 //! (see [`Flags::keys`]).
 
 mod audio;
+mod bounty_ui;
 mod combat;
 mod contracts;
 mod contracts_ui;
@@ -33,11 +34,10 @@ mod mining;
 mod render;
 mod save;
 mod settings;
+mod standing;
 mod station_ui;
 mod title;
 mod trade;
-mod bounty_ui;
-mod standing;
 mod traffic;
 mod widgets;
 mod world;

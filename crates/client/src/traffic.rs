@@ -10,9 +10,9 @@ use std::collections::HashMap;
 
 use glam::DVec3;
 use retrox_sim::bubble::{self, FleetKey};
-use retrox_sim::pirates::{self, Aim, GangId};
 use retrox_sim::economy::Good;
 use retrox_sim::flight::{self, Kinematics};
+use retrox_sim::pirates::{self, Aim, GangId};
 use retrox_sim::ship::Loadout;
 use retrox_sim::{GalaxyState, SystemId};
 
@@ -194,7 +194,14 @@ impl Traffic {
                 _ => None,
             };
             let goal = |t_s: f64| {
-                pirates::prowl_goal(galaxy, gang, prowl, prey, t_s - day_start, t_s / SECONDS_PER_DAY)
+                pirates::prowl_goal(
+                    galaxy,
+                    gang,
+                    prowl,
+                    prey,
+                    t_s - day_start,
+                    t_s / SECONDS_PER_DAY,
+                )
             };
             if prowl.aim == Aim::Stalk {
                 track.ship = prowl.ship;
@@ -210,10 +217,13 @@ impl Traffic {
                 }
                 track.t_s = clock_s;
             }
-            if prowl.aim == Aim::Lurk {
-                if let Some(g) = goal(clock_s) {
-                    track.ship = Kinematics { pos: g.pos, vel: g.vel };
-                }
+            if prowl.aim == Aim::Lurk
+                && let Some(g) = goal(clock_s)
+            {
+                track.ship = Kinematics {
+                    pos: g.pos,
+                    vel: g.vel,
+                };
             }
             let thrust = match goal(track.t_s) {
                 Some(g) => flight::autopilot(&track.ship, &g, accel, 1.0),

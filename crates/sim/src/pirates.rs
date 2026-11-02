@@ -185,14 +185,19 @@ mod prowl_pairs {
     use super::{BTreeMap, GangId, Prowl};
     use serde::{Deserialize, Deserializer, Serializer};
 
-    pub fn serialize<S: Serializer>(map: &BTreeMap<GangId, Prowl>, s: S) -> Result<S::Ok, S::Error> {
+    pub fn serialize<S: Serializer>(
+        map: &BTreeMap<GangId, Prowl>,
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
         s.collect_seq(map.iter())
     }
 
     pub fn deserialize<'de, D: Deserializer<'de>>(
         d: D,
     ) -> Result<BTreeMap<GangId, Prowl>, D::Error> {
-        Ok(Vec::<(GangId, Prowl)>::deserialize(d)?.into_iter().collect())
+        Ok(Vec::<(GangId, Prowl)>::deserialize(d)?
+            .into_iter()
+            .collect())
     }
 }
 
@@ -273,7 +278,11 @@ fn capital_system(state: &GalaxyState, system: SystemId) -> bool {
 
 /// Choose a lair within two jumps of `origin`'s system, or `None` if
 /// nowhere will do.
-fn choose_lair(state: &GalaxyState, rng: &mut Rng, origin: SystemId) -> Option<(SystemId, FieldId)> {
+fn choose_lair(
+    state: &GalaxyState,
+    rng: &mut Rng,
+    origin: SystemId,
+) -> Option<(SystemId, FieldId)> {
     let mut seen = vec![origin];
     let mut frontier = vec![origin];
     for _ in 0..2 {
@@ -355,7 +364,9 @@ pub fn found(state: &mut GalaxyState, origin: SettlementId, rng: &mut Rng) -> Op
     let home = state.settlements.get(origin)?.system;
     let (lair, field) = choose_lair(state, rng, home)?;
     let name = NAMES[rng.below(NAMES.len())].replace("{}", &state.systems[lair].name);
-    let ships = (0..2).map(|_| light[rng.below(light.len())].clone()).collect();
+    let ships = (0..2)
+        .map(|_| light[rng.below(light.len())].clone())
+        .collect();
     let today = state.time;
     let id = state.pirates.gangs.insert(Gang {
         name,
@@ -479,7 +490,9 @@ fn review_gang(state: &mut GalaxyState, id: GangId) {
         .map(|v| v.0);
     let per_ship = (BOUNTY_BASE + BOUNTY_PER_T * gang.haul_t).min(BOUNTY_MAX);
     let ships = gang.ships.len() as f64;
-    let current = gang.bounty.filter(|b| state.factions.contains_key(b.faction));
+    let current = gang
+        .bounty
+        .filter(|b| state.factions.contains_key(b.faction));
     let bounty = match (current, victim) {
         (Some(b), _) => Some(Bounty {
             per_ship: b.per_ship.max(per_ship),
@@ -516,9 +529,10 @@ fn is_heavy(hulls: &[RaiderHull], id: &str) -> bool {
 /// A gang with no ships left is gone.
 fn disband(state: &mut GalaxyState, id: GangId) {
     if let Some(g) = state.pirates.gangs.remove(id) {
-        state
-            .history
-            .record(state.time, crate::HistoryKind::GangBroken { system: g.lair });
+        state.history.record(
+            state.time,
+            crate::HistoryKind::GangBroken { system: g.lair },
+        );
     }
     state.pirates.prowls.remove(&id);
     state.pirates.near.clear();
@@ -556,10 +570,10 @@ pub(crate) fn coarse_raid(
     let ends = [from, to].map(|s| state.settlements.get(s).map(|s| s.system));
     let mut found = None;
     for system in ends.into_iter().flatten() {
-        if let Some(&(g, own)) = state.pirates.near.get(&system) {
-            if found.is_none_or(|(_, o): (GangId, bool)| own && !o) {
-                found = Some((g, own));
-            }
+        if let Some(&(g, own)) = state.pirates.near.get(&system)
+            && found.is_none_or(|(_, o): (GangId, bool)| own && !o)
+        {
+            found = Some((g, own));
         }
     }
     let Some((gang, own)) = found else {
@@ -730,7 +744,11 @@ pub fn sync(state: &mut GalaxyState) {
             },
         );
     }
-    if state.pirates.player.is_some_and(|(s, _)| !bubble::contains(state, s)) {
+    if state
+        .pirates
+        .player
+        .is_some_and(|(s, _)| !bubble::contains(state, s))
+    {
         state.pirates.player = None;
     }
 }
@@ -743,7 +761,8 @@ pub(crate) fn step(state: &mut GalaxyState) {
     let t0 = today.days() as f64;
     let ids: Vec<GangId> = state.pirates.prowls.keys().copied().collect();
     for id in ids {
-        let (Some(gang), Some(&prowl)) = (state.pirates.gangs.get(id), state.pirates.prowls.get(&id))
+        let (Some(gang), Some(&prowl)) =
+            (state.pirates.gangs.get(id), state.pirates.prowls.get(&id))
         else {
             continue;
         };
@@ -786,18 +805,17 @@ pub(crate) fn step(state: &mut GalaxyState) {
                 });
                 let close = flight::length(flight::sub(next.ship.pos, prey.pos)) < 2e7;
                 if caught.is_some() || close {
-                    if let Some(n) = haul::fleet_index(state, key.0, key.1) {
-                        if let Some(&haul::Location::Flying { to }) =
+                    if let Some(n) = haul::fleet_index(state, key.0, key.1)
+                        && let Some(&haul::Location::Flying { to }) =
                             state.companies.get(key.0).map(|c| &c.fleets[n].at)
-                        {
-                            let entity = gang_bits(id) ^ (u64::from(key.1) << 40);
-                            let mut rng = Rng::stream(state.seed, "raid", today.days(), entity);
-                            let (robbery, alive) = rob(state, id, key.0, n, to, &mut rng);
-                            if !alive {
-                                state.bubble.flights.remove(&key);
-                            }
-                            state.pirates.robberies.push(robbery);
+                    {
+                        let entity = gang_bits(id) ^ (u64::from(key.1) << 40);
+                        let mut rng = Rng::stream(state.seed, "raid", today.days(), entity);
+                        let (robbery, alive) = rob(state, id, key.0, n, to, &mut rng);
+                        if !alive {
+                            state.bubble.flights.remove(&key);
                         }
+                        state.pirates.robberies.push(robbery);
                     }
                     next.aim = Aim::Return;
                     next.since = today;
@@ -890,7 +908,11 @@ pub fn fought(state: &mut GalaxyState, gang: GangId, lost: &[usize], at: Option<
 
 /// Pay the bounty on ship `ship` of `gang`, destroyed by the player: the
 /// faction that posted it pays what it can. Returns who paid and how much.
-pub fn claim_bounty(state: &mut GalaxyState, gang: GangId, ship: usize) -> Option<(FactionId, f64)> {
+pub fn claim_bounty(
+    state: &mut GalaxyState,
+    gang: GangId,
+    ship: usize,
+) -> Option<(FactionId, f64)> {
     let g = state.pirates.gangs.get(gang)?;
     let b = g.bounty?;
     let want = ship_bounty(state, g, ship);

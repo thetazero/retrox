@@ -39,8 +39,8 @@ impl World {
     /// Where the player is, for the sim's gangs: in space in this system,
     /// or nowhere they can reach.
     fn tell_pirates(&mut self) {
-        let flying = matches!(self.mode, Mode::Normal | Mode::FastTravel(_))
-            && self.combat.lost.is_none();
+        let flying =
+            matches!(self.mode, Mode::Normal | Mode::FastTravel(_)) && self.combat.lost.is_none();
         self.galaxy.pirates.player = flying.then(|| {
             let t = self.t_days();
             let vel = self.ship.vel + self.velocity_at(self.ship.frame, t);
@@ -194,7 +194,9 @@ impl World {
             pos + self.ship.rot * DVec3::NEG_Z * 10e3
         };
         self.engage(id, None, from - anchor, craft.pos);
-        self.say(format!("INTERDICTED · the {name} pulled us out of fast travel"));
+        self.say(format!(
+            "INTERDICTED · the {name} pulled us out of fast travel"
+        ));
         self.interdicted = Some(0.0);
     }
 
@@ -271,10 +273,10 @@ impl World {
                 said.push(rank_news(&name, rank));
             }
         }
-        if let Some(f) = local.filter(|&f| paid.is_none_or(|(p, _)| p != f)) {
-            if let Some(rank) = self.player.standing.change(f, standing::PIRATE_KILL) {
-                said.push(rank_news(&self.faction_name(f), rank));
-            }
+        if let Some(f) = local.filter(|&f| paid.is_none_or(|(p, _)| p != f))
+            && let Some(rank) = self.player.standing.change(f, standing::PIRATE_KILL)
+        {
+            said.push(rank_news(&self.faction_name(f), rank));
         }
         if !said.is_empty() {
             self.say(said.join(" · "));
@@ -312,7 +314,9 @@ impl World {
                 }
                 _ => String::new(),
             };
-            self.say(format!("Mayday from {company}: boarded by the {gang}{what}"));
+            self.say(format!(
+                "Mayday from {company}: boarded by the {gang}{what}"
+            ));
         }
     }
 
@@ -320,9 +324,11 @@ impl World {
     pub(super) fn fight_left_behind(&self) -> bool {
         self.combat.gang.is_some()
             && (self.combat.raiders.is_empty()
-                || self.combat.raiders.iter().all(|r| {
-                    (r.home - self.combat_position()).length() > LEASH * 2.0
-                }))
+                || self
+                    .combat
+                    .raiders
+                    .iter()
+                    .all(|r| (r.home - self.combat_position()).length() > LEASH * 2.0))
     }
 
     /// A loaded game has no fight going: gangs that were in one, or after

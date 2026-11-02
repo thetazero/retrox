@@ -38,12 +38,12 @@ use std::f64::consts::{PI, TAU};
 
 use glam::{DQuat, DVec3};
 use retrox_gen::Rng;
-use retrox_sim::economy::Good;
-use retrox_sim::ship::{Function, Loadout, ShipStats};
-use retrox_sim::FieldId;
 use retrox_sim::FactionId;
+use retrox_sim::FieldId;
 use retrox_sim::bubble::FleetKey;
+use retrox_sim::economy::Good;
 use retrox_sim::pirates::GangId;
+use retrox_sim::ship::{Function, Loadout, ShipStats};
 use serde::{Deserialize, Serialize};
 
 use crate::world::{STRAFE_SPEED, assist, handling, look_rotation, steer};
@@ -799,14 +799,14 @@ impl Combat {
 
     /// Where a peaceful convoy's ships should be now, in fleet order.
     pub fn set_slots(&mut self, fleet: FleetKey, slots: &[(DVec3, DVec3, DQuat)]) {
-        let mut k = 0;
-        for r in self.raiders.iter_mut().filter(|r| r.trader_fleet() == Some(fleet)) {
+        let ships = self
+            .raiders
+            .iter_mut()
+            .filter(|r| r.trader_fleet() == Some(fleet));
+        for (r, &(pos, vel, _)) in ships.zip(slots) {
             if !r.hostile {
-                if let Some(&(pos, vel, _)) = slots.get(k) {
-                    r.slot = Some((pos, vel));
-                }
+                r.slot = Some((pos, vel));
             }
-            k += 1;
         }
     }
 
@@ -818,7 +818,11 @@ impl Combat {
 
     /// The trader fleets in the scene.
     pub fn convoys(&self) -> Vec<FleetKey> {
-        let mut v: Vec<FleetKey> = self.raiders.iter().filter_map(|r| r.trader_fleet()).collect();
+        let mut v: Vec<FleetKey> = self
+            .raiders
+            .iter()
+            .filter_map(|r| r.trader_fleet())
+            .collect();
         v.dedup();
         v
     }
@@ -1300,11 +1304,11 @@ impl Combat {
                             .filter(|r| r.crew == Crew::Pirate)
                             .count();
                         if id < TRADER_IDS {
-                        self.said.push(if left == 0 {
-                            "Raider destroyed · the gang is broken".to_owned()
-                        } else {
-                            format!("Raider destroyed · {left} left")
-                        });
+                            self.said.push(if left == 0 {
+                                "Raider destroyed · the gang is broken".to_owned()
+                            } else {
+                                format!("Raider destroyed · {left} left")
+                            });
                         }
                         // What it was carrying spills out.
                         let tonnes = (length / 4.0).clamp(1.0, 8.0) * self.rng.range(0.5, 1.2);

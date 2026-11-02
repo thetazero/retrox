@@ -649,7 +649,12 @@ fn by_a_gang(world: &mut World) -> (retrox_sim::pirates::GangId, FieldId) {
         world.arrive_jump(lair);
     }
     let today = world.galaxy.time;
-    let p = world.galaxy.pirates.prowls.get_mut(&id).expect("a gang in the bubble flies");
+    let p = world
+        .galaxy
+        .pirates
+        .prowls
+        .get_mut(&id)
+        .expect("a gang in the bubble flies");
     p.aim = retrox_sim::pirates::Aim::Lurk;
     p.since = today;
     (id, field)
@@ -671,7 +676,11 @@ fn pirates_pull_a_ship_out_of_fast_travel() {
     world.target = Some(Place::Field(field));
     world.update(1.0 / 60.0, Controls::default());
     world.act(Action::FastTravel);
-    assert!(matches!(world.mode, Mode::FastTravel(_)), "{:?}", world.message);
+    assert!(
+        matches!(world.mode, Mode::FastTravel(_)),
+        "{:?}",
+        world.message
+    );
     let mut frames = 0;
     while matches!(world.mode, Mode::FastTravel(_)) && frames < 60 * 20 {
         world.update(1.0 / 60.0, Controls::default());
@@ -686,7 +695,10 @@ fn pirates_pull_a_ship_out_of_fast_travel() {
     assert_eq!(world.mode, Mode::Normal);
     assert_eq!(world.combat.gang, Some(id));
     assert!(world.hostiles_near() > 0, "the gang comes in");
-    assert!(world.ship.vel.length() < 1000.0, "dragged down to fighting speed");
+    assert!(
+        world.ship.vel.length() < 1000.0,
+        "dragged down to fighting speed"
+    );
     assert_eq!(
         world.galaxy.pirates.prowls[&id].aim,
         retrox_sim::pirates::Aim::Engaged
@@ -719,7 +731,13 @@ fn a_bounty_pays_on_the_kill_and_the_sim_hears_of_it() {
     assert!(paid >= 3000.0 - 1e-6, "paid {paid}");
     assert!(world.player.standing.get(faction) > 0.0);
     // The rest go down too: the gang is gone from the galaxy.
-    for r in world.combat.raiders.iter().map(|r| r.id).collect::<Vec<_>>() {
+    for r in world
+        .combat
+        .raiders
+        .iter()
+        .map(|r| r.id)
+        .collect::<Vec<_>>()
+    {
         world.combat.hit_raider(r, 1e6, &pilot);
     }
     world.update(0.02, Controls::default());
@@ -735,7 +753,13 @@ fn shooting_a_traders_ships_makes_its_faction_hostile() {
     let mut world = World::new(1);
     assert!(world.start_by_traffic(), "seed 1 has traffic");
     // Alongside, as an intercept leaves us: flying in the convoy's frame.
-    let key = world.traffic.contacts.iter().max_by_key(|c| c.ships).unwrap().key;
+    let key = world
+        .traffic
+        .contacts
+        .iter()
+        .max_by_key(|c| c.ships)
+        .unwrap()
+        .key;
     world.enter_frame(Place::Convoy(key));
     world.ship.flight_assist = true;
     world.update(1.0 / 60.0, Controls::default());
@@ -749,7 +773,10 @@ fn shooting_a_traders_ships_makes_its_faction_hostile() {
     let crate::combat::Crew::Trader { fleet, faction } = trader.1 else {
         unreachable!()
     };
-    assert!(!world.combat.raiders.iter().any(|r| r.hostile), "peaceful at first");
+    assert!(
+        !world.combat.raiders.iter().any(|r| r.hostile),
+        "peaceful at first"
+    );
     assert_eq!(world.hostiles_near(), 0);
     let ships = world
         .galaxy
@@ -769,7 +796,11 @@ fn shooting_a_traders_ships_makes_its_faction_hostile() {
         }
         run(&mut world, 1.6);
     }
-    assert!(world.player.standing.hostile(faction), "{}", world.player.standing.get(faction));
+    assert!(
+        world.player.standing.hostile(faction),
+        "{}",
+        world.player.standing.get(faction)
+    );
     // Destroyed, it's gone from the sim's fleet too.
     let pilot = crate::combat::Pilot {
         craft: world.player_craft(),
@@ -802,7 +833,13 @@ fn shooting_a_traders_ships_makes_its_faction_hostile() {
 fn intercept_brings_the_ship_alongside_a_convoy() {
     let mut world = World::new(1);
     assert!(world.start_by_traffic(), "seed 1 has traffic");
-    let c = world.traffic.contacts.iter().max_by_key(|c| c.ships).unwrap().clone();
+    let c = world
+        .traffic
+        .contacts
+        .iter()
+        .max_by_key(|c| c.ships)
+        .unwrap()
+        .clone();
     // Well off from it, at rest in the star's frame, looking at it.
     let off = c.pos + DVec3::new(0.0, 0.02 * AU, 0.01 * AU);
     world.ship.frame = Place::Star;

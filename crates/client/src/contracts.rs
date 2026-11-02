@@ -112,9 +112,7 @@ pub fn deliver(player: &mut Player, galaxy: &mut GalaxyState, here: SettlementId
         let c = player.contracts.remove(i);
         let o = &c.offer;
         let owner = galaxy.settlements[here].owner;
-        player
-            .standing
-            .change(owner, crate::standing::DELIVERED);
+        player.standing.change(owner, crate::standing::DELIVERED);
         let pay = freight::pay_on(o.fee, o.deadline, today);
         let economy = &mut galaxy.settlements[here].economy;
         economy.market.stock[o.good] += o.amount;

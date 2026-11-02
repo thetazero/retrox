@@ -27,9 +27,9 @@
 //! place it arrived at or launched from. The frame moves with that place,
 //! so nearby things hold still while you fly.
 
+mod convoy;
 mod field;
 mod fight;
-mod convoy;
 mod pilot;
 mod prowl;
 mod routing;
@@ -507,7 +507,10 @@ impl World {
                     .iter()
                     .find(|c| c.key == fleet)
                     .map(|c| (c.pos, c.vel, self.traffic.at_s))
-                    .or(self.convoy_seen.filter(|s| s.0 == fleet).map(|s| (s.1, s.2, s.3)));
+                    .or(self
+                        .convoy_seen
+                        .filter(|s| s.0 == fleet)
+                        .map(|s| (s.1, s.2, s.3)));
                 match seen {
                     Some((pos, vel, at_s)) => pos + vel * (t * SECONDS_PER_DAY - at_s),
                     None => DVec3::ZERO,
