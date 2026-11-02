@@ -164,7 +164,8 @@ starting galaxy (§5.1).
   6. Events & storylets
   7. News generation
 - **Multithreaded** via rayon within phases (read previous state, write
-  phase outputs, merge).
+  phase outputs, merge) — but the cost model below is designed for one
+  core first; threads are headroom, not the plan.
 - **Deterministic, for the whole game:** same seed + same player actions →
   same history. Rules that keep it so:
   - Randomness comes from RNG streams derived from (seed, purpose, time,
@@ -177,21 +178,62 @@ starting galaxy (§5.1).
     snapshots for speed, but seed + log reproduces them.
   - Linux first. Same-seed results across platforms will eventually need a
     portable math library for `powf`/`exp`/etc.
-- **Time steps have a size.** Phases take a `dt`; play ticks daily,
-  prehistory and fast-forward use coarser steps (monthly or longer) — the
-  same "detail depends on time rate" idea as §3.
+- **The sim ticks daily, everywhere, always.** Coarser steps would break
+  rules with timescales under a month (famines, trips, contracts). Speed
+  comes from what each actor does per day, not from skipping days (§5.2).
 - Headless runs ("simulate 500 years, dump history") are a first-class
   tool for balancing and testing.
 
+### 5.1.1 Cost model
+
+Seeding a world means simulating centuries of history (§4.2), so the
+coarse tier is designed around a per-day cost, not tuned toward one
+later. Roughly: 400 years is 144,000 days; a mature galaxy might hold
+~10,000 settlements and ~50,000 traders. Aim for prehistory in about a
+minute on one core; a few minutes is acceptable while the shape settles.
+That puts the daily budget well under a millisecond, which only works if
+every actor follows its kind's rule:
+
+| actor | runs | per-run work | aim (one core) |
+|---|---|---|---|
+| settlement | daily | its own books: production, consumption, population, prices, ledger transfers | tens of ns |
+| settlement, faction | monthly, each on its own day | decisions: construction, colonization, politics | ~100 ns |
+| trader | on events only (depart, arrive) | move goods and money through the ledger | tens of ns |
+| trader | monthly, on its own day | commit to a route for the month | ~100 ns |
+| colony ship | on events only | found a settlement on arrival | — |
+
+Consequences:
+
+- **Daily work is arithmetic.** No searching, no allocation, no per-day
+  decisions. Anything that needs a search happens monthly, from data
+  prepared for it: cached lane distances, short per-region lists of
+  where each good is cheap or wanted, a settlement's stored distance to
+  its capital.
+- **Traders don't tick.** A calendar queue (a ring of day buckets)
+  hands each day its departures and arrivals. Between events a trader
+  costs nothing. A trader commits to a route monthly and runs it until
+  its next review.
+- **Within a day:** settlements' local tick, then that day's events in a
+  fixed order, then whoever's monthly review falls today; prices update
+  once at the end. Every random draw uses a stream (§5.1), so the queue
+  doesn't change history.
+- **Measured, not assumed.** Microbenchmarks track the per-settlement,
+  per-event and per-decision costs, and a prehistory benchmark tracks the
+  whole. The aims above will move as we learn where things land.
+
 ### 5.2 Two tiers + LOD bubble
 
-- **Coarse tier (everywhere):** factions, systems, markets, stockpiles,
-  fleet strengths, threat levels, as numbers. Small craft are counts.
+- **Coarse tier (everywhere outside the bubble, and all of prehistory):**
+  the actors of §5.1.1. Settlements keep their books daily; factions and
+  settlements decide monthly; traders are companies that own counts of
+  ships, commit to routes monthly and move goods only on departure and
+  arrival events. No individual ships, no flights.
 - **Notable assets are always individual**, even in the coarse tier:
   capital ships, flagships, named stations, convoy leaders.
-- **Agent tier (the bubble):** in systems near the player, ships are
+- **Agent tier (the bubble):** in systems within a few jumps of the
+  player (radius to be tuned; ~3 jumps is ~20 systems), ships are
   individual agents with goals (trade, mine, patrol, raid) flying real
-  routes.
+  routes under the flight model. None in prehistory.
 - Agents **materialize** from coarse state when entering the bubble and
   **collapse** back when they leave or when time compresses. Both
   directions conserve state (cargo, damage, losses).
