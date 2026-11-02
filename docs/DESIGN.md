@@ -506,6 +506,21 @@ Inspiration, not imitation — fictional throughout.
 - **Audio:** analog-synth score, radio static and crackle on comms, heavy
   mechanical sounds for docking, switches, and hull stress.
 
+### 8.1 Ship models and liveries
+
+Decided while hand-building every hull (PR #86):
+
+- **No reused models** (the user's ruling): every hull has its own design.
+  Large hulls are not scaled-up medium ones, and each framed hull has its
+  own version of every section type. Only module parts (gun barrels, radar
+  dishes, engine bells, radiator panels) are shared between hulls.
+- **Liveries by role:** courier cream and red; trader and hauler worn
+  mustard with hazard stripes; interceptor, gunship and frigate gunmetal
+  or olive with red accents; blockade runner matte dark; express freighter
+  a cream airliner livery with a cheatline; bulk freighter oxide red;
+  racer cream and sky blue.
+- Stencilled seven-segment hull numbers, and weathering on enamel paint.
+
 ## 9. Technical architecture
 
 Pure Rust, Linux first.
