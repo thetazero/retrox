@@ -587,30 +587,16 @@ pub(crate) fn found(state: &mut GalaxyState) {
     const WEALTH: f64 = 3.0;
     const CREDITS_PER_T: f64 = 10.0;
     let today = state.time;
-    let day = today.days() % 30;
-    let reviewing: Vec<SettlementId> = state
-        .settlements
-        .iter()
-        .filter(|(id, s)| s.economy.population > 0.0 && slotmap::Key::data(id).as_ffi() % 30 == day)
-        .map(|(id, _)| id)
-        .collect();
-    if reviewing.is_empty() {
-        return;
-    }
-    let idle: std::collections::HashSet<SystemId> = state
-        .companies
-        .values()
-        .flat_map(|c| c.fleets.iter())
-        .filter(|f| f.harvest.is_some() && (f.idle || f.slack > 0))
-        .filter_map(|f| match f.at {
-            Location::Docked(at) => Some(state.settlements.get(at)?.system),
-            _ => None,
-        })
-        .collect();
-    for id in reviewing {
+    // Systems where harvesters already sit idle: a scan of every fleet, so
+    // made only once a settlement is otherwise ready to found.
+    let mut idle: Option<std::collections::HashSet<SystemId>> = None;
+    for i in crate::settlement::review_slots(today.days(), 0, state.settlements.slot_count()) {
+        let Some(id) = state.settlements.key_at(i) else {
+            continue;
+        };
         let system = state.settlements[id].system;
         let entity = slotmap::Key::data(&id).as_ffi();
-        if idle.contains(&system)
+        if state.settlements[id].economy.population <= 0.0
             || !Rng::stream(state.seed, "found-harvester", today.days(), entity).chance(CHANCE)
         {
             continue;
@@ -654,6 +640,21 @@ pub(crate) fn found(state: &mut GalaxyState) {
         else {
             continue;
         };
+        let idle = idle.get_or_insert_with(|| {
+            state
+                .companies
+                .values()
+                .flat_map(|c| c.fleets.iter())
+                .filter(|f| f.harvest.is_some() && (f.idle || f.slack > 0))
+                .filter_map(|f| match f.at {
+                    Location::Docked(at) => Some(state.settlements.get(at)?.system),
+                    _ => None,
+                })
+                .collect()
+        });
+        if idle.contains(&system) {
+            continue;
+        }
         let mass = state.ship_classes[class].mass_t;
         // The crew fetches its hull from the nearest yard with one and
         // flies it home.

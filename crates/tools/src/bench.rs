@@ -21,7 +21,10 @@ use retrox_gen::{GalaxyConfig, generate, generate_cradle};
 use retrox_sim::{GalaxyState, PIPELINE, tick_profiled};
 
 /// Phases whose work scales with settlements, and with fleets.
-const SETTLEMENT_PHASES: &[&str] = &["production", "planning"];
+const SETTLEMENT_PHASES: &[&str] = &["production", "planning", "prices"];
+/// A settlement's daily books (DESIGN §5.1.1, aim: tens of ns); the rest
+/// of its phases are monthly reviews, spread over the days.
+const BOOKS_PHASES: &[&str] = &["production", "prices"];
 const FLEET_PHASES: &[&str] = &["trade", "movement"];
 
 struct Totals {
@@ -88,6 +91,7 @@ pub fn run_bench(seed: u64, years: u64) {
     run(&mut state, 30, |_, _| {});
     let actors = run(&mut state, retrox_sim::time::DAYS_PER_YEAR, |_, _| {});
     let per_settlement = ns(sum(&actors, SETTLEMENT_PHASES), actors.settlement_days);
+    let books = ns(sum(&actors, BOOKS_PHASES), actors.settlement_days);
     let per_fleet = ns(sum(&actors, FLEET_PHASES), actors.fleet_days);
     let per_day_ms = actors.wall.as_secs_f64() * 1000.0 / actors.days as f64;
     println!("actors (static galaxy, seed {seed}, 1 year):");
@@ -107,6 +111,7 @@ pub fn run_bench(seed: u64, years: u64) {
         };
         println!("  {:<12} {:>10.0} ns per {unit}", phase.name, per);
     }
+    println!("  settlement books (production + prices): {books:.0} ns per settlement-day");
 
     // Prehistory, from the cradle.
     let mut state = generate_cradle(seed, &GalaxyConfig::default());
@@ -148,7 +153,7 @@ pub fn run_bench(seed: u64, years: u64) {
         })
         .collect();
     println!(
-        "BENCH {{\"seed\":{seed},\"ns_per_settlement_day\":{per_settlement:.0},\"ns_per_fleet_day\":{per_fleet:.0},\"static_ms_per_day\":{per_day_ms:.3},\"prehistory_years\":{years},\"prehistory_seconds\":{seconds:.2},\"prehistory_settlements\":{},\"prehistory_phases_s\":{{{}}}}}",
+        "BENCH {{\"seed\":{seed},\"ns_per_settlement_day\":{per_settlement:.0},\"ns_books_per_settlement_day\":{books:.0},\"ns_per_fleet_day\":{per_fleet:.0},\"static_ms_per_day\":{per_day_ms:.3},\"prehistory_years\":{years},\"prehistory_seconds\":{seconds:.2},\"prehistory_settlements\":{},\"prehistory_phases_s\":{{{}}}}}",
         state.settlements.len(),
         phases.join(",")
     );

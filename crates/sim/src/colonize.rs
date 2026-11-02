@@ -127,16 +127,18 @@ fn taken_sites(state: &GalaxyState) -> HashSet<Claim> {
         .collect()
 }
 
-/// Planning phase: crowded settlements may launch colony ships.
+/// Monthly reviews, colonization part: crowded settlements may launch
+/// colony ships. Looking for a site is a search, so it only happens here,
+/// for the few settlements reviewing today that can afford a ship.
 pub fn launch(state: &mut GalaxyState) {
     let day = state.time.days();
-    let ids: Vec<SettlementId> = state.settlements.keys().collect();
     let mut taken: Option<HashSet<Claim>> = None;
-    for id in ids {
-        let key = slotmap::Key::data(&id).as_ffi();
-        if (key.wrapping_add(15)) % 30 != day % 30 {
+    // Half a month off the construction review, to spread the work.
+    for i in crate::settlement::review_slots(day, 15, state.settlements.slot_count()) {
+        let Some(id) = state.settlements.key_at(i) else {
             continue;
-        }
+        };
+        let key = slotmap::Key::data(&id).as_ffi();
         let settlement = &state.settlements[id];
         let economy = &settlement.economy;
         let capacity = crate::demography::capacity(state, id);

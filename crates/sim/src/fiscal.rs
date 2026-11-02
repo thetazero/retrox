@@ -114,23 +114,55 @@ pub fn contract_premium(
     good.base_price() * CONTRACT_PREMIUM * shortage * share
 }
 
-/// Planning phase, money part: taxes, then welfare.
-pub fn taxes_and_welfare(state: &mut GalaxyState) {
-    let ids: Vec<SettlementId> = state.settlements.keys().collect();
-    let reserves: Vec<f64> = ids.iter().map(|&id| reserve(state, id)).collect();
+/// A faction's share of today's welfare round, worked out in place so the
+/// daily books allocate nothing.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Welfare {
+    /// Whether the faction has no positive balance, and so prints money
+    /// for relief only.
+    pub printing: bool,
+    /// The sum of its settlements' claims.
+    pub claims: f64,
+    /// What it pays out today, shared by claim.
+    pub budget: f64,
+}
 
-    for (&id, &reserve) in ids.iter().zip(&reserves) {
+/// What a settlement claims of its faction's welfare: by population (twice
+/// over below its reserve), or only by how far below its reserve it is if
+/// the faction is printing.
+fn claim(state: &GalaxyState, id: SettlementId, printing: bool) -> f64 {
+    let s = &state.settlements[id];
+    let gap = (reserve(state, id) - s.economy.treasury).max(0.0);
+    if printing {
+        gap * RELIEF_SHARE
+    } else if gap > 0.0 {
+        2.0 * s.economy.population
+    } else {
+        s.economy.population
+    }
+}
+
+/// Planning phase, money part: taxes, then welfare. Ledger transfers in a
+/// few passes over settlements, companies and factions, with the per-faction
+/// sums kept on the factions themselves.
+pub fn taxes_and_welfare(state: &mut GalaxyState) {
+    for i in 0..state.settlements.slot_count() {
+        let Some(id) = state.settlements.key_at(i) else {
+            continue;
+        };
         let owner = state.settlements[id].owner;
         let rate = match state.factions[owner].economy {
             EconomyModel::Planned => PLANNED_TAX,
             EconomyModel::Market => MARKET_TAX,
         };
-        let tax = rate * (state.settlements[id].economy.treasury - reserve).max(0.0);
+        let tax = rate * (state.settlements[id].economy.treasury - reserve(state, id)).max(0.0);
         ledger::pay(state, Account::Settlement(id), Account::Faction(owner), tax);
     }
 
-    let keys: Vec<_> = state.companies.keys().collect();
-    for key in keys {
+    for i in 0..state.companies.slot_count() {
+        let Some(key) = state.companies.key_at(i) else {
+            continue;
+        };
         let company = &state.companies[key];
         let Some(home) = state.settlements.get(company.home) else {
             continue;
@@ -146,56 +178,50 @@ pub fn taxes_and_welfare(state: &mut GalaxyState) {
         ledger::pay(state, Account::Company(key), Account::Faction(owner), tax);
     }
 
-    // From a positive balance, welfare goes to every settlement by
-    // population, twice as much per head to those below their reserve. A
-    // faction without one prints only to relieve settlements below their
-    // reserve, by how far below they are, within its debt limit: printing
-    // follows need, so debt doesn't grow while settlements are doing fine.
-    let weight = |state: &GalaxyState, id: SettlementId, reserve: f64, printing: bool| {
-        let s = &state.settlements[id];
-        let gap = (reserve - s.economy.treasury).max(0.0);
-        if printing {
-            gap * RELIEF_SHARE
-        } else if gap > 0.0 {
-            2.0 * s.economy.population
-        } else {
-            s.economy.population
-        }
-    };
-    let prints: SecondaryMap<FactionId, bool> = state
-        .factions
-        .iter()
-        .map(|(id, f)| (id, f.treasury <= 0.0))
-        .collect();
-    let printing = |_: &GalaxyState, owner: FactionId| prints.get(owner).copied().unwrap_or(false);
-    let mut totals: SecondaryMap<FactionId, f64> = SecondaryMap::new();
-    for (&id, &reserve) in ids.iter().zip(&reserves) {
-        let owner = state.settlements[id].owner;
-        let w = weight(state, id, reserve, printing(state, owner));
-        *totals.entry(owner).unwrap().or_default() += w;
+    // Welfare: who prints, then everyone's claims, then budgets, then pay.
+    for faction in state.factions.values_mut() {
+        faction.welfare = Welfare {
+            printing: faction.treasury <= 0.0,
+            ..Welfare::default()
+        };
     }
-    let budgets: SecondaryMap<FactionId, f64> = state
-        .factions
-        .iter()
-        .map(|(id, f)| {
-            let budget = if !prints[id] {
-                f.treasury * WELFARE_SHARE
-            } else {
-                let need = totals.get(id).copied().unwrap_or(0.0) * thrift(state, id);
-                need.min(ledger::spendable(state, Account::Faction(id)) * WELFARE_DEBT_SHARE)
-            };
-            (id, budget)
-        })
-        .collect();
-    for (&id, &reserve) in ids.iter().zip(&reserves) {
-        let owner = state.settlements[id].owner;
-        let (Some(&budget), Some(&total)) = (budgets.get(owner), totals.get(owner)) else {
+    for i in 0..state.settlements.slot_count() {
+        let Some(id) = state.settlements.key_at(i) else {
             continue;
         };
-        if total <= 0.0 {
+        let owner = state.settlements[id].owner;
+        let Some(printing) = state.factions.get(owner).map(|f| f.welfare.printing) else {
+            continue;
+        };
+        let c = claim(state, id, printing);
+        state.factions[owner].welfare.claims += c;
+    }
+    for i in 0..state.factions.slot_count() {
+        let Some(id) = state.factions.key_at(i) else {
+            continue;
+        };
+        let f = &state.factions[id];
+        let budget = if !f.welfare.printing {
+            f.treasury * WELFARE_SHARE
+        } else {
+            let need = f.welfare.claims * thrift(state, id);
+            need.min(ledger::spendable(state, Account::Faction(id)) * WELFARE_DEBT_SHARE)
+        };
+        state.factions[id].welfare.budget = budget;
+    }
+    for i in 0..state.settlements.slot_count() {
+        let Some(id) = state.settlements.key_at(i) else {
+            continue;
+        };
+        let owner = state.settlements[id].owner;
+        let Some(welfare) = state.factions.get(owner).map(|f| f.welfare) else {
+            continue;
+        };
+        if welfare.claims <= 0.0 {
             continue;
         }
-        let pay = budget * weight(state, id, reserve, printing(state, owner)) / total;
+        let pay = welfare.budget * claim(state, id, welfare.printing) / welfare.claims;
         ledger::pay(state, Account::Faction(owner), Account::Settlement(id), pay);
     }
 }
+

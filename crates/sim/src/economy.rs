@@ -10,7 +10,6 @@
 
 use std::ops::{Index, IndexMut};
 
-use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::{EconomyModel, GalaxyState};
@@ -271,7 +270,7 @@ impl Market {
             EconomyModel::Planned => good.base_price(),
             EconomyModel::Market => {
                 let scarcity = self.target(good) / (stock.max(0.0) + 1.0);
-                good.base_price() * scarcity.powf(0.6).clamp(0.25, 5.0)
+                good.base_price() * price_curve(scarcity)
             }
         }
     }
@@ -281,6 +280,63 @@ impl Market {
         (self.stock[good] - self.target(good)).max(0.0)
     }
 }
+
+/// How far a market price strays from base with scarcity (target stock
+/// over stock held): `scarcity^0.6`, held between a quarter and five times
+/// base.
+///
+/// Every market prices every good every day, so this is read from tables
+/// instead of calling `powf` (DESIGN §5.1.1): the power of two in
+/// `scarcity` from one, the rest from the other, interpolated. Within
+/// 1e-5 of `powf`, and the tables are written out rather than computed, so
+/// the result is the same on every platform (§5.1).
+pub fn price_curve(scarcity: f64) -> f64 {
+    // scarcity^0.6 is 0.25 and 5 at these.
+    const LOW: f64 = 0.09921256574801246;
+    const HIGH: f64 = 14.620088691064332;
+    const MANTISSA_BITS: u32 = 52;
+    const STEPS_BITS: u32 = 6;
+    // `max` first, so NaN reads as plenty.
+    let x = scarcity.max(LOW).min(HIGH);
+    let bits = x.to_bits();
+    // x is 2^e · m with m in [1, 2), and e in -4..=3 between the clamps.
+    let e = ((bits >> MANTISSA_BITS) & 0x7ff) as usize + 4 - 1023;
+    let fraction = bits & ((1 << MANTISSA_BITS) - 1);
+    let step = (fraction >> (MANTISSA_BITS - STEPS_BITS)) as usize;
+    let within = (fraction & ((1 << (MANTISSA_BITS - STEPS_BITS)) - 1)) as f64
+        / (1u64 << (MANTISSA_BITS - STEPS_BITS)) as f64;
+    let m = POW_MANTISSA[step] + (POW_MANTISSA[step + 1] - POW_MANTISSA[step]) * within;
+    (POW_EXP[e] * m).clamp(0.25, 5.0)
+}
+
+/// 2^(0.6 e) for e in -4..=3.
+#[rustfmt::skip]
+const POW_EXP: [f64; 8] = [
+    0.18946457081379978, 0.2871745887492588, 0.43527528164806206, 0.6597539553864471,
+    1.0, 1.515716566510398, 2.2973967099940698, 3.482202253184496,
+];
+
+/// m^0.6 for m = 1, 1 + 1/64, … 2.
+#[rustfmt::skip]
+const POW_MANTISSA: [f64; 65] = [
+    1.0, 1.0093459147663688, 1.018634490106604, 1.0278669387264774,
+    1.0370444300164117, 1.0461680922111765, 1.055239014412241, 1.06425824848335,
+    1.0732268108289416, 1.0821456840641672, 1.0910158185845167, 1.0998381340423509,
+    1.1086135207370322, 1.1173428409247734, 1.1260269300538224, 1.1346665979301414,
+    1.143262629818316, 1.151815787482061, 1.1603268101683355, 1.1687964155387764,
+    1.1772253005518665, 1.1856141422989992, 1.193963598797363, 1.2022743097423483,
+    1.2105468972219857, 1.2187819663957407, 1.22698010613982, 1.2351418896609991,
+    1.2432678750808317, 1.251358605991976, 1.259414611988256, 1.2674364091699617,
+    1.2754245006257907, 1.2833793768927504, 1.291301516395233, 1.2991913858644224,
+    1.3070494407390916, 1.314876125548802, 1.3226718742804395, 1.3304371107289703,
+    1.338172248833238, 1.3458776929975842, 1.3535538384000132, 1.3612010712875904,
+    1.368819769259713, 1.3764103015398634, 1.38397302923641, 1.3915083055929955,
+    1.399016476229016, 1.406497879370671, 1.4139528460730293, 1.421381700433541,
+    1.4287847597973933, 1.4361623349550887, 1.4435147303326075, 1.4508422441744886,
+    1.4581451687201539, 1.465423790373777, 1.4726783898679854, 1.4799092424216662,
+    1.4871166178921387, 1.4943007809219329, 1.5014619910804108, 1.50860050300045,
+    1.515716566510398,
+];
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct LocalEconomy {
@@ -414,41 +470,46 @@ impl LocalEconomy {
     }
 }
 
-/// The economic model in each settlement, in `settlements` iteration order.
-fn models(state: &GalaxyState) -> Vec<EconomyModel> {
-    state
-        .settlements
-        .values()
-        .map(|s| state.factions[s.owner].economy)
-        .collect()
-}
-
-/// Production phase: every settlement produces and consumes, in parallel.
+/// A settlement's daily books (DESIGN §5.1.1): it produces and consumes,
+/// then its population changes by what it ate, and its faction's head
+/// count adds it up. Plain arithmetic over each settlement in turn, with
+/// nothing allocated or looked up beyond its own site and owner.
+///
+/// One thread: at tens of nanoseconds a settlement, handing the work to
+/// rayon costs more than it saves at the sizes the galaxy reaches.
 pub fn production(state: &mut GalaxyState) {
-    let mut settlements: Vec<_> = state.settlements.values_mut().collect();
-    if settlements.len() < PARALLEL_MIN {
-        settlements.iter_mut().for_each(|s| s.economy.produce());
-    } else {
-        settlements.par_iter_mut().for_each(|s| s.economy.produce());
+    let GalaxyState {
+        settlements,
+        factions,
+        regions,
+        bodies,
+        history,
+        time,
+        ..
+    } = state;
+    for faction in factions.values_mut() {
+        faction.population = 0.0;
+    }
+    for (id, settlement) in settlements.iter_mut() {
+        let economy = &mut settlement.economy;
+        economy.produce();
+        let capacity = crate::demography::site_capacity(settlement.site, regions, bodies);
+        if crate::demography::live(economy, capacity) {
+            history.record(*time, crate::HistoryKind::Famine { settlement: id });
+        }
+        if let Some(faction) = factions.get_mut(settlement.owner) {
+            faction.population += economy.population;
+        }
     }
 }
 
-/// Below this many settlements, starting threads costs more than the work.
-const PARALLEL_MIN: usize = 1024;
-
-/// Recompute every settlement's prices from its stock.
+/// Recompute every settlement's prices from its stock, once at the end of
+/// the day (DESIGN §5.1.1).
 pub fn update_all_prices(state: &mut GalaxyState) {
-    let models = models(state);
-    let mut settlements: Vec<_> = state.settlements.values_mut().collect();
-    if settlements.len() < PARALLEL_MIN {
-        for (s, &model) in settlements.iter_mut().zip(&models) {
-            s.economy.update_prices(model);
-        }
-    } else {
-        settlements
-            .par_iter_mut()
-            .zip(models.par_iter())
-            .for_each(|(s, &model)| s.economy.update_prices(model));
+    let factions = &state.factions;
+    for settlement in state.settlements.values_mut() {
+        let model = factions[settlement.owner].economy;
+        settlement.economy.update_prices(model);
     }
 }
 
@@ -562,5 +623,18 @@ mod tests {
         let short = e.market.shortfall[Good::Fuel];
         assert!((short - 10.0).abs() < 1e-9, "fuel short {short}");
         assert_eq!(e.market.stock[Good::Metal], 10.0);
+    }
+    #[test]
+    fn price_curve_follows_powf() {
+        let mut x = 0.01;
+        while x < 40.0 {
+            let want = x.powf(0.6).clamp(0.25, 5.0);
+            let got = price_curve(x);
+            assert!((got - want).abs() <= 1e-5 * want, "{x}: {got} vs {want}");
+            x *= 1.0137;
+        }
+        assert_eq!(price_curve(0.0), 0.25);
+        assert_eq!(price_curve(f64::INFINITY), 5.0);
+        assert_eq!(price_curve(1.0), 1.0);
     }
 }

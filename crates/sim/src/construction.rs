@@ -200,28 +200,43 @@ pub fn choose(state: &GalaxyState, id: SettlementId) -> Option<Project> {
     })
 }
 
-/// Planning phase, construction part: start projects, make progress on
-/// them, and let idle facilities decay. Each settlement reviews once a
-/// month, on its own day.
-pub fn build(state: &mut GalaxyState) {
-    let day = state.time.days();
-    let ids: Vec<SettlementId> = state.settlements.keys().collect();
-    for id in ids {
-        if state.settlements[id].economy.population <= 0.0 {
+/// Daily books, construction part: every project takes today's share of
+/// its materials from the local market.
+pub fn progress_all(state: &mut GalaxyState) {
+    for i in 0..state.settlements.slot_count() {
+        let Some(id) = state.settlements.key_at(i) else {
             continue;
+        };
+        let economy = &state.settlements[id].economy;
+        if economy.population > 0.0 && economy.project.is_some() {
+            progress(state, id);
         }
-        let review = (slotmap::Key::data(&id).as_ffi() % 30) == day % 30;
-        if review {
-            decay(state, id);
-            state.settlements[id].economy.hull_wanted *= 0.5;
-            if state.settlements[id].economy.project.is_none() {
-                let project = choose(state, id);
-                let economy = &mut state.settlements[id].economy;
-                economy.project = project;
-                economy.refresh_demand();
-            }
+    }
+}
+
+/// Monthly reviews, construction part: today's reviewing settlements let
+/// idle facilities decay, forget half their old hull orders, and start a
+/// project if they have none.
+pub fn review(state: &mut GalaxyState) {
+    let day = state.time.days();
+    for i in crate::settlement::review_slots(day, 0, state.settlements.slot_count()) {
+        if let Some(id) = state.settlements.key_at(i) {
+            review_one(state, id);
         }
-        progress(state, id);
+    }
+}
+
+fn review_one(state: &mut GalaxyState, id: SettlementId) {
+    if state.settlements[id].economy.population <= 0.0 {
+        return;
+    }
+    decay(state, id);
+    state.settlements[id].economy.hull_wanted *= 0.5;
+    if state.settlements[id].economy.project.is_none() {
+        let project = choose(state, id);
+        let economy = &mut state.settlements[id].economy;
+        economy.project = project;
+        economy.refresh_demand();
     }
 }
 

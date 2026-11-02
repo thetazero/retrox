@@ -104,6 +104,7 @@ pub fn found(rng: &mut Rng, state: &mut GalaxyState, territory: &Territory, popu
             founded: GalaxyTime::ZERO,
             treasury: 0.0,
             population: 0.0,
+            welfare: Default::default(),
         });
         state.history.record(
             GalaxyTime::ZERO,
@@ -257,6 +258,7 @@ fn independent(
         founded: GalaxyTime::ZERO,
         treasury: 0.0,
         population: 0.0,
+        welfare: Default::default(),
     });
     state.history.record(
         GalaxyTime::ZERO,
