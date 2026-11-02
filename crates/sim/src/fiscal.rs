@@ -8,11 +8,12 @@
 //! reserve), and — if its economy is planned — pays captains a premium for goods
 //! delivered to its short settlements, since its fixed official prices
 //! give them no other reason to. A faction's balance can go negative: it
-//! has then issued that much money, up to a debt limit.
+//! has then issued that much money, up to the debt limit [`crate::ledger`] sets.
 
 use slotmap::SecondaryMap;
 
 use crate::economy::Good;
+use crate::ledger::{self, Account};
 use crate::{EconomyModel, FactionId, GalaxyState, SettlementId};
 
 /// Settlements keep this many days of their own demand, at base prices,
@@ -34,10 +35,6 @@ const WELFARE_SHARE: f64 = 0.05;
 /// Delivery premium, as a share of the base price, at a completely empty
 /// market; it falls to zero as stock reaches target.
 const CONTRACT_PREMIUM: f64 = 0.8;
-/// How deep in debt a faction may go to pay contracts, per unit of its
-/// population.
-const DEBT_PER_POPULATION: f64 = 5_000.0;
-
 /// What a settlement wants to hold in reserve: `RESERVE_DAYS` of its
 /// demand at base prices.
 fn reserve(state: &GalaxyState, id: SettlementId) -> f64 {
@@ -49,28 +46,15 @@ fn reserve(state: &GalaxyState, id: SettlementId) -> f64 {
             .sum::<f64>()
 }
 
-/// Each faction's population.
-fn populations(state: &GalaxyState) -> SecondaryMap<FactionId, f64> {
-    let mut out = SecondaryMap::new();
-    for s in state.settlements.values() {
-        *out.entry(s.owner).unwrap().or_default() += s.economy.population;
-    }
-    out
-}
-
 /// Which factions are posting delivery contracts this tick: planned
 /// factions within their debt limit.
 pub fn open_contracts(state: &GalaxyState) -> SecondaryMap<FactionId, bool> {
-    let populations = populations(state);
     state
         .factions
         .iter()
         .map(|(id, f)| {
-            let limit = populations.get(id).copied().unwrap_or(0.0) * DEBT_PER_POPULATION;
-            (
-                id,
-                f.economy == EconomyModel::Planned && f.treasury > -limit,
-            )
+            let solvent = ledger::spendable(state, Account::Faction(id)) > 0.0;
+            (id, f.economy == EconomyModel::Planned && solvent)
         })
         .collect()
 }
@@ -105,10 +89,8 @@ pub fn taxes_and_welfare(state: &mut GalaxyState) {
             EconomyModel::Planned => PLANNED_TAX,
             EconomyModel::Market => MARKET_TAX,
         };
-        let treasury = &mut state.settlements[id].economy.treasury;
-        let tax = rate * (*treasury - reserve).max(0.0);
-        *treasury -= tax;
-        state.factions[owner].treasury += tax;
+        let tax = rate * (state.settlements[id].economy.treasury - reserve).max(0.0);
+        ledger::pay(state, Account::Settlement(id), Account::Faction(owner), tax);
     }
 
     let keys: Vec<_> = state.companies.keys().collect();
@@ -125,8 +107,7 @@ pub fn taxes_and_welfare(state: &mut GalaxyState) {
             .sum();
         let working = capacity * CARGO_VALUE_PER_T * WORKING_CAPITAL_HOLDS;
         let tax = COMPANY_TAX * (company.credits - working).max(0.0);
-        state.companies[key].credits -= tax;
-        state.factions[owner].treasury += tax;
+        ledger::pay(state, Account::Company(key), Account::Faction(owner), tax);
     }
 
     // Welfare goes to every settlement by population, twice as much per
@@ -160,7 +141,6 @@ pub fn taxes_and_welfare(state: &mut GalaxyState) {
             continue;
         }
         let pay = budget * weight(state, id, reserve) / total;
-        state.settlements[id].economy.treasury += pay;
-        state.factions[owner].treasury -= pay;
+        ledger::pay(state, Account::Faction(owner), Account::Settlement(id), pay);
     }
 }

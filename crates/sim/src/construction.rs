@@ -13,6 +13,7 @@
 use crate::economy::{
     Facility, FacilityKind, Good, GoodMap, HULL_PRICE_PER_T, HULL_T_PER_RUN, Project,
 };
+use crate::ledger::{self, Account};
 use crate::{EconomyModel, GalaxyState, Resources, SettlementId};
 
 /// Shortest time a project can take, in days; its materials are wanted
@@ -215,25 +216,28 @@ pub fn build(state: &mut GalaxyState) {
 fn progress(state: &mut GalaxyState, id: SettlementId) {
     let owner = state.settlements[id].owner;
     let planned = state.factions[owner].economy == EconomyModel::Planned;
-    let economy = &mut state.settlements[id].economy;
-    let Some(project) = economy.project.as_mut() else {
+    let Some(project) = state.settlements[id].economy.project.clone() else {
         return;
     };
     let total = materials(project.scale);
+    let mut needs = project.needs;
     let mut used = 0.0;
     for good in Good::ALL {
-        let today = (total[good] / BUILD_DAYS)
-            .min(project.needs[good])
-            .min(economy.market.stock[good].max(0.0));
-        project.needs[good] -= today;
-        economy.market.stock[good] -= today;
+        let today = ledger::consume(state, id, good, (total[good] / BUILD_DAYS).min(needs[good]));
+        needs[good] -= today;
         used += today;
     }
-    let done = Good::ALL.iter().all(|&g| project.needs[g] <= 1e-9);
+    let done = Good::ALL.iter().all(|&g| needs[g] <= 1e-9);
+    if let Some(p) = state.settlements[id].economy.project.as_mut() {
+        p.needs = needs;
+    }
     if planned && used > 0.0 {
-        let wages = used * WAGE_PER_UNIT;
-        economy.treasury += wages;
-        state.factions[owner].treasury -= wages;
+        ledger::pay(
+            state,
+            Account::Faction(owner),
+            Account::Settlement(id),
+            used * WAGE_PER_UNIT,
+        );
     }
     let economy = &mut state.settlements[id].economy;
     if done {

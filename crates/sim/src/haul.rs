@@ -25,6 +25,7 @@ use slotmap::new_key_type;
 use crate::economy::{Good, GoodMap};
 use crate::flight::Vec3;
 use crate::flight::{self, Goal, Kinematics};
+use crate::ledger::{self, Account, Supply};
 use crate::settlement::{SettlementId, Site};
 use crate::{EconomyModel, GalaxyState, GalaxyTime, Id, Rng, SystemId};
 
@@ -470,17 +471,18 @@ pub fn movement(state: &mut GalaxyState) {
         .map(|(k, _)| k)
         .collect();
     for key in gone {
-        let company = state.companies.remove(key).expect("listed above");
-        match state.settlements.get_mut(company.home) {
-            Some(home) => home.economy.treasury += company.credits,
-            None => {
-                // Keep money conserved even if home is gone: hand it to
-                // any faction.
-                if let Some(f) = state.factions.values_mut().next() {
-                    f.treasury += company.credits;
-                }
-            }
+        let home = state.companies[key].home;
+        let credits = state.companies[key].credits;
+        let heir = if state.settlements.contains_key(home) {
+            Some(Account::Settlement(home))
+        } else {
+            // Home is gone: any faction keeps the money in the galaxy.
+            state.factions.keys().next().map(Account::Faction)
+        };
+        if let Some(heir) = heir {
+            ledger::pay(state, Account::Company(key), heir, credits);
         }
+        state.companies.remove(key);
     }
 }
 
@@ -653,22 +655,30 @@ fn sell(state: &mut GalaxyState, ctx: &Ctx, key: CompanyId, n: usize, here: Sett
     let stock = state.settlements[here].economy.market.stock[cargo.good] + cargo.amount / 2.0;
     let premium = crate::fiscal::contract_premium(state, &ctx.contracts, here, cargo.good, stock);
     let owner = state.settlements[here].owner;
-    let settlement = &mut state.settlements[here];
-    let market = &settlement.economy.market;
-    let price = market.price_at(cargo.good, stock, model);
-    let amount = cargo
-        .amount
-        .min(settlement.economy.treasury.max(0.0) * MAX_SPEND_SHARE / price);
+    let price = state.settlements[here]
+        .economy
+        .market
+        .price_at(cargo.good, stock, model);
+    let amount = ledger::sell(
+        state,
+        Account::Company(key),
+        here,
+        cargo.good,
+        cargo.amount,
+        price,
+        MAX_SPEND_SHARE,
+    );
     if amount <= 0.0 {
         return;
     }
-    settlement.economy.market.stock[cargo.good] += amount;
-    settlement.economy.treasury -= amount * price;
-    state.factions[owner].treasury -= amount * premium;
-    let company = &mut state.companies[key];
-    company.credits += amount * (price + premium);
+    ledger::pay(
+        state,
+        Account::Faction(owner),
+        Account::Company(key),
+        amount * premium,
+    );
     let left = cargo.amount - amount;
-    company.fleets[n].cargo = (left > 1e-6).then_some(Cargo {
+    state.companies[key].fleets[n].cargo = (left > 1e-6).then_some(Cargo {
         good: cargo.good,
         amount: left,
     });
@@ -691,28 +701,47 @@ fn depart(
     let loading = fleet.cargo.is_none() && plan.amount > 0.0;
     let class_capacity = class.cargo_t * f64::from(fleet.ships);
 
-    let origin = &mut state.settlements[here].economy;
-    let mut cost = 0.0;
+    let company = Account::Company(key);
     if loading {
-        cost += plan.amount * origin.market.price[plan.good];
-        origin.market.stock[plan.good] -= plan.amount;
-    }
-    // Fuel comes out of the port's stock; what it can't supply is burned
-    // from the ships' own reserves, free.
-    let fuel_bought = fuel.min(origin.market.stock[Good::Fuel]);
-    origin.market.stock[Good::Fuel] -= fuel_bought;
-    cost += fuel_bought * origin.market.price[Good::Fuel];
-    origin.treasury += cost;
-
-    let company = &mut state.companies[key];
-    company.credits -= cost;
-    let fleet = &mut company.fleets[n];
-    if loading {
-        fleet.cargo = Some(Cargo {
+        let price = state.settlements[here].economy.market.price[plan.good];
+        let affordable = ledger::available(state, here, plan.good, Supply::Surplus)
+            .min(ledger::spendable(state, company) / price);
+        if affordable < 1.0 {
+            // Someone else got there first, or the money ran short.
+            state.companies[key].fleets[n].idle_until =
+                GalaxyTime::from_days(state.time.days() + IDLE_DAYS);
+            return;
+        }
+        let bought = ledger::buy(
+            state,
+            company,
+            here,
+            plan.good,
+            plan.amount,
+            price,
+            Supply::Surplus,
+            1.0,
+        );
+        state.companies[key].fleets[n].cargo = Some(Cargo {
             good: plan.good,
-            amount: plan.amount,
+            amount: bought,
         });
     }
+    // Fuel comes out of the port's stock, as much as the company can pay
+    // for; the rest is burned from the ships' own reserves, free.
+    let fuel_price = state.settlements[here].economy.market.price[Good::Fuel];
+    ledger::buy(
+        state,
+        company,
+        here,
+        Good::Fuel,
+        fuel,
+        fuel_price,
+        Supply::Stock,
+        1.0,
+    );
+
+    let fleet = &mut state.companies[key].fleets[n];
     match fleet.cargo {
         Some(cargo) => *ctx.inbound.entry((plan.to, cargo.good)).or_default() += cargo.amount,
         None => *ctx.claimed.entry(plan.to).or_default() += class_capacity,
@@ -746,12 +775,15 @@ fn buy_ship(state: &mut GalaxyState, key: CompanyId, n: usize, here: SettlementI
     {
         return;
     }
-    let yard = &mut state.settlements[here].economy;
-    yard.hull_t -= mass;
-    yard.treasury += price;
-    let company = &mut state.companies[key];
-    company.credits -= price;
-    company.fleets[n].ships += 1;
+    let paid = ledger::pay(
+        state,
+        Account::Company(key),
+        Account::Settlement(here),
+        price,
+    );
+    debug_assert_eq!(paid, price);
+    state.settlements[here].economy.hull_t -= mass;
+    state.companies[key].fleets[n].ships += 1;
 }
 
 /// Settlements with hull to sell and money to spare found new companies,
@@ -794,16 +826,12 @@ fn found_companies(state: &mut GalaxyState) {
             .next()
             .unwrap_or("Free")
             .to_owned();
-        let economy = &mut state.settlements[id].economy;
-        economy.hull_t -= mass;
-        economy.treasury -= founding;
+        state.settlements[id].economy.hull_t -= mass;
         let hull_price = mass * crate::economy::HULL_PRICE_PER_T;
-        // The hull is bought from this same yard, so its price stays here.
-        economy.treasury += hull_price;
-        state.companies.insert(Company {
+        let company = state.companies.insert(Company {
             name: format!("{base} Haulers {}", now.year()),
             home: id,
-            credits: founding - hull_price,
+            credits: 0.0,
             fleets: vec![Fleet {
                 class,
                 ships: 1,
@@ -812,6 +840,11 @@ fn found_companies(state: &mut GalaxyState) {
                 idle_until: now,
             }],
         });
+        // The settlement stakes the company, which buys its hull from the
+        // same yard.
+        let (home, company) = (Account::Settlement(id), Account::Company(company));
+        ledger::pay(state, home, company, founding);
+        ledger::pay(state, company, home, hull_price);
     }
 }
 
@@ -826,13 +859,13 @@ fn pay_upkeep(state: &mut GalaxyState, key: CompanyId) {
             f64::from(f.ships) * (UPKEEP_PER_SHIP_DAY + class.cargo_t * UPKEEP_PER_CARGO_T_DAY)
         })
         .sum();
-    let paid = upkeep.min(company.credits.max(0.0));
     let home = company.home;
-    if paid <= 0.0 || !state.settlements.contains_key(home) {
-        return;
-    }
-    state.companies[key].credits -= paid;
-    state.settlements[home].economy.treasury += paid;
+    ledger::pay(
+        state,
+        Account::Company(key),
+        Account::Settlement(home),
+        upkeep,
+    );
 }
 
 /// Goods held anywhere: in markets and aboard ships.

@@ -285,8 +285,11 @@ pub struct Faction {
     pub color: [u8; 3],
     pub founded: GalaxyTime,
     /// The faction's balance, in credits. Taxes raise it and spending
-    /// lowers it; below zero, the faction has issued that much money.
+    /// lowers it; below zero, the faction has issued that much money, down
+    /// to a limit set by its population (see [`crate::ledger`]).
     pub treasury: f64,
+    /// Total population of its settlements, refreshed daily.
+    pub population: f64,
 }
 
 /// How a faction runs its economy (§5.4).
