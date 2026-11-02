@@ -8,6 +8,7 @@ use egui::{
     Align2, Color32, FontFamily, FontId, Margin, Pos2, Rect, RichText, Sense, Stroke, Vec2,
 };
 use glam::{DVec3, Mat4, Vec4};
+use retrox_sim::economy::Good;
 use retrox_sim::{BodyKind, EconomyModel};
 
 mod combat;
@@ -1171,9 +1172,19 @@ fn contact_label(c: &crate::traffic::Contact, dist: f64) -> String {
     } else {
         class
     };
-    let hold = match c.cargo {
-        Some((good, t)) => format!("{:.0} T {}", t, good.name().to_uppercase()),
-        None => "EMPTY".into(),
+    let hold = match (&c.work, c.cargo) {
+        // A harvester on its run: what it's doing rather than its hold.
+        (Some(w), _) if w.at_source => {
+            let doing = match w.good {
+                Good::Gas => "SKIMMING GAS",
+                _ => "CUTTING ICE",
+            };
+            let days = if w.days_left == 1 { "DAY" } else { "DAYS" };
+            format!("{doing} · {} {days} LEFT", w.days_left)
+        }
+        (Some(w), _) => format!("BOUND FOR {}", w.source.to_uppercase()),
+        (None, Some((good, t))) => format!("{:.0} T {}", t, good.name().to_uppercase()),
+        (None, None) => "EMPTY".into(),
     };
     format!(
         "{} · {ships} · {hold}  {}",

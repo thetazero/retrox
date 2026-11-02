@@ -133,9 +133,8 @@ pub fn seed(rng: &mut Rng, state: &mut GalaxyState) {
 
     // Where two kinds make one good (fuel from gas or ice), each makes its
     // share by placed weight.
-    let weight = |kind: FacilityKind| -> f64 {
-        placed.iter().filter(|p| p.1 == kind).map(|p| p.2).sum()
-    };
+    let weight =
+        |kind: FacilityKind| -> f64 { placed.iter().filter(|p| p.1 == kind).map(|p| p.2).sum() };
     let share = |kind: FacilityKind| -> f64 {
         let Some(&(good, _)) = kind.recipe().outputs.first() else {
             return 1.0;

@@ -56,7 +56,7 @@ use retrox_sim::{
     tick,
 };
 
-pub const AU: f64 = 1.495_978_707e11;
+pub const AU: f64 = retrox_sim::bubble::METRES_PER_AU;
 pub const SECONDS_PER_DAY: f64 = 86_400.0;
 const SOLAR_RADIUS_M: f64 = 6.957e8;
 
@@ -1067,6 +1067,76 @@ impl World {
         self.target = Some(Place::Field(field));
         self.message = None;
         self.update_field();
+        true
+    }
+
+    /// Start in space by a harvester at work on `good` (for screenshots of
+    /// issue #68), waiting a few days for one if need be. Returns false if
+    /// none turned up.
+    pub fn start_by_harvesters(&mut self, good: Good) -> bool {
+        let at_work = |w: &Self| {
+            w.galaxy.bubble.flights.values().find_map(|f| {
+                let work = f.working()?;
+                let bubble::Stage::Flying { system, ship } = f.stage else {
+                    return None;
+                };
+                let (g, _) = retrox_sim::harvest::yields(&w.galaxy, work.source)?;
+                let goal = retrox_sim::harvest::work_goal(
+                    &w.galaxy,
+                    work.source,
+                    work.slot,
+                    w.galaxy.time.days() as f64,
+                );
+                let there = retrox_sim::flight::length(retrox_sim::flight::sub(goal.pos, ship.pos));
+                (g == good && there < 2_000.0).then_some(system)
+            })
+        };
+        let mut found = at_work(self);
+        for _ in 0..40 {
+            if found.is_some() {
+                break;
+            }
+            tick(&mut self.galaxy);
+            self.clock_s = self.galaxy.time.days() as f64 * SECONDS_PER_DAY;
+            found = at_work(self);
+        }
+        let Some(system) = found else {
+            return false;
+        };
+        if system != self.system {
+            self.arrive_jump(system);
+        }
+        self.traffic.update(&self.galaxy, self.system, self.clock_s);
+        let Some(c) = self
+            .traffic
+            .contacts
+            .iter()
+            .filter(|c| {
+                c.work
+                    .as_ref()
+                    .is_some_and(|w| w.at_source && w.good == good)
+            })
+            .max_by_key(|c| c.ships)
+            .cloned()
+        else {
+            return false;
+        };
+        let length = c.fit.stats().length_m.max(10.0);
+        let along = c.vel.normalize_or(DVec3::Z);
+        let across = along.cross(DVec3::Y).normalize_or(DVec3::X);
+        // Off its quarter and above, looking past it at its work.
+        let at = c.pos
+            + (across * 1.5 + DVec3::Y * 0.55 - along * 0.8)
+                * (length * (1.6 + 0.6 * f64::from(c.ships)));
+        self.mode = Mode::Normal;
+        self.ship.frame = Place::Star;
+        self.ship.rel = at;
+        self.ship.vel = c.vel;
+        self.ship.throttle = 0.0;
+        self.ship.flight_assist = false;
+        self.ship.rot = look_rotation(c.pos - at);
+        self.cam_rot = self.ship.rot;
+        self.message = None;
         true
     }
 

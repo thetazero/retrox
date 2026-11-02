@@ -35,7 +35,7 @@ use crate::ledger::{self, Account, Supply};
 use crate::settlement::SettlementId;
 use crate::{GalaxyState, GalaxyTime, Rng, SystemId};
 
-const METRES_PER_AU: f64 = 1.496e11;
+use crate::bubble::METRES_PER_AU;
 const SECONDS_PER_DAY: f64 = 86_400.0;
 
 /// Somewhere ships can harvest.
@@ -128,7 +128,10 @@ pub fn name(state: &GalaxyState, source: Source) -> &str {
 /// bodies and fields never change, so nothing ever needs clearing. Not
 /// saved.
 #[derive(Default)]
-pub struct SourceIndex(RwLock<Option<Arc<HashMap<SystemId, Vec<Source>>>>>);
+pub struct SourceIndex(RwLock<Option<Sources>>);
+
+/// Each system's sources.
+type Sources = Arc<HashMap<SystemId, Vec<Source>>>;
 
 impl Clone for SourceIndex {
     fn clone(&self) -> Self {
@@ -214,6 +217,12 @@ impl<'de> Deserialize<'de> for Strain {
             taken: entries.into_iter().map(|(k, t, d)| (k, (t, d))).collect(),
         })
     }
+}
+
+/// Record `tonnes` taken from `source` today, as a run or the player does.
+pub fn strain(state: &mut GalaxyState, source: Source, tonnes: f64) {
+    let today = state.time;
+    state.strain.add(source, today, tonnes);
 }
 
 /// How rich a source works out right now, after strain: what sets how long
@@ -320,6 +329,37 @@ pub fn work_goal(state: &GalaxyState, source: Source, slot: f64, t_days: f64) ->
         pos: flight::add(centre, flight::scale(dir, offset_m / dl)),
         vel: flight::scale(vel, METRES_PER_AU / SECONDS_PER_DAY),
     }
+}
+
+/// What `ships` of `class` would clear a day running `plan` from `here`,
+/// selling at the good's base price: how generation and founding choose a
+/// hull for the work.
+pub fn base_profit_per_day(
+    state: &GalaxyState,
+    class: crate::haul::ShipClassId,
+    ships: u32,
+    here: SettlementId,
+    plan: &Plan,
+) -> f64 {
+    let c = &state.ship_classes[class];
+    let fleet = haul::Fleet {
+        id: 0,
+        class,
+        ships,
+        at: Location::Docked(here),
+        cargo: None,
+        route: None,
+        review_due: false,
+        idle: false,
+        loaded: false,
+        slack: 0,
+        harvest: None,
+    };
+    let (out, work, back) = run_days(state, c.accel_laden, here, plan);
+    let cargo = c.cargo_t * f64::from(ships);
+    let fuel = haul::fuel_per_day(state, &fleet) * (out + back) * Good::Fuel.base_price();
+    (cargo * plan.good.base_price() - fuel) / (out + work + back)
+        - haul::upkeep_per_day(state, &fleet)
 }
 
 /// Whether `here` is in the company's home system, where it harvests.
@@ -551,9 +591,7 @@ pub(crate) fn found(state: &mut GalaxyState) {
     let reviewing: Vec<SettlementId> = state
         .settlements
         .iter()
-        .filter(|(id, s)| {
-            s.economy.population > 0.0 && slotmap::Key::data(id).as_ffi() % 30 == day
-        })
+        .filter(|(id, s)| s.economy.population > 0.0 && slotmap::Key::data(id).as_ffi() % 30 == day)
         .map(|(id, _)| id)
         .collect();
     if reviewing.is_empty() {
@@ -589,13 +627,30 @@ pub(crate) fn found(state: &mut GalaxyState) {
         let cost = |c: &haul::ShipClass| {
             c.mass_t * crate::economy::HULL_PRICE_PER_T + c.cargo_t * CREDITS_PER_T
         };
-        // The smallest hold that will do: harvesting is local work.
+        // The hull that clears the most a day on the richest source of the
+        // good, among those it can afford.
+        let Some(&source) = sources_in(state, system)
+            .iter()
+            .filter(|&&s| yields(state, s).is_some_and(|y| y.0 == good))
+            .max_by(|&&a, &&b| {
+                effective_richness(state, a).total_cmp(&effective_richness(state, b))
+            })
+        else {
+            continue;
+        };
+        let plan = Plan {
+            source,
+            good,
+            market: id,
+        };
         let Some((class, founding)) = state
             .ship_classes
             .iter()
             .filter(|(_, c)| cost(c) * WEALTH <= treasury)
-            .min_by(|a, b| a.1.cargo_t.total_cmp(&b.1.cargo_t))
-            .map(|(cid, c)| (cid, cost(c)))
+            .map(|(cid, c)| (cid, cost(c), base_profit_per_day(state, cid, 1, id, &plan)))
+            .filter(|&(_, _, p)| p > MIN_PROFIT_PER_DAY)
+            .max_by(|a, b| a.2.total_cmp(&b.2))
+            .map(|(cid, cost, _)| (cid, cost))
         else {
             continue;
         };

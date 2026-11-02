@@ -35,7 +35,9 @@ use crate::haul::{self, CompanyId, Location, ShipClass};
 use crate::settlement::{SettlementId, Site};
 use crate::{GalaxyState, GalaxyTime, SystemId};
 
-const METRES_PER_AU: f64 = 1.496e11;
+/// The astronomical unit, in metres: the same one the client draws with,
+/// or ports and sources land thousands of km off their bodies.
+pub const METRES_PER_AU: f64 = 1.495_978_707e11;
 const SECONDS_PER_DAY: f64 = 86_400.0;
 /// Jump points sit this far from a star, toward the system on the far end.
 pub const JUMP_POINT_AU: f64 = 0.3;
@@ -891,13 +893,16 @@ fn materialize_harvest(state: &mut GalaxyState, key: FleetKey) {
         return;
     };
     let fleet = &state.companies[key.0].fleets[n];
-    let (Location::Travelling {
-        from,
-        depart,
-        to,
-        arrive,
-        ..
-    }, Some(plan)) = (fleet.at, fleet.harvest.and_then(|h| h.plan))
+    let (
+        Location::Travelling {
+            from,
+            depart,
+            to,
+            arrive,
+            ..
+        },
+        Some(plan),
+    ) = (fleet.at, fleet.harvest.and_then(|h| h.plan))
     else {
         return;
     };
@@ -913,11 +918,22 @@ fn materialize_harvest(state: &mut GalaxyState, key: FleetKey) {
     let at_source = crate::harvest::work_goal(state, plan.source, slot, now).pos;
     let (ship, days_left, done) = if working && gone < out {
         let a = settlement_goal(state, from, now).pos;
-        (burn(a, at_source, out, gone), work.ceil().max(1.0) as u32, false)
+        (
+            burn(a, at_source, out, gone),
+            work.ceil().max(1.0) as u32,
+            false,
+        )
     } else if working && gone < out + work {
         let g = crate::harvest::work_goal(state, plan.source, slot, now);
         let left = (out + work - gone).ceil().max(1.0) as u32;
-        (Kinematics { pos: g.pos, vel: g.vel }, left, false)
+        (
+            Kinematics {
+                pos: g.pos,
+                vel: g.vel,
+            },
+            left,
+            false,
+        )
     } else {
         // Past its work: the hold fills when it docks, as the coarse run
         // would have, so materializing creates nothing.
