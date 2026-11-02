@@ -295,6 +295,50 @@ fn fast_travel_is_a_real_flight() {
     }
 }
 
+/// Issue #157: the engines burn through a fast-travel trip, going dark
+/// while the ship turns over to brake and again once it's there.
+#[test]
+fn fast_travel_engines_burn_out_and_brake_and_go_dark() {
+    let mut world = World::new(1);
+    world.act(Action::Launch);
+    open_space(&mut world);
+    world.target = Some(Place::Body(world.view.bodies[0]));
+    world.act(Action::FastTravel);
+    let (mut lit, mut dark, mut braking_lit) = (0, 0, 0);
+    let dt = 1.0 / 60.0;
+    for frame in 0.. {
+        assert!(frame < 60 * 60, "still flying after a minute");
+        world.update(dt, Controls::default());
+        let Mode::FastTravel(trip) = world.mode else {
+            break;
+        };
+        let nose = world.ship.rot * DVec3::NEG_Z;
+        if trip.burn > 0.5 {
+            lit += 1;
+            // Burning tail first: the nose against the way it's going.
+            if nose.dot(DVec3::from_array(trip.ship.vel)) < 0.0 {
+                braking_lit += 1;
+            }
+        } else if trip.burn < 0.02 {
+            dark += 1;
+        }
+    }
+    assert!(lit > 60, "engines lit for {lit} frames");
+    assert!(braking_lit > 30, "lit braking for {braking_lit} frames");
+    assert!(dark > 0, "never dark turning over");
+    assert_eq!(world.mode, Mode::Normal);
+    assert_eq!(world.ship.throttle, 0.0, "dark on arrival");
+}
+
+#[test]
+fn drive_burn_counts_only_thrust_along_the_nose() {
+    let rot = look_rotation(DVec3::X);
+    assert_eq!(pilot::drive_burn(DVec3::X * 2.0, rot, 2.0), 1.0);
+    assert_eq!(pilot::drive_burn(DVec3::Y * 2.0, rot, 2.0), 0.0);
+    assert_eq!(pilot::drive_burn(-DVec3::X * 2.0, rot, 2.0), 0.0);
+    assert!((pilot::drive_burn(DVec3::X, rot, 2.0) - 0.5).abs() < 1e-6);
+}
+
 #[test]
 fn dropping_out_keeps_position_and_speed() {
     let mut world = World::new(1);

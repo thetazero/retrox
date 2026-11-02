@@ -774,6 +774,14 @@ to was always directly behind you.
   Touching the stick hands the turn to the pilot. A climb out of a well
   ends facing the way it's headed next; an intercept ends facing the
   convoy.
+- **The engines show what the drive is doing (#157).** In fast travel
+  the player's plumes are lit by the autopilot's thrust, not the throttle
+  (which sits at zero): full plumes on the burn out, dark while the ship
+  turns over (only thrust along the nose counts, so a ship swinging round
+  shows no flame), lit again for the tail-first brake, and dark once it
+  has arrived and turns to face the place. Every autopilot ship follows
+  the same rule: a fleet or gang that isn't burning (holding where it
+  arrived, or with nowhere to go) shows no plumes.
 - **Fast travel to a station stops in docking range**: 1.2 station sizes
   + 200 m from it, inside the [F] dock prompt's reach (1.5 sizes + 400 m)
   and at rest. Arrive, [F] to dock, like [L] at a city planet. It used to
