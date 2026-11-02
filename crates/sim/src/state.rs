@@ -23,6 +23,9 @@ pub struct GalaxyState {
     pub lanes: Arena<Hyperlane>,
     pub bodies: Arena<Body>,
     pub regions: Arena<Region>,
+    /// Asteroid fields inside belts.
+    #[serde(default)]
+    pub fields: Arena<crate::AsteroidField>,
     pub settlements: SlotMap<SettlementId, Settlement>,
     pub factions: SlotMap<FactionId, Faction>,
     pub history: History,

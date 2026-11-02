@@ -1,0 +1,27 @@
+[package]
+name = "retrox-client"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The game client: rendering, input, flight."
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "retrox-client"
+path = "src/main.rs"
+
+[dependencies]
+retrox-sim.workspace = true
+retrox-gen.workspace = true
+glam.workspace = true
+wgpu = "30"
+winit = "0.30"
+egui = { version = "0.37", features = ["default_fonts"] }
+egui-wgpu = "0.37"
+egui-winit = "0.37"
+bytemuck = { version = "1.25", features = ["derive"] }
+pollster = "1"
+slotmap.workspace = true

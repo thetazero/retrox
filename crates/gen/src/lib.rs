@@ -8,12 +8,14 @@
 mod bodies;
 mod economy;
 mod factions;
+mod fields;
 mod grid;
 mod lanes;
 mod names;
 mod rng;
 mod stars;
 
+pub use fields::{Rock, rocks};
 pub use rng::Rng;
 
 use retrox_sim::{GalaxyState, StarSystem};
@@ -101,5 +103,6 @@ pub fn generate_physical(seed: u64, config: &GalaxyConfig) -> GalaxyState {
     }
 
     bodies::generate(&mut Rng::derive(seed, "bodies"), &mut state);
+    fields::generate(&mut Rng::derive(seed, "fields"), &mut state);
     state
 }
