@@ -50,6 +50,12 @@ fn main() {
         .skip_while(|a| a != "--screenshot")
         .nth(1)
         .map(std::path::PathBuf::from);
+    // `--ship-view <yaw degrees>`: look at your ship from that angle, close
+    // up (0 = from behind, 90 = from the right). For inspecting the model.
+    let ship_view = std::env::args()
+        .skip_while(|a| a != "--ship-view")
+        .nth(1)
+        .and_then(|s| s.parse::<f64>().ok());
     let mut app = App {
         seed,
         undocked,
@@ -57,6 +63,7 @@ fn main() {
         map,
         ship,
         screenshot,
+        ship_view,
         running: None,
     };
     event_loop.run_app(&mut app).expect("run");
@@ -72,6 +79,7 @@ struct App {
     map: bool,
     ship: Option<String>,
     screenshot: Option<std::path::PathBuf>,
+    ship_view: Option<f64>,
     running: Option<Running>,
 }
 
@@ -103,6 +111,7 @@ struct Running {
     last_frame: Instant,
     start: Instant,
     frames: u32,
+    ship_view: Option<f64>,
 }
 
 impl ApplicationHandler for App {
@@ -185,6 +194,7 @@ impl ApplicationHandler for App {
             last_frame: Instant::now(),
             start: Instant::now(),
             frames: 0,
+            ship_view: self.ship_view,
         });
     }
 
@@ -388,7 +398,15 @@ impl Running {
             self.renderer.set_sky(&sky(&self.world), core, out);
         }
 
-        let (cam_pos, cam_rot) = self.world.camera();
+        let (mut cam_pos, mut cam_rot) = self.world.camera();
+        if let Some(yaw) = self.ship_view {
+            let rot = self.world.ship.rot;
+            let dir =
+                DQuat::from_rotation_y(yaw.to_radians()) * DVec3::new(0.0, 0.4, 1.0).normalize();
+            let offset = rot * dir * 38.0;
+            cam_pos = self.world.ship_position() + offset;
+            cam_rot = rot * world::look_rotation(-dir);
+        }
         let (w, h) = self.renderer.size();
         let proj = glam::camera::rh::proj::directx::perspective_infinite_reverse(
             70f32.to_radians(),
