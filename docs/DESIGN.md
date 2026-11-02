@@ -64,7 +64,7 @@ not a theme park — everything in-world is fictional, nothing is overdone.
 **Hour-to-hour:** pick work (contracts, trade runs, bounties, raids), travel
 the hyperlane network, sell, refit, upgrade.
 
-**Save-long (10–30 galaxy years over ~100h):** grow from a single small
+**Save-long (years of galaxy history over ~100h of play):** grow from a single small
 ship to a fleet, build reputation (or infamy) with factions, rise through a
 faction's ranks, automate trade routes, eventually command a capital ship —
 while the galaxy's map, economy and politics shift underneath you.
@@ -105,9 +105,11 @@ Docked action durations:
 
 Rules:
 
-- **Target pace:** a trading-heavy hour ≈ 2–6 galaxy months; a
-  combat-heavy hour ≈ a few days; ~100 hours ≈ 10–30 galaxy years (§2).
-  The game runs about 15× faster than this today (#186).
+- **No pace target.** How much galaxy time an hour of play covers is
+  whatever comes out of what the player does: an hour at the rocks passes
+  about an hour, an hour of hauling passes the days its trips take. Nothing
+  is tuned to hit a number of galaxy days per played hour; a trip takes
+  what the drive or engines really take (the user's ruling).
 - **Waiting is docked-only.** You can't skip danger by waiting in space.
 - **Fast-forward auto-interrupts** on: interdiction, hostiles in range,
   contract deadline approaching, cargo spoilage, and news matching the
