@@ -32,6 +32,7 @@ pub struct GalaxyState {
     /// The kinds of trade ship in service.
     pub ship_classes: Arena<ShipClass>,
     pub companies: SlotMap<CompanyId, Company>,
+    pub colony_ships: SlotMap<crate::colonize::ColonyShipId, crate::colonize::ColonyShip>,
     pub history: History,
 }
 

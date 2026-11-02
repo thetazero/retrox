@@ -183,3 +183,25 @@ fn construction_builds_without_running_away() {
     assert!(end > start, "industry shrank: {start} -> {end}");
     assert!(end < 3.0 * start, "industry ran away: {start} -> {end}");
 }
+
+#[test]
+fn crowded_settlements_send_colonists() {
+    let mut state = small();
+    let start = state.settlements.len();
+    let mut launched = false;
+    for _ in 0..360 * 3 {
+        tick(&mut state);
+        launched |= !state.colony_ships.is_empty();
+    }
+    assert!(launched, "no colony ship ever launched");
+    assert!(
+        state.settlements.len() > start,
+        "no new settlements: {start} -> {}",
+        state.settlements.len()
+    );
+    // New settlements belong to real factions and sit in their system.
+    for (id, s) in &state.settlements {
+        assert!(state.factions.contains_key(s.owner));
+        assert!(state.systems[s.system].settlements.contains(&id));
+    }
+}
