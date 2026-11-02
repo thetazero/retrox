@@ -86,7 +86,8 @@ const BASE_CHANCE: f64 = 0.002;
 /// ...plus this much per unit of hardship (the share of its food and fuel
 /// demand going unmet).
 const HARDSHIP_CHANCE: f64 = 0.25;
-/// At most one gang per this many settlements, plus a few.
+/// At most one gang per this many settled places (highports count with
+/// their city), plus a few.
 const SETTLEMENTS_PER_GANG: usize = 15;
 
 /// A hull pirates fly, registered by generation from the ship content.
@@ -314,10 +315,10 @@ fn choose_lair(
         if fields.is_empty() {
             continue;
         }
-        let law = state.systems[s].settlements.len() as f64;
+        let law = state.places_in(s) as f64;
         let prey: f64 = state
             .neighbours(s)
-            .map(|n| state.systems[n].settlements.len() as f64)
+            .map(|n| state.places_in(n) as f64)
             .sum::<f64>()
             + law
             + 0.5;
@@ -414,7 +415,13 @@ pub fn found(state: &mut GalaxyState, origin: SettlementId, rng: &mut Rng) -> Op
 /// The starting galaxy's gangs: as if some settlements' crews had already
 /// gone over. Prehistory will grow them instead.
 pub fn seed(state: &mut GalaxyState, share: f64) {
-    let origins: Vec<SettlementId> = state.settlements.keys().collect();
+    // A highport's crews are counted with its city's.
+    let origins: Vec<SettlementId> = state
+        .settlements
+        .iter()
+        .filter(|(_, s)| !state.is_port(s))
+        .map(|(id, _)| id)
+        .collect();
     for origin in origins {
         let mut rng = Rng::stream(state.seed, "gang-seed", 0, settlement_bits(origin));
         if rng.chance(share) {
@@ -437,12 +444,15 @@ fn hardship(state: &GalaxyState, id: SettlementId) -> f64 {
 /// that grow, starve, or draw a bounty. Runs in the planning phase.
 pub fn review(state: &mut GalaxyState) {
     let day = state.time.days();
-    let cap = state.settlements.len() / SETTLEMENTS_PER_GANG + 3;
+    let cap = state.places() / SETTLEMENTS_PER_GANG + 3;
     if !state.pirates.hulls.is_empty() && state.pirates.gangs.len() < cap {
         let due: Vec<SettlementId> = state
             .settlements
-            .keys()
-            .filter(|&id| (settlement_bits(id).wrapping_add(7)) % 30 == day % 30)
+            .iter()
+            .filter(|&(id, s)| {
+                (settlement_bits(id).wrapping_add(7)) % 30 == day % 30 && !state.is_port(s)
+            })
+            .map(|(id, _)| id)
             .collect();
         for id in due {
             let p = BASE_CHANCE + HARDSHIP_CHANCE * hardship(state, id);

@@ -26,16 +26,7 @@ const ORBIT_RADII: (f64, f64) = (2.6, 3.2);
 
 /// Whether a settlement is a station above a body that has a city on it.
 pub fn is_port(state: &GalaxyState, settlement: &Settlement) -> bool {
-    let Site::Space(orbit) = settlement.site else {
-        return false;
-    };
-    let Orbiting::Body(body) = orbit.parent else {
-        return false;
-    };
-    state
-        .settlements
-        .values()
-        .any(|s| matches!(s.site, Site::Region(r) if state.regions[r].body == body))
+    state.is_port(settlement)
 }
 
 /// Put a port above every city planet that has nothing in orbit yet: one
