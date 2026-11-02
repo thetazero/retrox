@@ -152,6 +152,9 @@ pub fn hint(w: &World) -> Option<String> {
             Screen::Trade => "Buy what's in SURPLUS here and sell it where it's short. Ore \
                  from mining sells here too."
                 .into(),
+            Screen::Bounties => "Warrants pay the moment a pirate ship goes down. PLOT \
+                 COURSE to a lair, fly to its field, and bring a gun that can win."
+                .into(),
             Screen::Hangar | Screen::Shipyard => {
                 "Refits change what your ship carries and how well it mines. [ESC] back.".into()
             }

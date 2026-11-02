@@ -123,7 +123,7 @@ pub fn contracts_screen(
 }
 
 /// A card's frame: a dark plate with a coloured tab down the left edge.
-fn card(ui: &mut egui::Ui, tab: Color32, add: impl FnOnce(&mut egui::Ui)) {
+pub(crate) fn card(ui: &mut egui::Ui, tab: Color32, add: impl FnOnce(&mut egui::Ui)) {
     let frame = egui::Frame::new()
         .fill(CARD_FILL)
         .stroke(Stroke::new(1.0, RULE))

@@ -277,6 +277,8 @@ pub enum Screen {
     Shipyard,
     /// The dispatch board: freight contracts.
     Contracts,
+    /// Warrants on pirates nearby, and standing with the factions.
+    Bounties,
 }
 
 /// What the player could do right now (shown as prompts).
