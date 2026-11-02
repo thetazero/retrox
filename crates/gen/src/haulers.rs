@@ -82,6 +82,7 @@ pub fn seed(rng: &mut Rng, state: &mut GalaxyState, classes: &[ShipClassId]) {
                     at: Location::Docked(home),
                     cargo: None,
                     idle_until: GalaxyTime::ZERO,
+                    idle: false,
                 }],
             });
         }

@@ -71,6 +71,11 @@ pub struct Fleet {
     pub cargo: Option<Cargo>,
     /// A fleet with nothing worth doing waits until this day.
     pub idle_until: GalaxyTime,
+    /// Whether its last look for work found nothing. Idle fleets mean
+    /// there are already more ships than freight, so nobody buys or
+    /// founds more while they wait.
+    #[serde(default)]
+    pub idle: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -121,6 +126,9 @@ const MAX_STAKE_SHARE: f64 = 0.9;
 /// A company buys another ship when it holds this many times the hull's
 /// price.
 const BUY_SHIP_AT_PRICES: f64 = 4.0;
+/// New companies are founded only where fewer than this share of the
+/// fleets based there are idle.
+const IDLE_SHARE_TO_FOUND: f64 = 0.2;
 /// Daily chance that a settlement able to fund one founds a new company.
 const FOUND_COMPANY_CHANCE: f64 = 0.01;
 /// A new company starts with enough to fill its hold this many times, at
@@ -718,66 +726,64 @@ pub fn trade(state: &mut GalaxyState) {
         }
     }
 
-    // Plan in rounds. Each round plans every pending fleet in parallel
-    // from the same snapshot, then carries the plans out in order. A plan
-    // that an earlier departure this round could have changed (same port,
-    // same destination and good, same reposition target, or same company's
-    // money) waits for the next round, which plans it again from the state
-    // as it is then. The first plan of a round always goes ahead, so this
-    // ends; the order is fixed, so it's deterministic.
-    let mut pending = deciding;
-    while !pending.is_empty() {
-        let plans: Vec<Option<Plan>> = {
-            let state = &*state;
-            let ctx = &ctx;
-            pending
-                .par_iter()
-                .map(|&(key, n, here)| {
-                    let company = &state.companies[key];
-                    best_trip(state, ctx, company, &company.fleets[n], here)
-                })
-                .collect()
+    // Plan every fleet in parallel from the same snapshot, then carry the
+    // plans out in order. A plan that an earlier departure this tick could
+    // have changed (same port, same destination and good, same reposition
+    // target, or same company's money) is made again, one at a time, from
+    // the state as it is then. Each fleet is planned at most twice, so the
+    // cost grows with the number of fleets, not its square (#53).
+    let plans: Vec<Option<Plan>> = {
+        let state = &*state;
+        let ctx = &ctx;
+        deciding
+            .par_iter()
+            .map(|&(key, n, here)| {
+                let company = &state.companies[key];
+                best_trip(state, ctx, company, &company.fleets[n], here)
+            })
+            .collect()
+    };
+    let mut ports: HashSet<SettlementId> = HashSet::new();
+    let mut deliveries: HashSet<(SettlementId, Good)> = HashSet::new();
+    let mut claims: HashSet<SettlementId> = HashSet::new();
+    let mut spenders: HashSet<CompanyId> = HashSet::new();
+    for (&(key, n, here), plan) in deciding.iter().zip(plans) {
+        let loaded = state.companies[key].fleets[n].cargo.is_some();
+        let stale = spenders.contains(&key)
+            || (!loaded && ports.contains(&here))
+            || plan.as_ref().is_some_and(|p| {
+                if p.amount > 0.0 || loaded {
+                    deliveries.contains(&(p.to, p.good))
+                } else {
+                    claims.contains(&p.to)
+                }
+            });
+        let plan = if stale {
+            let company = &state.companies[key];
+            best_trip(state, &ctx, company, &company.fleets[n], here)
+        } else {
+            plan
         };
-        let mut ports: HashSet<SettlementId> = HashSet::new();
-        let mut deliveries: HashSet<(SettlementId, Good)> = HashSet::new();
-        let mut claims: HashSet<SettlementId> = HashSet::new();
-        let mut spenders: HashSet<CompanyId> = HashSet::new();
-        let mut next = Vec::new();
-        for (&(key, n, here), plan) in pending.iter().zip(plans) {
-            let loaded = state.companies[key].fleets[n].cargo.is_some();
-            let stale = spenders.contains(&key)
-                || (!loaded && ports.contains(&here))
-                || plan.as_ref().is_some_and(|p| {
-                    if p.amount > 0.0 || loaded {
-                        deliveries.contains(&(p.to, p.good))
-                    } else {
-                        claims.contains(&p.to)
-                    }
-                });
-            if stale {
-                next.push((key, n, here));
-                continue;
+        match plan {
+            Some(plan) => {
+                if plan.amount > 0.0 || loaded {
+                    deliveries.insert((plan.to, plan.good));
+                } else {
+                    claims.insert(plan.to);
+                }
+                if !loaded && plan.amount > 0.0 {
+                    ports.insert(here);
+                }
+                spenders.insert(key);
+                state.companies[key].fleets[n].idle = false;
+                depart(state, &mut ctx, key, n, here, plan);
             }
-            match plan {
-                Some(plan) => {
-                    if plan.amount > 0.0 || loaded {
-                        deliveries.insert((plan.to, plan.good));
-                    } else {
-                        claims.insert(plan.to);
-                    }
-                    if !loaded && plan.amount > 0.0 {
-                        ports.insert(here);
-                    }
-                    spenders.insert(key);
-                    depart(state, &mut ctx, key, n, here, plan);
-                }
-                None => {
-                    state.companies[key].fleets[n].idle_until =
-                        GalaxyTime::from_days(now.days() + IDLE_DAYS);
-                }
+            None => {
+                let fleet = &mut state.companies[key].fleets[n];
+                fleet.idle = true;
+                fleet.idle_until = GalaxyTime::from_days(now.days() + IDLE_DAYS);
             }
         }
-        pending = next;
     }
 
     for key in keys {
@@ -908,7 +914,7 @@ fn depart(
 /// A prosperous company docked at a shipyard adds a ship to its fleet.
 fn buy_ship(state: &mut GalaxyState, key: CompanyId, n: usize, here: SettlementId) {
     let fleet = &state.companies[key].fleets[n];
-    if fleet.cargo.is_some() {
+    if fleet.cargo.is_some() || state.companies[key].fleets.iter().any(|f| f.idle) {
         return;
     }
     let mass = state.ship_classes[fleet.class].mass_t;
@@ -933,10 +939,26 @@ fn buy_ship(state: &mut GalaxyState, key: CompanyId, n: usize, here: SettlementI
 /// with one ship of the biggest class they can build.
 fn found_companies(state: &mut GalaxyState) {
     let now = state.time;
+    // Nobody starts a shipping company at home ports where a good share
+    // of the fleets already sit idle.
+    let mut based: HashMap<SettlementId, (usize, usize)> = HashMap::new();
+    for company in state.companies.values() {
+        for fleet in &company.fleets {
+            let (idle, all) = based.entry(company.home).or_default();
+            *all += 1;
+            *idle += usize::from(fleet.idle);
+        }
+    }
+    let crowded = |id: SettlementId| {
+        based
+            .get(&id)
+            .is_some_and(|&(idle, all)| idle as f64 > IDLE_SHARE_TO_FOUND * all as f64)
+    };
     let ids: Vec<SettlementId> = state.settlements.keys().collect();
     for id in ids {
         let economy = &state.settlements[id].economy;
         if economy.hull_t <= 0.0
+            || crowded(id)
             || !Rng::stream(
                 state.seed,
                 "found-company",
@@ -981,6 +1003,7 @@ fn found_companies(state: &mut GalaxyState) {
                 at: Location::Docked(id),
                 cargo: None,
                 idle_until: now,
+                idle: false,
             }],
         });
         // The settlement stakes the company, which buys its hull from the
