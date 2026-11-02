@@ -8,7 +8,7 @@ use std::time::Instant;
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2};
 use retrox_gen::{GalaxyConfig, generate};
 use retrox_sim::economy::{Good, summarize};
-use retrox_sim::{EconomyModel, GalaxyState, SystemId, tick};
+use retrox_sim::{EconomyModel, GalaxyState, Settlement, Site, SystemId, tick};
 
 fn main() -> eframe::Result {
     let seed = std::env::args()
@@ -72,25 +72,53 @@ impl Viewer {
         canvas.center() + self.pan + Vec2::new(x as f32, y as f32) * self.zoom
     }
 
+    /// A system's most populous settlement, whose market stands in for the
+    /// system on the map.
+    fn main_settlement(&self, id: SystemId) -> Option<&Settlement> {
+        self.state
+            .settlements_in(id)
+            .map(|(_, s)| s)
+            .reduce(|a, b| {
+                if b.economy.population > a.economy.population {
+                    b
+                } else {
+                    a
+                }
+            })
+    }
+
+    fn population(&self, id: SystemId) -> f64 {
+        self.state
+            .settlements_in(id)
+            .map(|(_, s)| s.economy.population)
+            .sum()
+    }
+
     fn system_color(&self, id: SystemId) -> Color32 {
-        let system = &self.state.systems[id];
-        let market = &system.economy.market;
-        match self.mode {
-            ColorMode::Faction => match system.owner {
+        if self.mode == ColorMode::Faction {
+            // Nobody owns a system; colour it by its largest faction.
+            return match self.state.largest_faction_in(id) {
                 Some(f) => {
                     let [r, g, b] = self.state.factions[f].color;
                     Color32::from_rgb(r, g, b)
                 }
                 None => Color32::from_gray(90),
-            },
-            ColorMode::Population => {
-                let p = system.economy.population;
-                if p <= 0.0 {
-                    Color32::from_gray(50)
-                } else {
-                    ramp(((p.ln() + 1.0) / 6.5) as f32)
-                }
-            }
+            };
+        }
+        if self.mode == ColorMode::Population {
+            let p = self.population(id);
+            return if p <= 0.0 {
+                Color32::from_gray(50)
+            } else {
+                ramp(((p.ln() + 1.0) / 6.5) as f32)
+            };
+        }
+        let Some(main) = self.main_settlement(id) else {
+            return Color32::from_gray(50);
+        };
+        let market = &main.economy.market;
+        match self.mode {
+            ColorMode::Faction | ColorMode::Population => unreachable!(),
             ColorMode::Price => {
                 // log2(price / base): -2 (cheap, blue) .. +2 (dear, red).
                 let rel = (market.price[self.good] / self.good.base_price()).log2();
@@ -176,7 +204,7 @@ impl Viewer {
                 ui.label(format!("{:.0}", e.stock[good]));
                 ui.label(format!("{:.0}", e.shortfall[good]));
                 ui.label(format!("{:.2}", e.mean_price[good]));
-                ui.label(format!("{}", e.systems_short[good]));
+                ui.label(format!("{}", e.markets_short[good]));
                 ui.end_row();
             }
         });
@@ -190,34 +218,65 @@ impl Viewer {
     fn system_panel(&self, ui: &mut egui::Ui, id: SystemId) {
         let s = &self.state.systems[id];
         ui.strong(&s.name);
-        ui.label(format!("{:?} star · {} lanes", s.star, s.lanes.len()));
-        match s.owner {
-            Some(f) => {
-                let faction = &self.state.factions[f];
-                let model = match faction.economy {
-                    EconomyModel::Planned => "planned",
-                    EconomyModel::Market => "market",
-                };
-                let capital = if faction.capital == id {
-                    " · capital"
-                } else {
-                    ""
-                };
-                ui.label(format!("{} ({model}){capital}", faction.name));
-            }
-            None => {
-                ui.label("unclaimed");
-            }
-        }
         ui.label(format!(
-            "population {:.1} · ore {:.2} · ice {:.2}",
-            s.economy.population, s.resources.ore, s.resources.ice
+            "{:?} star · {} lanes · {} bodies",
+            s.star,
+            s.lanes.len(),
+            s.bodies.len()
         ));
+        for &b in &s.bodies {
+            let body = &self.state.bodies[b];
+            ui.label(format!(
+                "  {} — {:?}, {:.2} AU, hab {:.2}, ore {:.2}, ice {:.2}{}",
+                body.name,
+                body.kind,
+                body.orbit.semi_major_au,
+                body.habitability,
+                body.resources.ore,
+                body.resources.ice,
+                if body.regions.is_empty() {
+                    String::new()
+                } else {
+                    format!(", {} regions", body.regions.len())
+                }
+            ));
+        }
+        if s.settlements.is_empty() {
+            ui.label("no settlements");
+        }
+        for (sid, settlement) in self.state.settlements_in(id) {
+            ui.separator();
+            let faction = &self.state.factions[settlement.owner];
+            let model = match faction.economy {
+                EconomyModel::Planned => "planned",
+                EconomyModel::Market => "market",
+            };
+            let capital = if faction.capital == sid {
+                " · capital"
+            } else {
+                ""
+            };
+            let site = match settlement.site {
+                Site::Region(r) => {
+                    let region = &self.state.regions[r];
+                    format!("region of {}", self.state.bodies[region.body].name)
+                }
+                Site::Surface(b) => format!("on {}", self.state.bodies[b].name),
+                Site::Space(_) => "station".to_owned(),
+            };
+            ui.strong(format!("{} ({site})", settlement.name));
+            ui.label(format!("{} ({model}){capital}", faction.name));
+            self.settlement_panel(ui, settlement);
+        }
+    }
+
+    fn settlement_panel(&self, ui: &mut egui::Ui, s: &Settlement) {
+        ui.label(format!("population {:.1}", s.economy.population));
         for f in &s.economy.facilities {
             ui.label(format!("  {:?} ×{:.1}", f.kind, f.scale));
         }
         let m = &s.economy.market;
-        egui::Grid::new("system_market")
+        egui::Grid::new(("settlement_market", &s.name))
             .striped(true)
             .show(ui, |ui| {
                 for h in ["good", "stock", "target", "price", "short/d"] {
@@ -296,8 +355,18 @@ impl Viewer {
             }
         }
 
-        for faction in self.state.factions.values() {
-            let c = self.state.systems[faction.capital].position;
+        let mut holdings: std::collections::HashMap<retrox_sim::FactionId, usize> =
+            std::collections::HashMap::new();
+        for s in self.state.settlements.values() {
+            *holdings.entry(s.owner).or_default() += 1;
+        }
+        for (fid, faction) in &self.state.factions {
+            // Ring the powers' capitals, not every independent outpost.
+            if holdings.get(&fid).copied().unwrap_or(0) < 2 {
+                continue;
+            }
+            let capital = &self.state.settlements[faction.capital];
+            let c = self.state.systems[capital.system].position;
             let p = self.to_screen(canvas, c.x, c.y);
             painter.circle_stroke(p, radius + 3.0, Stroke::new(1.5, Color32::from_gray(230)));
             if self.zoom > 2.5 {
@@ -319,12 +388,14 @@ impl Viewer {
 
         if let Some((id, _)) = hovered {
             let s = &self.state.systems[id];
+            let price = self.main_settlement(id).map_or(String::from("-"), |m| {
+                format!("{:.2}", m.economy.market.price[self.good])
+            });
             response.clone().on_hover_text(format!(
-                "{}\npop {:.1}\n{} {:.2}",
+                "{}\npop {:.1}\n{} {price}",
                 s.name,
-                s.economy.population,
+                self.population(id),
                 self.good.name(),
-                s.economy.market.price[self.good]
             ));
             if response.clicked() {
                 self.selected = Some(id);

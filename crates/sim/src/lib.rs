@@ -5,16 +5,20 @@
 //! phase of [`PIPELINE`] in order.
 
 pub mod arena;
+pub mod bodies;
 pub mod economy;
 pub mod history;
 pub mod phases;
+pub mod settlement;
 pub mod ship;
 pub mod state;
 pub mod tick;
 pub mod time;
 
 pub use arena::{Arena, Id};
+pub use bodies::{Body, BodyId, BodyKind, Orbit, Orbiting, PlanetClass, Region, RegionId};
 pub use history::{History, HistoryEvent, HistoryKind};
+pub use settlement::{Settlement, SettlementId, Site};
 pub use state::{
     EconomyModel, Faction, FactionId, GalaxyPos, GalaxyState, Hyperlane, LaneId, Resources,
     StarClass, StarSystem, SystemId,

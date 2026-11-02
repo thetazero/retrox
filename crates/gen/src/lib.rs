@@ -1,10 +1,11 @@
-//! Procedural generation: galaxy, star systems, hyperlanes, factions.
+//! Procedural generation: galaxy, star systems, hyperlanes, bodies, factions.
 //!
 //! Generation is deterministic: the same seed and config always produce the
 //! same starting galaxy (see `docs/DESIGN.md` §4). It uses its own small
 //! PRNG ([`Rng`]) rather than `rand`, so seeds stay stable across
 //! dependency upgrades.
 
+mod bodies;
 mod economy;
 mod factions;
 mod grid;
@@ -59,8 +60,25 @@ impl Default for GalaxyConfig {
     }
 }
 
-/// Generate a starting galaxy from a seed.
+/// Generate a starting galaxy from a seed: the physical galaxy plus the
+/// static starting civilization (until prehistory replaces it, §4.2).
 pub fn generate(seed: u64, config: &GalaxyConfig) -> GalaxyState {
+    let mut state = generate_physical(seed, config);
+    let territory = factions::claim(&mut Rng::derive(seed, "factions"), &state, config);
+    let population = economy::population(&mut Rng::derive(seed, "population"), &state, &territory);
+    factions::found(
+        &mut Rng::derive(seed, "settlements"),
+        &mut state,
+        &territory,
+        &population,
+    );
+    economy::seed(&mut Rng::derive(seed, "economy"), &mut state);
+    state
+}
+
+/// Generate only the physical galaxy: stars, hyperlanes, and each system's
+/// bodies and regions. No factions or settlements.
+pub fn generate_physical(seed: u64, config: &GalaxyConfig) -> GalaxyState {
     let mut state = GalaxyState::empty(seed);
 
     let positions = stars::place(&mut Rng::derive(seed, "positions"), config);
@@ -73,9 +91,8 @@ pub fn generate(seed: u64, config: &GalaxyConfig) -> GalaxyState {
             position,
             star: stars::star_class(&mut star_rng),
             lanes: Vec::new(),
-            owner: None,
-            resources: Default::default(),
-            economy: Default::default(),
+            bodies: Vec::new(),
+            settlements: Vec::new(),
         });
     }
 
@@ -83,8 +100,6 @@ pub fn generate(seed: u64, config: &GalaxyConfig) -> GalaxyState {
         state.connect(a, b);
     }
 
-    factions::seed(&mut Rng::derive(seed, "factions"), &mut state, config);
-    economy::seed(&mut Rng::derive(seed, "economy"), &mut state);
-
+    bodies::generate(&mut Rng::derive(seed, "bodies"), &mut state);
     state
 }

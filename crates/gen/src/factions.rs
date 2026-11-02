@@ -1,58 +1,51 @@
-//! The factions history starts with, and the territory they hold.
+//! The static starting civilization: factions, their territory, and one
+//! settlement in every populated system. Prehistory will replace this
+//! (DESIGN §4.2); until then it gives tools and tests a populated galaxy.
 //!
 //! Capitals are spread out with best-candidate sampling. Each faction then
 //! grows outward along hyperlanes (a multi-source Dijkstra over lane
 //! length, scaled by the faction's strength) until it reaches its share of
-//! `claimed_fraction`. Territory is contiguous by construction, and what's
-//! left over is unclaimed frontier.
+//! `claimed_fraction`. Nobody owns a system, so the territory is only used
+//! to decide who owns each system's settlement. Populated systems outside
+//! every faction's territory become independent, one-settlement factions.
 
 use std::cmp::Reverse;
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, HashSet};
 
+use retrox_sim::economy::LocalEconomy;
 use retrox_sim::{
-    EconomyModel, Faction, FactionId, GalaxyState, GalaxyTime, HistoryKind, SystemId,
+    BodyKind, EconomyModel, Faction, FactionId, GalaxyState, GalaxyTime, HistoryKind, Orbit,
+    Orbiting, Settlement, SettlementId, Site, SystemId,
 };
 
 use crate::GalaxyConfig;
+use crate::bodies::AU_KM;
 use crate::names;
 use crate::rng::Rng;
 
-pub fn seed(rng: &mut Rng, state: &mut GalaxyState, config: &GalaxyConfig) {
+/// The major factions' plan before anything is founded.
+pub struct Territory {
+    /// Capital system of each major faction.
+    pub capitals: Vec<SystemId>,
+    /// Which major faction (by index) claims each system.
+    pub claim: Vec<Option<usize>>,
+}
+
+/// Choose capitals and grow each major faction's territory.
+pub fn claim(rng: &mut Rng, state: &GalaxyState, config: &GalaxyConfig) -> Territory {
+    let mut claim = vec![None; state.systems.len()];
     let count = config.factions.min(state.systems.len());
     if count == 0 {
-        return;
+        return Territory {
+            capitals: Vec::new(),
+            claim,
+        };
     }
     let capitals = pick_capitals(rng, state, count, config.radius_ly);
 
     let strengths: Vec<f64> = (0..count).map(|_| rng.range(0.5, 1.5)).collect();
     let total_strength: f64 = strengths.iter().sum();
     let claim_total = config.claimed_fraction * state.systems.len() as f64;
-
-    let mut ids: Vec<FactionId> = Vec::with_capacity(count);
-    for (i, &capital) in capitals.iter().enumerate() {
-        let economy = if rng.chance(0.5) {
-            EconomyModel::Planned
-        } else {
-            EconomyModel::Market
-        };
-        let mut name = faction_name(rng, &state.systems[capital].name, economy, false);
-        while state.factions.values().any(|f| f.name == name) {
-            name = faction_name(rng, &state.systems[capital].name, economy, true);
-        }
-        let id = state.factions.insert(Faction {
-            name,
-            economy,
-            capital,
-            // Spread hues around the wheel by the golden angle.
-            color: hsl((i as f64 * 137.508) % 360.0, 0.65, 0.6),
-            founded: GalaxyTime::ZERO,
-        });
-        state.history.record(
-            GalaxyTime::ZERO,
-            HistoryKind::FactionFounded { faction: id },
-        );
-        ids.push(id);
-    }
 
     // Multi-source Dijkstra. Keys are (cost, faction, system) so ties break
     // deterministically; costs are non-negative so f64 bits order correctly.
@@ -66,22 +59,205 @@ pub fn seed(rng: &mut Rng, state: &mut GalaxyState, config: &GalaxyConfig) {
         heap.push(Reverse((0.0f64.to_bits(), f, capital)));
     }
     while let Some(Reverse((cost_bits, f, system))) = heap.pop() {
-        if state.systems[system].owner.is_some() || sizes[f] >= targets[f] {
+        if claim[system.index()].is_some() || sizes[f] >= targets[f] {
             continue;
         }
-        state.systems[system].owner = Some(ids[f]);
+        claim[system.index()] = Some(f);
         sizes[f] += 1;
         let cost = f64::from_bits(cost_bits);
-        let lanes = state.systems[system].lanes.clone();
-        for lane in lanes {
+        for &lane in &state.systems[system].lanes {
             let lane = &state.lanes[lane];
             let next = lane.other(system);
-            if state.systems[next].owner.is_none() {
+            if claim[next.index()].is_none() {
                 let step = lane.length_ly / strengths[f];
                 heap.push(Reverse(((cost + step).to_bits(), f, next)));
             }
         }
     }
+    Territory { capitals, claim }
+}
+
+/// Found the factions and one settlement in every system with population.
+pub fn found(rng: &mut Rng, state: &mut GalaxyState, territory: &Territory, population: &[f64]) {
+    let mut taken: HashSet<String> = HashSet::new();
+
+    let mut majors: Vec<FactionId> = Vec::with_capacity(territory.capitals.len());
+    for (i, &capital) in territory.capitals.iter().enumerate() {
+        let economy = if rng.chance(0.5) {
+            EconomyModel::Planned
+        } else {
+            EconomyModel::Market
+        };
+        let capital_name = state.systems[capital].name.clone();
+        let mut name = faction_name(rng, &capital_name, economy, false);
+        while taken.contains(&name) {
+            name = faction_name(rng, &capital_name, economy, true);
+        }
+        taken.insert(name.clone());
+        let id = state.factions.insert(Faction {
+            name,
+            economy,
+            // Set once the capital settlement exists.
+            capital: SettlementId::default(),
+            // Spread hues around the wheel by the golden angle.
+            color: hsl((i as f64 * 137.508) % 360.0, 0.65, 0.6),
+            founded: GalaxyTime::ZERO,
+        });
+        state.history.record(
+            GalaxyTime::ZERO,
+            HistoryKind::FactionFounded { faction: id },
+        );
+        majors.push(id);
+    }
+
+    for (i, &population) in population.iter().enumerate() {
+        if population <= 0.0 {
+            continue;
+        }
+        let system = SystemId::from_index(i as u32);
+        let mut r = rng.fork(i as u64);
+        let (site, settlement_name) = main_site(&mut r, state, system);
+        let owner = match territory.claim[i] {
+            Some(f) => majors[f],
+            None => independent(&mut r, state, &settlement_name, &mut taken),
+        };
+        let settlement = state.add_settlement(Settlement {
+            system,
+            site,
+            owner,
+            name: settlement_name,
+            founded: GalaxyTime::ZERO,
+            economy: LocalEconomy {
+                population,
+                ..LocalEconomy::default()
+            },
+        });
+        let faction = &mut state.factions[owner];
+        // An independent's only settlement is its capital.
+        if territory.claim[i].is_none_or(|f| territory.capitals[f] == system) {
+            faction.capital = settlement;
+        }
+        state.history.record(
+            GalaxyTime::ZERO,
+            HistoryKind::SettlementFounded {
+                settlement,
+                faction: owner,
+            },
+        );
+    }
+
+    // Capitals always have population, so every faction holds something.
+    debug_assert!(
+        state
+            .factions
+            .values()
+            .all(|f| state.settlements.contains_key(f.capital))
+    );
+}
+
+/// Where a system's main settlement goes: the most habitable region of any
+/// world, else the most habitable undivided body, else a station around
+/// the richest body (or the star, in a system with no bodies).
+fn main_site(r: &mut Rng, state: &GalaxyState, system: SystemId) -> (Site, String) {
+    let bodies = &state.systems[system].bodies;
+    let best_region = bodies
+        .iter()
+        .flat_map(|&b| state.bodies[b].regions.iter().copied())
+        .max_by(|&a, &b| {
+            state.regions[a]
+                .habitability
+                .total_cmp(&state.regions[b].habitability)
+                .then(b.cmp(&a))
+        });
+    if let Some(region) = best_region {
+        return (Site::Region(region), state.regions[region].name.clone());
+    }
+    let best_body = bodies
+        .iter()
+        .copied()
+        .filter(|&b| !matches!(state.bodies[b].kind, BodyKind::GasGiant | BodyKind::Belt))
+        .max_by(|&a, &b| {
+            state.bodies[a]
+                .habitability
+                .total_cmp(&state.bodies[b].habitability)
+                .then(b.cmp(&a))
+        });
+    if let Some(body) = best_body
+        && state.bodies[body].habitability > 0.02
+    {
+        return (Site::Surface(body), state.bodies[body].name.clone());
+    }
+    let richest = bodies.iter().copied().max_by(|&a, &b| {
+        let worth = |x: retrox_sim::BodyId| {
+            let res = state.bodies[x].resources;
+            res.ore + res.ice
+        };
+        worth(a).total_cmp(&worth(b)).then(b.cmp(&a))
+    });
+    let phase = r.range(0.0, std::f64::consts::TAU);
+    match richest {
+        Some(body) => {
+            let b = &state.bodies[body];
+            let distance_km = match b.kind {
+                // Inside the belt itself.
+                BodyKind::Belt => 0.0,
+                _ => b.radius_km * r.range(2.0, 6.0),
+            };
+            let orbit = if b.kind == BodyKind::Belt {
+                Orbit {
+                    mean_anomaly_epoch: phase,
+                    ..b.orbit
+                }
+            } else {
+                Orbit::circular(Orbiting::Body(body), distance_km / AU_KM, phase)
+            };
+            (Site::Space(orbit), format!("{} Station", b.name))
+        }
+        None => (
+            Site::Space(Orbit::circular(Orbiting::Star, r.range(0.5, 3.0), phase)),
+            format!("{} Station", state.systems[system].name),
+        ),
+    }
+}
+
+/// A one-settlement faction for an independent settlement.
+fn independent(
+    r: &mut Rng,
+    state: &mut GalaxyState,
+    settlement_name: &str,
+    taken: &mut HashSet<String>,
+) -> FactionId {
+    const TEMPLATES: &[&str] = &[
+        "Free {}",
+        "{} Independents",
+        "{} Free Port",
+        "Autonomous {}",
+        "{} Commune",
+    ];
+    let base = settlement_name.split(' ').next().unwrap_or(settlement_name);
+    let mut name = r.pick(TEMPLATES).replace("{}", base);
+    while taken.contains(&name) {
+        name = r.pick(TEMPLATES).replace("{}", &names::word(r));
+    }
+    taken.insert(name.clone());
+    let economy = if r.chance(0.7) {
+        EconomyModel::Market
+    } else {
+        EconomyModel::Planned
+    };
+    let id = state.factions.insert(Faction {
+        name,
+        economy,
+        capital: SettlementId::default(),
+        // Muted, so independents don't drown out the major powers.
+        color: hsl(r.range(0.0, 360.0), 0.12, 0.42),
+        founded: GalaxyTime::ZERO,
+    });
+    state.history.record(
+        GalaxyTime::ZERO,
+        HistoryKind::FactionFounded { faction: id },
+    );
+    id
 }
 
 /// Spread capitals out: each new capital is the best of several random

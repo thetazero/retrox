@@ -16,7 +16,7 @@ fn small() -> GalaxyState {
 
 fn total_stock(state: &GalaxyState) -> GoodMap<f64> {
     let mut total = GoodMap::splat(0.0);
-    for s in state.systems.as_slice() {
+    for s in state.settlements.values() {
         for good in Good::ALL {
             total[good] += s.economy.market.stock[good];
         }
@@ -45,7 +45,7 @@ fn economy_stays_healthy() {
     for _ in 0..360 * 5 {
         tick(&mut state);
     }
-    for s in state.systems.as_slice() {
+    for s in state.settlements.values() {
         for good in Good::ALL {
             let m = &s.economy.market;
             assert!(

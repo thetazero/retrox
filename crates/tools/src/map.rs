@@ -38,8 +38,9 @@ pub fn svg(state: &GalaxyState) -> String {
     }
     out.push_str("</g>\n<g>\n");
 
-    for s in systems {
-        let (color, r) = match s.owner {
+    for (id, s) in state.systems.iter() {
+        // Nobody owns a system; colour it by its largest faction.
+        let (color, r) = match state.largest_faction_in(id) {
             Some(owner) => {
                 let [r, g, b] = state.factions[owner].color;
                 (format!("#{r:02x}{g:02x}{b:02x}"), 2.6)
@@ -55,7 +56,12 @@ pub fn svg(state: &GalaxyState) -> String {
     }
     out.push_str("</g>\n<g font-family=\"monospace\" font-size=\"18\" fill=\"#f1efe6\" text-anchor=\"middle\">\n");
     for faction in state.factions.values() {
-        let p = state.systems[faction.capital].position;
+        // Label the powers, not every independent outpost.
+        let capital = &state.settlements[faction.capital];
+        if crate::holdings(state, capital.owner) < 2 {
+            continue;
+        }
+        let p = state.systems[capital.system].position;
         let (x, y) = (px(p.x), px(p.y));
         let _ = writeln!(
             out,
