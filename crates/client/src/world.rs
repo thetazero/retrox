@@ -733,6 +733,34 @@ impl World {
             .map(|&(c, _)| c)
     }
 
+    /// After undocking or launching (issue #176): a target still on the
+    /// place just left would only offer [J] back to it, so it moves on to
+    /// the next stop in this system: a contract's destination, else the
+    /// port the hold is bound for. With neither, it clears, and [J] climbs
+    /// out of the well and on along the plotted course. A target the player
+    /// picked elsewhere is kept.
+    fn retarget_after_leaving(&mut self, left: SettlementId, place: Place) {
+        if self.target.is_some_and(|t| t != place) {
+            return;
+        }
+        let next = self
+            .player
+            .contracts
+            .iter()
+            .map(|c| c.offer.to)
+            .chain(self.player.sell_at)
+            .find(|&to| to != left && self.galaxy.settlements[to].system == self.system);
+        self.target = None;
+        self.landing = None;
+        match next {
+            Some(to) if self.view.stations.contains(&to) => {
+                self.act(Action::Target(Place::Station(to)));
+            }
+            Some(to) => self.act(Action::TargetCity(to)),
+            None => {}
+        }
+    }
+
     /// The body a city of this system is on.
     pub fn city_body(&self, city: SettlementId) -> Option<BodyId> {
         self.view
@@ -1042,6 +1070,7 @@ impl World {
                     self.ship.vel = self.ship.rot * DVec3::new(0.0, 0.0, -60.0);
                     self.ship.throttle = 0.1;
                     self.mode = Mode::Normal;
+                    self.retarget_after_leaving(s, Place::Station(s));
                 }
             }
             Action::Land => {
@@ -1055,7 +1084,7 @@ impl World {
                 }
             }
             Action::Launch => {
-                if let Mode::Landed { body, .. } = self.mode {
+                if let Mode::Landed { city, body, .. } = self.mode {
                     if !self.can_fly() {
                         return;
                     }
@@ -1066,6 +1095,7 @@ impl World {
                     self.ship.throttle = 0.0;
                     self.mode = Mode::Normal;
                     self.advance_clock(3600.0);
+                    self.retarget_after_leaving(city, Place::Body(body));
                 }
             }
             Action::Jump(to) => {

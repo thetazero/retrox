@@ -816,6 +816,12 @@ key in a HYPERLANES panel that started folded shut.
   Fiprum*), and the JUMP keys in HYPERLANES still work. A target picked
   in the system comes first: [J] flies there, and the prompt strip shows
   which of the two [J] will do.
+- **Leaving a place moves the target on** (#176). Undocking or launching
+  never leaves [J] offering to fly back to where you just were: a target
+  on that place (or none) moves to the next stop in this system (a
+  contract's destination, else the port the hold is bound for), and with
+  none it clears, so [J] climbs out and goes on along the course. A
+  target the player picked elsewhere is kept.
 - **HYPERLANES opens whenever a new course is set**, so the ▶ lane is in
   sight; the player can still fold it.
 - Hints and the course panel name the destination system and the next

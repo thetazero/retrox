@@ -796,6 +796,61 @@ fn highport(world: &World, body: BodyId) -> SettlementId {
 }
 
 #[test]
+fn leaving_a_port_never_offers_to_fly_back_to_it() {
+    // Issue #176: the place just left stays targeted, so [J] offered to fast
+    // travel 1.4 km back to it. It moves on to the next stop, or clears.
+    let mut world = World::new(1);
+    let Mode::Landed { city, body, .. } = world.mode else {
+        panic!("starts landed");
+    };
+    let planet = Place::Body(body);
+    let port = highport(&world, body);
+    let dock_at = |world: &mut World| {
+        world.mode = Mode::Docked(port);
+        world.ship.frame = Place::Station(port);
+        world.ship.rel = DVec3::ZERO;
+        world.target = Some(Place::Station(port));
+    };
+
+    // Nothing to do here: the target clears, and [J] climbs out.
+    dock_at(&mut world);
+    world.act(Action::Undock);
+    assert_eq!(world.mode, Mode::Normal);
+    assert_eq!(world.target, None);
+    assert_eq!(world.prompts().fast_travel, None);
+    assert_eq!(world.prompts().climb, Some(planet));
+
+    // The hold is bound for the city below: that's the next stop.
+    dock_at(&mut world);
+    world.player.sell_at = Some(city);
+    world.act(Action::Undock);
+    assert_eq!(world.target, Some(planet));
+    assert_eq!(world.landing, Some(city));
+    assert_eq!(world.prompts().fast_travel, Some(planet));
+
+    // A target the player picked somewhere else is kept.
+    dock_at(&mut world);
+    world.player.sell_at = None;
+    let other = world.view.stations.iter().copied().find(|&s| s != port);
+    if let Some(other) = other {
+        world.target = Some(Place::Station(other));
+        world.act(Action::Undock);
+        assert_eq!(world.target, Some(Place::Station(other)));
+    }
+
+    // Launching from the city drops the planet just left.
+    world.mode = Mode::Landed {
+        city,
+        body,
+        timer: 0.0,
+    };
+    world.target = Some(planet);
+    world.act(Action::Launch);
+    assert_eq!(world.mode, Mode::Normal);
+    assert_ne!(world.prompts().fast_travel, Some(planet));
+}
+
+#[test]
 fn a_highport_is_a_hop_from_the_city_below() {
     // DESIGN §7.1.1: inside a well the autopilot flies down to anything
     // whose arrival point is in the same well. Every city planet has a
