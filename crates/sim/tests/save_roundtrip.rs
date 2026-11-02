@@ -19,6 +19,8 @@ fn small_galaxy() -> GalaxyState {
         position: GalaxyPos::new(0.0, 0.0, 0.0),
         star: StarClass::G,
         lanes: Vec::new(),
+        resources: Default::default(),
+        economy: Default::default(),
         owner: Some(faction),
     });
     let b = state.systems.push(StarSystem {
@@ -26,6 +28,8 @@ fn small_galaxy() -> GalaxyState {
         position: GalaxyPos::new(3.0, 4.0, 0.0),
         star: StarClass::M,
         lanes: Vec::new(),
+        resources: Default::default(),
+        economy: Default::default(),
         owner: None,
     });
     state.connect(a, b);
