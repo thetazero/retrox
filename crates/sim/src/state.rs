@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use slotmap::{SlotMap, new_key_type};
 
+use crate::economy::SystemEconomy;
 use crate::{Arena, GalaxyTime, History, Id};
 
 pub type SystemId = Id<StarSystem>;
@@ -84,6 +85,15 @@ pub struct StarSystem {
     /// Hyperlanes touching this system. Maintained by [`GalaxyState::connect`].
     pub lanes: Vec<LaneId>,
     pub owner: Option<FactionId>,
+    /// Natural resources, each 0..1 richness.
+    pub resources: Resources,
+    pub economy: SystemEconomy,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Resources {
+    pub ore: f64,
+    pub ice: f64,
 }
 
 /// The primary star's spectral class.

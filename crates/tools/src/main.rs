@@ -143,7 +143,33 @@ fn simulate(seed: u64, years: u64) {
         total / days
     );
     for phase in PIPELINE {
-        println!("  {:<12} {:.2?}", phase.name, per_phase[phase.name]);
+        println!(
+            "  {:<12} {:.2?}",
+            phase.name,
+            per_phase.get(phase.name).copied().unwrap_or_default()
+        );
     }
     println!("history: {} events", state.history.events().len());
+    print_economy(&state);
+}
+
+fn print_economy(state: &retrox_sim::GalaxyState) {
+    use retrox_sim::economy::{Good, summarize};
+    let e = summarize(state);
+    println!("economy: population {:.0}", e.population);
+    println!(
+        "  {:<11} {:>12} {:>10} {:>10} {:>9} {:>8}",
+        "good", "stock", "demand/d", "short/d", "price", "#short"
+    );
+    for good in Good::ALL {
+        println!(
+            "  {:<11} {:>12.0} {:>10.0} {:>10.1} {:>9.2} {:>8}",
+            good.name(),
+            e.stock[good],
+            e.demand[good],
+            e.shortfall[good],
+            e.mean_price[good],
+            e.systems_short[good]
+        );
+    }
 }

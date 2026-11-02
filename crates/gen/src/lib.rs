@@ -5,6 +5,7 @@
 //! PRNG ([`Rng`]) rather than `rand`, so seeds stay stable across
 //! dependency upgrades.
 
+mod economy;
 mod factions;
 mod grid;
 mod lanes;
@@ -73,6 +74,8 @@ pub fn generate(seed: u64, config: &GalaxyConfig) -> GalaxyState {
             star: stars::star_class(&mut star_rng),
             lanes: Vec::new(),
             owner: None,
+            resources: Default::default(),
+            economy: Default::default(),
         });
     }
 
@@ -81,6 +84,7 @@ pub fn generate(seed: u64, config: &GalaxyConfig) -> GalaxyState {
     }
 
     factions::seed(&mut Rng::derive(seed, "factions"), &mut state, config);
+    economy::seed(&mut Rng::derive(seed, "economy"), &mut state);
 
     state
 }

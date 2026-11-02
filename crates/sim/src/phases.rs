@@ -1,16 +1,20 @@
-//! The phases of a galaxy day, in pipeline order. Each is filled in by a
-//! later milestone; for now they are deliberately empty.
+//! The phases of a galaxy day, in pipeline order. Empty phases are filled
+//! in by later milestones.
 
 use crate::GalaxyState;
 
 /// Facilities consume inputs and produce outputs into stockpiles.
-pub fn production(_state: &mut GalaxyState) {}
+pub fn production(state: &mut GalaxyState) {
+    crate::economy::production(state);
+}
 
 /// Faction AI: plan quotas, fleet orders, diplomacy.
 pub fn planning(_state: &mut GalaxyState) {}
 
 /// Goods flow between markets along the hyperlane network.
-pub fn trade(_state: &mut GalaxyState) {}
+pub fn trade(state: &mut GalaxyState) {
+    crate::economy::trade(state);
+}
 
 /// Fleets and coarse traffic move along lanes.
 pub fn movement(_state: &mut GalaxyState) {}
