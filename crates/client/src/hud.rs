@@ -565,7 +565,7 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
 fn banner(ctx: &egui::Context, screen: Rect, text: &str) {
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
-        egui::Id::new("message-banner"),
+        egui::Id::unique("message-banner"),
     ));
     let margin = Vec2::new(18.0, 4.0);
     let wrap = BANNER_MAX_W.min(screen.width() - 2.0 * (32.0 + margin.x));
@@ -577,7 +577,10 @@ fn banner(ctx: &egui::Context, screen: Rect, text: &str) {
     let plate = Rect::from_min_size(top - Vec2::new(size.x / 2.0, 0.0), size);
     painter.rect_filled(plate, 0.0, RED.gamma_multiply(0.94));
     painter.rect_filled(
-        Rect::from_min_size(plate.left_bottom() - Vec2::new(0.0, 2.0), Vec2::new(plate.width(), 2.0)),
+        Rect::from_min_size(
+            plate.left_bottom() - Vec2::new(0.0, 2.0),
+            Vec2::new(plate.width(), 2.0),
+        ),
         0.0,
         RED_DARK,
     );
@@ -719,7 +722,10 @@ fn nav_list(ui: &mut egui::Ui, w: &World, actions: &mut Vec<Action>) {
         }
         if let Some(range) = range {
             painter.galley(
-                Pos2::new(rect.right() - 6.0 - range.size().x, c.y - range.size().y / 2.0),
+                Pos2::new(
+                    rect.right() - 6.0 - range.size().x,
+                    c.y - range.size().y / 2.0,
+                ),
                 range,
                 Color32::PLACEHOLDER,
             );
@@ -868,7 +874,7 @@ fn lanes_list(ui: &mut egui::Ui, w: &World, open_space: bool, actions: &mut Vec<
         if crate::widgets::push_in(
             ui,
             key,
-            egui::Id::new(("jump", lane.to)),
+            egui::Id::unique("jump").with(lane.to),
             "JUMP",
             display(18.0),
             look,

@@ -83,7 +83,14 @@ pub fn draw(ctx: &egui::Context, h: &HudInput) {
             } else {
                 rock.lode.grade_letter().to_string()
             };
-            crate::widgets::shadowed_text(&painter, p, Align2::CENTER_CENTER, text, mono(12.0), color);
+            crate::widgets::shadowed_text(
+                &painter,
+                p,
+                Align2::CENTER_CENTER,
+                text,
+                mono(12.0),
+                color,
+            );
         }
 
         // Loose ore: small diamonds, so nothing is lost in the dark.
@@ -169,9 +176,13 @@ pub fn draw(ctx: &egui::Context, h: &HudInput) {
             // the readout stands beside them, not over the rock (issue
             // #124): it's read while aiming at the rock.
             let rel = (pos - h.camera).as_vec3();
-            let across = rel.cross(glam::Vec3::Y).try_normalize().unwrap_or(glam::Vec3::X);
-            let on_screen = super::project_any(h.view_proj, rel + across * rock.radius as f32, screen)
-                .map_or(0.0, |e| (e - p).length());
+            let across = rel
+                .cross(glam::Vec3::Y)
+                .try_normalize()
+                .unwrap_or(glam::Vec3::X);
+            let on_screen =
+                super::project_any(h.view_proj, rel + across * rock.radius as f32, screen)
+                    .map_or(0.0, |e| (e - p).length());
             let size = (on_screen + 8.0).clamp(26.0, screen.height() * 0.3);
             brackets(
                 &painter,
@@ -192,7 +203,7 @@ pub fn draw(ctx: &egui::Context, h: &HudInput) {
                 } else {
                     lines.push((
                         format!(
-                            "≈ {:.1} T PER FRACTURE · VEINS ×{:.1}",
+                            "ABOUT {:.1} T PER FRACTURE · VEINS ×{:.1}",
                             rock.yield_t(),
                             mining::VEIN_YIELD
                         ),
@@ -327,7 +338,7 @@ pub fn draw(ctx: &egui::Context, h: &HudInput) {
                 if let Some((price, at)) = w.best_local_price(good) {
                     ui.label(
                         RichText::new(format!(
-                            "≈ {} at {} ({price:.1}/t)",
+                            "about {} at {} ({price:.1}/t)",
                             credits(t * price),
                             w.name(Place::Station(at))
                         ))

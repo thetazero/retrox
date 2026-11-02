@@ -167,18 +167,25 @@ pub fn key_strip(ctx: &egui::Context, w: &World, captured: bool) {
             // (issue #124).
             egui::Frame::new()
                 .fill(crate::widgets::BACKING)
-                .inner_margin(egui::Margin { left: 6, right: 0, top: 4, bottom: 4 })
-                .show(ui, |ui| ui.horizontal(|ui| {
-                for (key, what) in keys {
-                    keycap(ui, key);
-                    ui.label(
-                        RichText::new(what.to_uppercase())
-                            .font(mono(12.0))
-                            .color(CREAM_DIM),
-                    );
-                    ui.add_space(10.0);
-                }
-            }));
+                .inner_margin(egui::Margin {
+                    left: 6,
+                    right: 0,
+                    top: 4,
+                    bottom: 4,
+                })
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        for (key, what) in keys {
+                            keycap(ui, key);
+                            ui.label(
+                                RichText::new(what.to_uppercase())
+                                    .font(mono(12.0))
+                                    .color(CREAM_DIM),
+                            );
+                            ui.add_space(10.0);
+                        }
+                    })
+                });
         });
 }
 

@@ -1168,3 +1168,74 @@ fn t_cycles_through_cities_under_their_planet() {
     world.act(Action::CycleTarget);
     assert_eq!(world.landing.filter(|c| cities.contains(c)), None);
 }
+
+/// NAVIGATION (issue #119): stations hang under the body they orbit, the
+/// ones round the star come before the fields, and fields read without the
+/// system's name.
+#[test]
+fn navigation_puts_stations_up_top_and_shortens_field_names() {
+    let world = World::new(1);
+    let rows = world.nav_entries();
+    let first_field = rows
+        .iter()
+        .position(|r| matches!(r.0, Place::Field(_)))
+        .expect("seed 1 starts in a system with fields");
+    assert!(
+        rows[first_field..]
+            .iter()
+            .all(|r| matches!(r.0, Place::Field(_))),
+        "fields come last"
+    );
+    let stations: Vec<_> = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| matches!(r.0, Place::Station(_)))
+        .collect();
+    assert!(!stations.is_empty(), "seed 1 starts by a station");
+    for &(i, &row) in &stations {
+        let Place::Station(s) = row.0 else {
+            unreachable!()
+        };
+        assert!(i < first_field, "a station below the fields");
+        match world.station_body(s) {
+            Some(b) => {
+                // Somewhere in its body's block of rows, one step in.
+                let body_row = rows
+                    .iter()
+                    .position(|r| *r == (Place::Body(b), None))
+                    .expect("its body is listed");
+                assert!(body_row < i);
+                assert!(
+                    rows[body_row + 1..i]
+                        .iter()
+                        .all(|&r| world.nav_depth(r) > world.nav_depth(rows[body_row])),
+                    "the station is cut off from its body"
+                );
+                assert_eq!(world.nav_depth(row), world.nav_depth(rows[body_row]) + 1);
+            }
+            None => assert_eq!(world.nav_depth(row), 0),
+        }
+    }
+    // Every place is listed once.
+    let places: std::collections::HashSet<_> =
+        rows.iter().filter(|r| r.1.is_none()).map(|r| r.0).collect();
+    assert_eq!(places.len(), world.nav_places().len());
+
+    let system = &world.galaxy.systems[world.system].name;
+    for r in &rows[first_field..] {
+        let short = world.short_name(r.0);
+        assert!(!short.contains(system.as_str()), "{short}");
+        assert!(!short.contains("field"), "{short}");
+        let letter = world.name(r.0).chars().last().expect("a name");
+        assert!(short.ends_with(letter), "{short} lost its letter");
+    }
+    let shorts: std::collections::HashSet<_> = rows[first_field..]
+        .iter()
+        .map(|r| world.short_name(r.0))
+        .collect();
+    assert_eq!(
+        shorts.len(),
+        rows.len() - first_field,
+        "two fields read the same"
+    );
+}

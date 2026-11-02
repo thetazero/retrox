@@ -109,7 +109,7 @@ pub fn draw(ctx: &egui::Context, h: &HudInput) {
                 if let Some((price, at)) = w.best_local_price(Good::Gas) {
                     ui.label(
                         RichText::new(format!(
-                            "≈ {} at {} ({price:.1}/t)",
+                            "about {} at {} ({price:.1}/t)",
                             credits(t * price),
                             w.name(Place::Station(at))
                         ))

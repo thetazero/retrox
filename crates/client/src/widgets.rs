@@ -8,7 +8,7 @@ use egui::{Align2, Color32, FontId, Pos2, Rect, Response, Sense, Stroke, StrokeK
 use crate::hud::{CREAM, CREAM_DIM, INK, RED, RED_DARK, RED_HOT, RULE, mono};
 
 /// The dark plate behind cards and list rows.
-pub(crate) const CARD_FILL: Color32 = Color32::from_rgba_premultiplied(24, 18, 28, 200);
+pub(crate) const CARD_FILL: Color32 = Color32::from_rgba_premultiplied(24, 18, 28, 228);
 /// The dark backing behind a block of live VFD readouts.
 pub(crate) const READOUT_FILL: Color32 = Color32::from_rgba_premultiplied(9, 7, 14, 205);
 /// The dark plate behind free-floating HUD text (key legend, the rock
@@ -361,7 +361,12 @@ pub(crate) fn shadowed_galley(
     galley: std::sync::Arc<egui::Galley>,
 ) {
     let shadow = Color32::from_black_alpha(220);
-    for d in [Vec2::new(1.0, 1.0), Vec2::new(0.0, 1.0), Vec2::new(1.0, 0.0), Vec2::new(-1.0, 0.0)] {
+    for d in [
+        Vec2::new(1.0, 1.0),
+        Vec2::new(0.0, 1.0),
+        Vec2::new(1.0, 0.0),
+        Vec2::new(-1.0, 0.0),
+    ] {
         painter.galley_with_override_text_color(at + d, galley.clone(), shadow);
     }
     painter.galley(at, galley, CREAM);
