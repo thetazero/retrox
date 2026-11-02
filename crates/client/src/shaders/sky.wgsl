@@ -35,7 +35,7 @@ const HALO_MAX_SIGMA: f32 = 2.5;
 // Spikes: a gaussian across (this sigma, in pixels), fading along with this
 // many pixels of length per e-fold of extra light; they reach 3 lengths.
 const SPIKE_SIGMA: f32 = 0.6;
-const SPIKE_GROWTH: f32 = 3.5;
+const SPIKE_GROWTH: f32 = 2.5;
 // Half the extra light goes to the spikes, half to the core.
 const SPIKE_SHARE: f32 = 0.5;
 // The spikes lie on the diagonals, apart from the HUD's square-on ticks.

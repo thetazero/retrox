@@ -1265,6 +1265,25 @@ Decided while building the soundscape (#76):
   scripted runs are silent unless `--sound`; `--mute` silences any run.
   No audio device means silence, never an error.
 
+### 8.6 The sky
+
+Decided while fixing nearby stars that drew as blurred discs (issue #121):
+
+- **Every other system is a star in the sky**, carrying the light it really
+  sends us (luminosity over distance squared). Faint ones are a sharp
+  core plus a halo kept under fixed peaks, so they fade smoothly.
+- **The halo never grows past a few pixels** (sigma 2.5 px). A wide soft
+  halo reads as a smudge on the lens, not a star.
+- **Past that, the light is compressed like film's shoulder**
+  (logarithmically), and what's left goes half to the core, which burns
+  over the bloom threshold and glows in the bloom pass (with its red
+  halation), and half to **four thin diffraction spikes** that grow
+  longer with each e-fold of light, never wider or brighter. So a close
+  neighbour is a hard white point with glare and rays, and an O star ten
+  light-years off is a bigger version of the same, not a fog bank.
+- **The spikes lie on the diagonals**, fixed to the frame like a real
+  lens's, so they never line up with the HUD's square-on reticle ticks.
+
 ## 9. Technical architecture
 
 Pure Rust, Linux first.
