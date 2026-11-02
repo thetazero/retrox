@@ -128,6 +128,8 @@ pub const COURIER_BODY: Section = Section {
     heat_capacity_mj: 120.0,
     base_dissipation_mw: 2.0,
     slots: &[
+        // A chin mount under the nose, for a mining laser.
+        slot(Weapon, S, [0.0, -0.75, 3.6]),
         slot(Engine, M, [0.0, 0.0, -5.0]),
         slot(Rcs, S, [0.0, 0.0, 0.5]),
         slot(Power, S, [0.0, 0.0, -2.0]),

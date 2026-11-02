@@ -11,6 +11,7 @@ use glam::{DVec3, Mat4, Vec4};
 use retrox_sim::{BodyKind, EconomyModel};
 
 mod map;
+mod mining;
 
 use crate::world::{AU, Action, COMBAT_SPEED, Mode, Place, SECONDS_PER_DAY, World};
 
@@ -218,6 +219,8 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
         let s = Vec2::new(h.stick.x as f32, h.stick.y as f32) * 60.0;
         painter.circle_filled(c + s, 2.5, AMBER);
     }
+
+    mining::draw(ctx, &h);
 
     // Top-left: where and when.
     egui::Area::new(egui::Id::unique("where"))
@@ -528,7 +531,8 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
         .show(ctx, |ui| {
             let text = if h.captured {
                 "mouse steer · W/S throttle · X stop · A/D strafe · SPACE/CTRL lift · Q/E roll · SHIFT boost\n\
-                 J fast travel · T next target · M galaxy map · V camera · Z flight assist · TAB free mouse"
+                 J fast travel · T next target · M galaxy map · V camera · Z flight assist · TAB free mouse\n\
+                 LMB or R mining laser · G prospect"
             } else {
                 "TAB or click the view to fly with the mouse · arrow keys also steer · M galaxy map"
             };
