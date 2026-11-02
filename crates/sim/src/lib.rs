@@ -7,6 +7,7 @@
 pub mod arena;
 pub mod bodies;
 pub mod economy;
+pub mod haul;
 pub mod history;
 pub mod phases;
 pub mod settlement;

@@ -9,6 +9,7 @@ mod bodies;
 mod economy;
 mod factions;
 mod grid;
+mod haulers;
 mod lanes;
 mod names;
 mod rng;
@@ -73,6 +74,8 @@ pub fn generate(seed: u64, config: &GalaxyConfig) -> GalaxyState {
         &population,
     );
     economy::seed(&mut Rng::derive(seed, "economy"), &mut state);
+    let classes = haulers::classes(&mut state);
+    haulers::seed(&mut Rng::derive(seed, "companies"), &mut state, &classes);
     state
 }
 

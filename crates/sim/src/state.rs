@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use slotmap::{SlotMap, new_key_type};
 
 use crate::bodies::{Body, BodyId, EARTH_MASSES_PER_SUN, Orbit, Orbiting, Region, RegionId};
+use crate::haul::{Company, CompanyId, ShipClass};
 use crate::settlement::{Settlement, SettlementId, Site};
 use crate::{Arena, GalaxyTime, History, Id};
 
@@ -25,6 +26,9 @@ pub struct GalaxyState {
     pub regions: Arena<Region>,
     pub settlements: SlotMap<SettlementId, Settlement>,
     pub factions: SlotMap<FactionId, Faction>,
+    /// The kinds of trade ship in service.
+    pub ship_classes: Arena<ShipClass>,
+    pub companies: SlotMap<CompanyId, Company>,
     pub history: History,
 }
 
