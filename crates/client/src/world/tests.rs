@@ -75,8 +75,28 @@ fn fast_travel_reaches_every_place_and_only_climbs_out_of_a_well() {
         let before = world.clock_s;
         world.act(Action::FastTravel);
         assert!(matches!(world.mode, Mode::FastTravel(_)), "{target:?}");
-        run(&mut world, 30.0);
+        // How far off the nose the place was on the trip's last frame: the
+        // turn-over must be done by then, not snapped at the hand-back.
+        let mut last_off = 180.0_f64;
+        for _ in 0..30 * 60 {
+            if world.mode == Mode::Normal {
+                break;
+            }
+            let nose = world.ship.rot * DVec3::NEG_Z;
+            let face = world.arrival_facing(Leg::To(target), world.ship_position(), world.t_days());
+            last_off = nose
+                .dot(face.normalize())
+                .clamp(-1.0, 1.0)
+                .acos()
+                .to_degrees();
+            world.update(1.0 / 60.0, Controls::default());
+        }
         assert_eq!(world.mode, Mode::Normal, "{target:?}");
+        assert!(
+            last_off < 10.0,
+            "{}: still {last_off:.0}° off just before arriving",
+            world.name(target)
+        );
         let (d, expected) = (world.distance_to(target), world.arrival_distance(target));
         assert!(
             (d - expected).abs() < expected * 0.05 + 1.0,
@@ -84,6 +104,15 @@ fn fast_travel_reaches_every_place_and_only_climbs_out_of_a_well() {
             world.name(target)
         );
         assert!(world.clock_s > before, "galaxy time must pass");
+        // Arrives nose-on (#118), not braking tail-first.
+        let nose = world.ship.rot * DVec3::NEG_Z;
+        let to = (world.position(target) - world.ship_position()).normalize();
+        assert!(
+            nose.dot(to) > 0.99,
+            "{}: arrived facing {:.0}° off",
+            world.name(target),
+            nose.dot(to).clamp(-1.0, 1.0).acos().to_degrees()
+        );
     }
 }
 
@@ -652,6 +681,11 @@ fn a_highport_is_a_hop_from_the_city_below() {
     assert!(
         world.distance_to(station) < world.arrival_distance(station) * 1.2,
         "stopped at the port's arrival point"
+    );
+    assert_eq!(
+        world.prompts().dock,
+        Some(port),
+        "arrives in reach of [F] dock"
     );
     assert_eq!(world.current_well(), Some(planet), "never left the well");
     assert!(down + up < 20.0, "{down:.1} s down, {up:.1} s up");
