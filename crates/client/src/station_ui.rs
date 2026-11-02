@@ -23,6 +23,7 @@ pub fn draw(ctx: &egui::Context, w: &World, here: SettlementId, actions: &mut Ve
         Screen::Trade => trade_screen(ctx, w, here, actions),
         Screen::Hangar => crate::hangar_ui::hangar_screen(ctx, w, here, actions),
         Screen::Shipyard => crate::hangar_ui::shipyard_screen(ctx, w, here, actions),
+        Screen::Contracts => crate::contracts_ui::contracts_screen(ctx, w, here, actions),
     }
 }
 
@@ -83,6 +84,26 @@ fn hub(ctx: &egui::Context, w: &World, here: SettlementId, actions: &mut Vec<Act
             };
             if menu_button(ui, "Trade", &trade_note, true) {
                 actions.push(Action::Open(Screen::Trade));
+            }
+            let bound_here = w
+                .player
+                .contracts
+                .iter()
+                .filter(|c| c.offer.to == here)
+                .count();
+            let contracts_note = match (w.board.len(), w.player.contracts.len()) {
+                (0, 0) => "nothing to haul today".to_owned(),
+                (0, n) => format!("{n} under way · nothing new today"),
+                (b, 0) => format!("{b} contracts to haul"),
+                (b, n) => format!("{b} to haul · {n} under way"),
+            };
+            let contracts_note = if bound_here > 0 {
+                format!("{contracts_note} · delivered here")
+            } else {
+                contracts_note
+            };
+            if menu_button(ui, "Contracts", &contracts_note, true) {
+                actions.push(Action::Open(Screen::Contracts));
             }
             let stored_here = w.player.stored.iter().filter(|s| s.at == here).count();
             let hangar_note = match (services.outfitter, stored_here) {

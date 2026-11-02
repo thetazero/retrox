@@ -270,6 +270,10 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
             );
         });
 
+    if matches!(w.mode, Mode::Normal | Mode::FastTravel(_)) {
+        crate::contracts_ui::flight_readout(ctx, w);
+    }
+
     // Bottom: flight instruments.
     if w.mode == Mode::Normal {
         egui::Area::new(egui::Id::unique("flight"))

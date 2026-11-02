@@ -3,6 +3,8 @@
 //! land, refit or buy ships in the hangar, and jump along hyperlanes while
 //! the galaxy simulates around you.
 
+mod contracts;
+mod contracts_ui;
 mod hangar;
 mod hangar_ui;
 mod hud;
@@ -62,8 +64,14 @@ fn main() {
         .skip_while(|a| a != "--ship-view")
         .nth(1)
         .and_then(|s| s.parse::<f64>().ok());
+    // `--contracts`: start on the dispatch board; `--contract`: also take
+    // the first contract on it (for checking the contract screens).
+    let take_contract = std::env::args().any(|a| a == "--contract");
+    let contracts = take_contract || std::env::args().any(|a| a == "--contracts");
     let mut app = App {
         seed,
+        contracts,
+        take_contract,
         undocked,
         station,
         field,
@@ -79,6 +87,10 @@ fn main() {
 
 struct App {
     seed: u64,
+    /// Start on the dispatch board.
+    contracts: bool,
+    /// Start with the first contract on the board taken.
+    take_contract: bool,
     /// Start in space rather than docked (handy for testing).
     undocked: bool,
     /// Start docked at a station, in the first system that has one.
@@ -151,6 +163,12 @@ impl ApplicationHandler for App {
         }
         if let Some(fit) = self.ship.as_deref().and_then(retrox_content::ships::stock) {
             world.player.ship.fit = fit;
+        }
+        if self.contracts {
+            world.act(Action::Open(Screen::Contracts));
+        }
+        if self.take_contract {
+            world.act(Action::AcceptContract(0));
         }
         if self.undocked {
             // Out by a station if there's one here, else in orbit.
