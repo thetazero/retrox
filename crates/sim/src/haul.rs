@@ -213,6 +213,49 @@ impl<'de> Deserialize<'de> for Traffic {
 
 type Contracts = SecondaryMap<FactionId, bool>;
 
+/// Each system's best buyer of every good, and its most valuable surplus:
+/// what route choice reads instead of scanning every market. Rebuilt at the
+/// start of every trade phase in one pass over settlements.
+#[derive(Clone, Debug, Default)]
+struct Board {
+    /// Per system index: the settlement paying the most for each good.
+    buyers: Vec<GoodMap<Option<(SettlementId, f64)>>>,
+    /// Per system index: the settlement whose surplus would fetch the most
+    /// at base prices, with that surplus and its margin per unit.
+    sources: Vec<Option<(SettlementId, f64, f64)>>,
+}
+
+impl Board {
+    fn build(state: &GalaxyState) -> Self {
+        let n = state.systems.len();
+        let mut board = Self {
+            buyers: vec![GoodMap::splat(None); n],
+            sources: vec![None; n],
+        };
+        for (id, s) in &state.settlements {
+            let i = s.system.index();
+            let market = &s.economy.market;
+            for good in Good::ALL {
+                let price = market.price[good];
+                if board.buyers[i][good].is_none_or(|(_, best)| price > best) {
+                    board.buyers[i][good] = Some((id, price));
+                }
+                let surplus = market.surplus(good);
+                let margin = (good.base_price() - price).max(0.0);
+                let value = surplus * margin;
+                if value > 0.0 && board.sources[i].is_none_or(|(_, s, m)| value > s * m) {
+                    board.sources[i] = Some((id, surplus, margin));
+                }
+            }
+        }
+        board
+    }
+}
+
+/// Route choice looks at no more than this many settled systems, nearest
+/// first.
+const ROUTE_SYSTEMS: usize = 40;
+
 /// Days between monthly reviews.
 const REVIEW_DAYS: u64 = 30;
 /// Trips longer than this aren't considered.
@@ -416,20 +459,21 @@ fn fleet_index(state: &GalaxyState, company: CompanyId, fleet: u32) -> Option<us
 pub fn trade(state: &mut GalaxyState) {
     let today = state.time;
     let contracts = crate::fiscal::open_contracts(state);
+    let board = Board::build(state);
     for event in state.calendar.take(today) {
         let Some(n) = fleet_index(state, event.company, event.fleet) else {
             continue;
         };
         match event.kind {
-            EventKind::Arrive => arrive(state, &contracts, event.company, n),
-            EventKind::Review => review(state, &contracts, event.company, n),
+            EventKind::Arrive => arrive(state, &contracts, &board, event.company, n),
+            EventKind::Review => review(state, &contracts, &board, event.company, n),
         }
     }
     found_companies(state);
     crate::economy::update_all_prices(state);
 }
 
-fn arrive(state: &mut GalaxyState, contracts: &Contracts, key: CompanyId, n: usize) {
+fn arrive(state: &mut GalaxyState, contracts: &Contracts, board: &Board, key: CompanyId, n: usize) {
     let today = state.time;
     let Location::Travelling { to, arrive, jumps } = state.companies[key].fleets[n].at else {
         return;
@@ -453,7 +497,7 @@ fn arrive(state: &mut GalaxyState, contracts: &Contracts, key: CompanyId, n: usi
     buy_ship(state, key, n, to);
     if state.companies[key].fleets[n].review_due {
         state.companies[key].fleets[n].review_due = false;
-        choose_route(state, contracts, key, n, to);
+        choose_route(state, contracts, board, key, n, to);
     }
     run_route(state, contracts, key, n, to);
 }
@@ -506,7 +550,7 @@ fn remove_fleet(state: &mut GalaxyState, key: CompanyId, n: usize) {
 
 /// The monthly review: pay a month's upkeep, then choose a route if docked,
 /// or on arrival if away.
-fn review(state: &mut GalaxyState, contracts: &Contracts, key: CompanyId, n: usize) {
+fn review(state: &mut GalaxyState, contracts: &Contracts, board: &Board, key: CompanyId, n: usize) {
     let today = state.time;
     let event = Event {
         company: key,
@@ -522,7 +566,7 @@ fn review(state: &mut GalaxyState, contracts: &Contracts, key: CompanyId, n: usi
     match state.companies[key].fleets[n].at {
         Location::Travelling { .. } => state.companies[key].fleets[n].review_due = true,
         Location::Docked(here) => {
-            choose_route(state, contracts, key, n, here);
+            choose_route(state, contracts, board, key, n, here);
             run_route(state, contracts, key, n, here);
         }
     }
@@ -550,6 +594,7 @@ fn expected_sale(
 fn choose_route(
     state: &mut GalaxyState,
     contracts: &Contracts,
+    board: &Board,
     key: CompanyId,
     n: usize,
     here: SettlementId,
@@ -574,9 +619,21 @@ fn choose_route(
 
     let mut best: Option<(f64, Route)> = None;
     let mut fallback: Option<(f64, SettlementId, u32, bool)> = None;
+    let mut considered = 0;
     for &(system, ly) in reach(state, origin.system, MAX_TRIP_DAYS * class.jump_laden).iter() {
+        let i = system.index();
+        if state.systems[system].settlements.is_empty() {
+            continue;
+        }
+        considered += 1;
+        if considered > ROUTE_SYSTEMS {
+            break;
+        }
         let jumps = system != origin.system;
-        for &to in &state.systems[system].settlements {
+        for &(good, amount, buy) in &offers {
+            let Some((to, _)) = board.buyers[i][good] else {
+                continue;
+            };
             if to == here {
                 continue;
             }
@@ -584,36 +641,34 @@ fn choose_route(
             if leg > MAX_TRIP_DAYS {
                 continue;
             }
-            for &(good, amount, buy) in &offers {
-                let sell = expected_sale(state, contracts, to, good, amount);
-                let treasury = state.settlements[to].economy.treasury.max(0.0);
-                let amount = amount.min(treasury * MAX_SPEND_SHARE / sell.max(1e-9));
-                if amount < 1.0 {
-                    continue;
-                }
-                let per_day = (amount * (sell - buy) - 2.0 * leg * fuel) / (2.0 * leg);
-                if per_day > MIN_PROFIT_PER_DAY && best.as_ref().is_none_or(|(b, _)| per_day > *b) {
-                    let route = Route {
-                        from: here,
-                        to,
-                        good,
-                        leg_days: leg.ceil() as u32,
-                        jumps,
-                    };
-                    best = Some((per_day, route));
-                }
+            let sell = expected_sale(state, contracts, to, good, amount);
+            let treasury = state.settlements[to].economy.treasury.max(0.0);
+            let amount = amount.min(treasury * MAX_SPEND_SHARE / sell.max(1e-9));
+            if amount < 1.0 {
+                continue;
             }
-            // Somewhere better to load? Rough guide: what its surplus
-            // would fetch at base prices.
-            let there = &state.settlements[to].economy.market;
-            let value = Good::ALL
-                .into_iter()
-                .map(|g| {
-                    capacity.min(there.surplus(g)) * (g.base_price() - there.price[g]).max(0.0)
-                })
-                .fold(0.0, f64::max);
-            let per_day = (value - leg * fuel) / (2.0 * leg);
-            if per_day > MIN_PROFIT_PER_DAY && fallback.as_ref().is_none_or(|(b, ..)| per_day > *b)
+            let per_day = (amount * (sell - buy) - 2.0 * leg * fuel) / (2.0 * leg);
+            if per_day > MIN_PROFIT_PER_DAY && best.as_ref().is_none_or(|(b, _)| per_day > *b) {
+                let route = Route {
+                    from: here,
+                    to,
+                    good,
+                    leg_days: leg.ceil() as u32,
+                    jumps,
+                };
+                best = Some((per_day, route));
+            }
+        }
+        // Somewhere better to load? Rough guide: what the system's best
+        // surplus would fetch at base prices.
+        if let Some((to, surplus, margin)) = board.sources[i]
+            && to != here
+        {
+            let leg = leg_days(state, class, here, to, ly);
+            let per_day = (capacity.min(surplus) * margin - leg * fuel) / (2.0 * leg);
+            if leg <= MAX_TRIP_DAYS
+                && per_day > MIN_PROFIT_PER_DAY
+                && fallback.as_ref().is_none_or(|(b, ..)| per_day > *b)
             {
                 fallback = Some((per_day, to, leg.ceil() as u32, jumps));
             }
