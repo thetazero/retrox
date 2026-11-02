@@ -124,6 +124,8 @@ mod tests {
             );
             assert!(s.time_to_turn(180.0).is_some(), "{} can't turn", h.id);
             assert!(s.acceleration() > 0.0, "{} can't thrust", h.id);
+            assert!(s.drive_tier >= 1, "{} has no jump drive", h.id);
+            assert!(s.laden().jump_speed() > 0.5, "{} jumps too slowly", h.id);
         }
     }
 

@@ -25,7 +25,7 @@ pub fn print(hull: Option<&str>) -> ExitCode {
 
 fn print_table() {
     println!(
-        "{:<18} {:<7} {:<7} {:>7} {:>6} {:>5} {:>6} {:>6} {:>7} {:>7} {:>6} {:>9}",
+        "{:<18} {:<7} {:<7} {:>7} {:>6} {:>5} {:>6} {:>6} {:>7} {:>7} {:>6} {:>9} {:>11}",
         "hull",
         "size",
         "role",
@@ -37,7 +37,8 @@ fn print_table() {
         "dps",
         "shield",
         "cargo",
-        "combat"
+        "combat",
+        "ly/d lad"
     );
     for hull in HULLS {
         let s = stock(hull.id).expect("every hull has a stock fit").stats();
@@ -47,7 +48,7 @@ fn print_table() {
             None => "∞".to_owned(),
         };
         println!(
-            "{:<18} {:<7} {:<7} {:>7.0} {:>6.0} {:>5.1} {:>6.1} {:>6.1} {:>7.0} {:>7.0} {:>6.0} {:>9}",
+            "{:<18} {:<7} {:<7} {:>7.0} {:>6.0} {:>5.1} {:>6.1} {:>6.1} {:>7.0} {:>7.0} {:>6.0} {:>9} {:>11}",
             hull.id,
             format!("{:?}", hull.size),
             format!("{:?}", hull.role),
@@ -60,6 +61,7 @@ fn print_table() {
             s.shield,
             s.cargo_t,
             combat,
+            format!("{:.1}/{:.1}", s.jump_speed(), laden.jump_speed()),
         );
     }
 }
@@ -120,6 +122,12 @@ fn print_fit(fit: &Loadout) {
     );
     println!("  radar       {:.0} km", s.radar_range_km);
     println!("  cargo       {:.0} t", s.cargo_t);
+    println!(
+        "  jump        {:.2} ly/day empty, {:.2} laden (tier {})",
+        s.jump_speed(),
+        s.laden().jump_speed(),
+        s.drive_tier
+    );
     println!("  reactor     {:.1} MW", s.power_supply_mw);
     println!(
         "  radiators   {:.1} MW shed, {:.0} MJ capacity",

@@ -35,6 +35,9 @@ pub static MODULES: &[Module] = &[
     CARGO_RACK,
     CARGO_POD,
     CARGO_HOLD,
+    JUMP_DRIVE_S,
+    JUMP_DRIVE_M,
+    JUMP_DRIVE_L,
 ];
 
 const fn module(
@@ -94,6 +97,14 @@ const fn radiator(dissipation_mw: f64) -> Function {
 
 const fn cargo(capacity_t: f64) -> Function {
     Function::Cargo { capacity_t }
+}
+
+const fn jump(speed_ly_per_day: f64, rated_mass_t: f64, tier: u8) -> Function {
+    Function::JumpDrive {
+        speed_ly_per_day,
+        rated_mass_t,
+        tier,
+    }
 }
 
 use Size::{Large as L, Medium as M, Small as S};
@@ -172,3 +183,13 @@ pub const CARGO_RACK: Module = module("cargo-rack", "Cargo rack", S, 0.5, 0.0, 0
 pub const CARGO_POD: Module = module("cargo-pod", "Cargo pod", M, 4.0, 0.0, 0.0, cargo(60.0));
 #[rustfmt::skip]
 pub const CARGO_HOLD: Module = module("cargo-hold", "Cargo hold", L, 30.0, 0.0, 0.0, cargo(500.0));
+
+// Jump drives. Smaller drives are faster but rated for less mass; a ship
+// heavier than its drive's rating jumps proportionally slower. All tier 1
+// until hyperlane tiers exist (#26).
+#[rustfmt::skip]
+pub const JUMP_DRIVE_S: Module = module("jump-drive-s", "Light jump drive", S, 1.5, 4.0, 4.0, jump(2.0, 50.0, 1));
+#[rustfmt::skip]
+pub const JUMP_DRIVE_M: Module = module("jump-drive-m", "Jump drive", M, 10.0, 15.0, 15.0, jump(1.6, 450.0, 1));
+#[rustfmt::skip]
+pub const JUMP_DRIVE_L: Module = module("jump-drive-l", "Heavy jump drive", L, 60.0, 80.0, 80.0, jump(1.3, 5000.0, 1));
