@@ -800,6 +800,19 @@ fn choose_route(
     n: usize,
     here: SettlementId,
 ) {
+    crate::decisions::time(crate::decisions::Decision::Route, || {
+        choose_route_timed(state, contracts, board, key, n, here);
+    });
+}
+
+fn choose_route_timed(
+    state: &mut GalaxyState,
+    contracts: &Contracts,
+    board: &Board,
+    key: CompanyId,
+    n: usize,
+    here: SettlementId,
+) {
     let company = &state.companies[key];
     let fleet = &company.fleets[n];
     let class = &state.ship_classes[fleet.class];
@@ -1200,101 +1213,113 @@ fn found_companies(state: &mut GalaxyState) {
         let Some(id) = state.settlements.key_at(i) else {
             continue;
         };
-        let entity = slotmap::Key::data(&id).as_ffi();
-        let economy = &state.settlements[id].economy;
-        if economy.population <= 0.0
-            || !Rng::stream(state.seed, "found-company", today.days(), entity)
-                .chance(FOUND_COMPANY_CHANCE)
-        {
-            continue;
-        }
-        let cost = |c: &ShipClass| {
-            c.mass_t * crate::economy::HULL_PRICE_PER_T
-                + c.cargo_t * FOUNDING_HOLDS * FOUNDING_CREDITS_PER_T
-        };
-        // The biggest class it can afford that there's a hold's worth of
-        // freight for.
-        let market = &economy.market;
-        let freight = Good::ALL
-            .iter()
-            .map(|&g| market.surplus(g))
-            .fold(0.0, f64::max);
-        let Some((class, founding)) = state
-            .ship_classes
-            .iter()
-            .filter(|(_, c)| c.cargo_t <= freight && cost(c) * FOUNDING_WEALTH <= economy.treasury)
-            .max_by(|a, b| a.1.cargo_t.total_cmp(&b.1.cargo_t))
-            .map(|(cid, c)| (cid, cost(c)))
-        else {
-            continue;
-        };
-        let idle = idle_systems.get_or_insert_with(|| {
-            state
-                .companies
-                .values()
-                .flat_map(|c| c.fleets.iter())
-                .filter_map(|f| match f.at {
-                    Location::Docked(at) if f.idle || f.slack > 0 => {
-                        Some(state.settlements.get(at)?.system)
-                    }
-                    _ => None,
-                })
-                .collect()
+        crate::decisions::time(crate::decisions::Decision::Founding, || {
+            found_one(state, id, today, &mut idle_systems);
         });
-        if idle.contains(&state.settlements[id].system) {
-            continue;
-        }
-        // The crew fetches the hull from the nearest yard that has it;
-        // with none in reach, the order goes to the nearest yard (or here),
-        // which is what shipyards build to.
-        let mass = state.ship_classes[class].mass_t;
-        let yard = match hull_source(state, id, class) {
-            Ok(yard) => yard,
-            Err(order) => {
-                state.settlements[order].economy.hull_wanted += mass;
-                continue;
-            }
-        };
-        let base = state.settlements[id]
-            .name
-            .split(' ')
-            .next()
-            .unwrap_or("Free")
-            .to_owned();
-        state.settlements[yard].economy.hull_t -= mass;
-        let company = add_company(
-            state,
-            Company {
-                name: format!("{base} Haulers {}", today.year()),
-                home: id,
-                credits: 0.0,
-                fleets: vec![Fleet {
-                    id: 0,
-                    class,
-                    ships: 1,
-                    at: Location::Docked(yard),
-                    cargo: None,
-                    route: None,
-                    review_due: false,
-                    idle: false,
-                    loaded: false,
-                    slack: 0,
-                    harvest: None,
-                }],
-                next_fleet: 0,
-            },
-        );
-        // The settlement stakes the company, which buys its hull from the
-        // yard.
-        let (home, company) = (Account::Settlement(id), Account::Company(company));
-        ledger::pay(state, home, company, founding);
-        ledger::pay(
-            state,
-            company,
-            Account::Settlement(yard),
-            mass * crate::economy::HULL_PRICE_PER_T,
-        );
     }
+}
+
+/// One settlement's monthly review of whether to found a company.
+fn found_one(
+    state: &mut GalaxyState,
+    id: SettlementId,
+    today: GalaxyTime,
+    idle_systems: &mut Option<HashSet<SystemId>>,
+) {
+    let entity = slotmap::Key::data(&id).as_ffi();
+    let economy = &state.settlements[id].economy;
+    if economy.population <= 0.0
+        || !Rng::stream(state.seed, "found-company", today.days(), entity)
+            .chance(FOUND_COMPANY_CHANCE)
+    {
+        return;
+    }
+    let cost = |c: &ShipClass| {
+        c.mass_t * crate::economy::HULL_PRICE_PER_T
+            + c.cargo_t * FOUNDING_HOLDS * FOUNDING_CREDITS_PER_T
+    };
+    // The biggest class it can afford that there's a hold's worth of
+    // freight for.
+    let market = &economy.market;
+    let freight = Good::ALL
+        .iter()
+        .map(|&g| market.surplus(g))
+        .fold(0.0, f64::max);
+    let Some((class, founding)) = state
+        .ship_classes
+        .iter()
+        .filter(|(_, c)| c.cargo_t <= freight && cost(c) * FOUNDING_WEALTH <= economy.treasury)
+        .max_by(|a, b| a.1.cargo_t.total_cmp(&b.1.cargo_t))
+        .map(|(cid, c)| (cid, cost(c)))
+    else {
+        return;
+    };
+    let idle = idle_systems.get_or_insert_with(|| {
+        state
+            .companies
+            .values()
+            .flat_map(|c| c.fleets.iter())
+            .filter_map(|f| match f.at {
+                Location::Docked(at) if f.idle || f.slack > 0 => {
+                    Some(state.settlements.get(at)?.system)
+                }
+                _ => None,
+            })
+            .collect()
+    });
+    if idle.contains(&state.settlements[id].system) {
+        return;
+    }
+    // The crew fetches the hull from the nearest yard that has it;
+    // with none in reach, the order goes to the nearest yard (or here),
+    // which is what shipyards build to.
+    let mass = state.ship_classes[class].mass_t;
+    let yard = match hull_source(state, id, class) {
+        Ok(yard) => yard,
+        Err(order) => {
+            state.settlements[order].economy.hull_wanted += mass;
+            return;
+        }
+    };
+    let base = state.settlements[id]
+        .name
+        .split(' ')
+        .next()
+        .unwrap_or("Free")
+        .to_owned();
+    state.settlements[yard].economy.hull_t -= mass;
+    let company = add_company(
+        state,
+        Company {
+            name: format!("{base} Haulers {}", today.year()),
+            home: id,
+            credits: 0.0,
+            fleets: vec![Fleet {
+                id: 0,
+                class,
+                ships: 1,
+                at: Location::Docked(yard),
+                cargo: None,
+                route: None,
+                review_due: false,
+                idle: false,
+                loaded: false,
+                slack: 0,
+                harvest: None,
+            }],
+            next_fleet: 0,
+        },
+    );
+    // The settlement stakes the company, which buys its hull from the
+    // yard.
+    let (home, company) = (Account::Settlement(id), Account::Company(company));
+    ledger::pay(state, home, company, founding);
+    ledger::pay(
+        state,
+        company,
+        Account::Settlement(yard),
+        mass * crate::economy::HULL_PRICE_PER_T,
+    );
 }
 
 /// Where a ship of `class` for a company founded at `id` comes from: the

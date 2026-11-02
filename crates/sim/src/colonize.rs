@@ -138,81 +138,91 @@ pub fn launch(state: &mut GalaxyState) {
         let Some(id) = state.settlements.key_at(i) else {
             continue;
         };
-        let key = slotmap::Key::data(&id).as_ffi();
-        let settlement = &state.settlements[id];
-        let economy = &settlement.economy;
-        let capacity = crate::demography::capacity(state, id);
-        let crowding = ((economy.population / capacity.max(1e-6) - UNEASY) / (CROWDED - UNEASY))
-            .clamp(0.0, 1.0);
-        if economy.population < MIN_POPULATION || crowding <= 0.0 {
-            continue;
-        }
-        if !Rng::stream(state.seed, "colony-launch", day, key).chance(LAUNCH_CHANCE * crowding) {
-            continue;
-        }
-        let market = &economy.market;
-        let food = crate::economy::per_capita(Good::Food) * COLONISTS * PROVISION_DAYS;
-        let fuel = crate::economy::per_capita(Good::Fuel) * COLONISTS * PROVISION_DAYS;
-        let enough = market.stock[Good::Metal] >= SHIP_METAL
-            && market.stock[Good::Components] >= SHIP_COMPONENTS
-            && market.stock[Good::Food] >= food
-            && market.stock[Good::Fuel] >= fuel;
-        if !enough {
-            continue;
-        }
-
-        let taken = taken.get_or_insert_with(|| taken_sites(state));
-        let origin = settlement.system;
-        let best = crate::haul::reach(
-            state,
-            origin,
-            (MAX_DAYS - 2.0 * IN_SYSTEM_DAYS) * JUMP_LY_PER_DAY,
-        )
-        .iter()
-        .flat_map(|&(system, ly, _)| {
-            let days = 2.0 * IN_SYSTEM_DAYS + ly / JUMP_LY_PER_DAY;
-            candidates(state, taken, system)
-                .into_iter()
-                .map(move |(site, name, score)| {
-                    (system, site, name, score / (1.0 + days / 20.0), days)
-                })
-        })
-        .max_by(|a, b| a.3.total_cmp(&b.3));
-        let Some((system, site, name, _, days)) = best else {
-            continue;
-        };
-        taken.extend(claim(site));
-
-        let demand_value: f64 = Good::ALL
-            .iter()
-            .map(|&g| crate::economy::per_capita(g) * COLONISTS * g.base_price())
-            .sum();
-        let endowment = demand_value * ENDOWMENT_DAYS;
-        let owner = settlement.owner;
-        // The colonists' own settlement builds and stocks the ship.
-        ledger::consume(state, id, Good::Metal, SHIP_METAL);
-        ledger::consume(state, id, Good::Components, SHIP_COMPONENTS);
-        let mut cargo = GoodMap::splat(0.0);
-        cargo[Good::Food] = ledger::consume(state, id, Good::Food, food);
-        cargo[Good::Fuel] = ledger::consume(state, id, Good::Fuel, fuel);
-        let economy = &mut state.settlements[id].economy;
-        economy.population -= COLONISTS;
-        economy.refresh_demand();
-        let ship = state.colony_ships.insert(ColonyShip {
-            owner,
-            from: id,
-            system,
-            site,
-            name,
-            population: COLONISTS,
-            cargo,
-            credits: 0.0,
-            arrive: GalaxyTime::from_days(day + days.ceil().max(1.0) as u64),
+        crate::decisions::time(crate::decisions::Decision::Colonization, || {
+            launch_one(state, id, day, &mut taken);
         });
-        // Up to half of what the settlement can spend goes with them.
-        let stake = endowment.min(ledger::spendable(state, Account::Settlement(id)) * 0.5);
-        ledger::pay(state, Account::Settlement(id), Account::Colony(ship), stake);
     }
+}
+
+/// One settlement's monthly review of whether to send colonists.
+fn launch_one(
+    state: &mut GalaxyState,
+    id: SettlementId,
+    day: u64,
+    taken: &mut Option<HashSet<Claim>>,
+) {
+    let key = slotmap::Key::data(&id).as_ffi();
+    let settlement = &state.settlements[id];
+    let economy = &settlement.economy;
+    let capacity = crate::demography::capacity(state, id);
+    let crowding =
+        ((economy.population / capacity.max(1e-6) - UNEASY) / (CROWDED - UNEASY)).clamp(0.0, 1.0);
+    if economy.population < MIN_POPULATION || crowding <= 0.0 {
+        return;
+    }
+    if !Rng::stream(state.seed, "colony-launch", day, key).chance(LAUNCH_CHANCE * crowding) {
+        return;
+    }
+    let market = &economy.market;
+    let food = crate::economy::per_capita(Good::Food) * COLONISTS * PROVISION_DAYS;
+    let fuel = crate::economy::per_capita(Good::Fuel) * COLONISTS * PROVISION_DAYS;
+    let enough = market.stock[Good::Metal] >= SHIP_METAL
+        && market.stock[Good::Components] >= SHIP_COMPONENTS
+        && market.stock[Good::Food] >= food
+        && market.stock[Good::Fuel] >= fuel;
+    if !enough {
+        return;
+    }
+
+    let taken = taken.get_or_insert_with(|| taken_sites(state));
+    let origin = settlement.system;
+    let best = crate::haul::reach(
+        state,
+        origin,
+        (MAX_DAYS - 2.0 * IN_SYSTEM_DAYS) * JUMP_LY_PER_DAY,
+    )
+    .iter()
+    .flat_map(|&(system, ly, _)| {
+        let days = 2.0 * IN_SYSTEM_DAYS + ly / JUMP_LY_PER_DAY;
+        candidates(state, taken, system)
+            .into_iter()
+            .map(move |(site, name, score)| (system, site, name, score / (1.0 + days / 20.0), days))
+    })
+    .max_by(|a, b| a.3.total_cmp(&b.3));
+    let Some((system, site, name, _, days)) = best else {
+        return;
+    };
+    taken.extend(claim(site));
+
+    let demand_value: f64 = Good::ALL
+        .iter()
+        .map(|&g| crate::economy::per_capita(g) * COLONISTS * g.base_price())
+        .sum();
+    let endowment = demand_value * ENDOWMENT_DAYS;
+    let owner = settlement.owner;
+    // The colonists' own settlement builds and stocks the ship.
+    ledger::consume(state, id, Good::Metal, SHIP_METAL);
+    ledger::consume(state, id, Good::Components, SHIP_COMPONENTS);
+    let mut cargo = GoodMap::splat(0.0);
+    cargo[Good::Food] = ledger::consume(state, id, Good::Food, food);
+    cargo[Good::Fuel] = ledger::consume(state, id, Good::Fuel, fuel);
+    let economy = &mut state.settlements[id].economy;
+    economy.population -= COLONISTS;
+    economy.refresh_demand();
+    let ship = state.colony_ships.insert(ColonyShip {
+        owner,
+        from: id,
+        system,
+        site,
+        name,
+        population: COLONISTS,
+        cargo,
+        credits: 0.0,
+        arrive: GalaxyTime::from_days(day + days.ceil().max(1.0) as u64),
+    });
+    // Up to half of what the settlement can spend goes with them.
+    let stake = endowment.min(ledger::spendable(state, Account::Settlement(id)) * 0.5);
+    ledger::pay(state, Account::Settlement(id), Account::Colony(ship), stake);
 }
 
 /// Movement phase: colony ships that arrive today found their

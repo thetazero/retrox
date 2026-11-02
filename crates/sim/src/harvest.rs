@@ -458,7 +458,9 @@ pub(crate) fn review(state: &mut GalaxyState, key: CompanyId, n: usize, here: Se
         }
         return;
     }
-    let plan = choose(state, key, n, here);
+    let plan = crate::decisions::time(crate::decisions::Decision::Harvest, || {
+        choose(state, key, n, here)
+    });
     let fleet = &mut state.companies[key].fleets[n];
     fleet.idle = plan.is_none();
     if let Some(h) = fleet.harvest.as_mut() {
