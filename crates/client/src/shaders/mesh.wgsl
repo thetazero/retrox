@@ -418,9 +418,12 @@ fn relief(p: vec3<f32>, size: f32, wm: f32, seed: f32) -> Relief {
     return out;
 }
 
-// One vein point, unpacked from Instance::with_veins: a point in the
-// mesh's own space, or a w of 0 if there's none.
-fn vein_point(a: f32) -> vec4<f32> {
+// How thick a belt's dust is, per metre of sight (mining.rs BELT_DUST).
+const BELT_DUST: f32 = 5.0e-5;
+
+// A point on a rock packed by render.rs pack_rock_point: in the mesh's own
+// space, or a w of 0 if there's none.
+fn rock_point(a: f32) -> vec4<f32> {
     if (a < 0.5) { return vec4<f32>(0.0); }
     let u = u32(round(a)) - 1u;
     let q = vec3<f32>(f32(u & 255u), f32((u >> 8u) & 255u), f32((u >> 16u) & 255u)) / 255.0;
@@ -514,7 +517,13 @@ fn rock(i: VOut, n0: vec3<f32>, dox: vec3<f32>, doy: vec3<f32>, dwx: vec3<f32>, 
 
     // Heat from the laser's work glows out of the cracks first, then
     // spreads, dull red to orange; the rock stays rock.
-    let heat = clamp(i.params.y * 4.0, 0.0, 1.0);
+    var heat = clamp(i.params.y * 4.0, 0.0, 1.0);
+    // Round where the laser cuts, a few tens of metres across, if it is.
+    let cut = rock_point(i.color.a);
+    if (cut.w > 0.0) {
+        let reach = max(0.7, 40.0 / size);
+        heat = heat * (1.0 - smoothstep(0.3, 1.0, distance(i.obj, cut.xyz) / reach));
+    }
     let crack = 1.0 - smoothstep(0.0, 0.03, abs(fbm_aa(po * 1.4 + vec3<f32>(9.0), wo * 1.4) - 0.5));
     let glow = crack * smoothstep(0.0, 0.6, heat) + smoothstep(0.6, 1.0, heat) * 0.07;
     let hot = mix(vec3<f32>(0.7, 0.12, 0.03), vec3<f32>(1.0, 0.45, 0.12), heat);
@@ -529,7 +538,7 @@ fn rock(i: VOut, n0: vec3<f32>, dox: vec3<f32>, doy: vec3<f32>, dwx: vec3<f32>, 
         let vr = max(0.35, 1.5 / size);
         var near = 0.0;
         for (var k = 0; k < 4; k = k + 1) {
-            let v = vein_point(i.aux[k]);
+            let v = rock_point(i.aux[k]);
             if (v.w == 0.0) { continue; }
             let d = distance(i.obj, v.xyz) / vr;
             let warp = (noise(i.obj / vr * 2.2 + vec3<f32>(f32(k) * 7.3 + s % 5.0)) - 0.5) * 0.7;
@@ -568,11 +577,8 @@ fn rock(i: VOut, n0: vec3<f32>, dox: vec3<f32>, doy: vec3<f32>, dwx: vec3<f32>, 
     }
 
     // The belt's dust between the camera and the rock.
-    let thick = i.color.a;
-    if (thick > 0.0) {
-        let veil = exp(-length(i.wpos) * thick);
-        color = color * veil + dust_light(-i.view_dir, i.light.xyz) * (1.0 - veil);
-    }
+    let veil = exp(-length(i.wpos) * BELT_DUST);
+    color = color * veil + dust_light(-i.view_dir, i.light.xyz) * (1.0 - veil);
     return color;
 }
 

@@ -2528,23 +2528,35 @@ fn mining_scene(
             (false, false, retrox_sim::economy::Good::Ice) => VeinKind::Ice,
             _ => VeinKind::Ore,
         };
-        out.push((
-            rock_lod(meshes, rock.seed, rock.radius, distance),
-            Instance::new(
-                Mat4::from_scale_rotation_translation(
-                    Vec3::splat(rock.radius as f32),
-                    rock.rot.as_quat(),
-                    rel(pos),
-                ),
-                color,
-                Surface::Rock,
-                // Glowing from the laser's work.
-                (rock.damage as f32).powi(2) * 0.25,
-                (rock.seed % 10_000) as f32,
-                lit,
-            )
-            .with_veins(&veins, kind, dust),
-        ));
+        let mut instance = Instance::new(
+            Mat4::from_scale_rotation_translation(
+                Vec3::splat(rock.radius as f32),
+                rock.rot.as_quat(),
+                rel(pos),
+            ),
+            color,
+            Surface::Rock,
+            // Glowing from the laser's work.
+            (rock.damage as f32).powi(2) * 0.25,
+            (rock.seed % 10_000) as f32,
+            lit,
+        )
+        .with_veins(&veins, kind);
+        // The laser's heat glows round where it cuts. A quarry only glows
+        // there, while it's being cut: its damage is how near the next
+        // boulder is to calving, and lighting the whole face for it read
+        // as a rock on fire.
+        let cut = world
+            .mining
+            .aim
+            .filter(|a| a.rock.id == rock.id)
+            .map(|a| (rock.rot.inverse() * ((a.point - rock.pos) / rock.radius)).as_vec3());
+        if let Some(at) = cut {
+            instance = instance.with_cut(at);
+        } else if rock.radius > mining::QUARRY_RADIUS {
+            instance.params[1] = 0.0;
+        }
+        out.push((rock_lod(meshes, rock.seed, rock.radius, distance), instance));
     }
     if let Some(state) = world.mining.field(field) {
         for n in &state.nuggets {
@@ -2628,7 +2640,7 @@ fn rubble_scene(
     // Cell size, reach, sizes (radius, metres), share of cells with one,
     // how near it shows, and a salt.
     let layers = [
-        (110.0, 1400.0, (0.4f64, 2.2f64), 0.45, 25.0, 1u64),
+        (110.0, 1400.0, (0.3f64, 1.4f64), 0.5, 120.0, 1u64),
         (480.0, 7000.0, (2.5, 5.5), 0.6, 1600.0, 2u64),
     ];
     let color = if icy {
@@ -2690,11 +2702,7 @@ fn rubble_scene(
                             seed as f32,
                             lit,
                         )
-                        .with_veins(
-                            &[],
-                            VeinKind::None,
-                            mining::BELT_DUST as f32,
-                        ),
+                        .with_veins(&[], VeinKind::None),
                     ));
                 }
             }

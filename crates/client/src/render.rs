@@ -18,6 +18,16 @@ use crate::meshes::{Mesh, Vertex};
 pub const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
+/// A point on a rock's mesh (within ±[`crate::mining::ROCK_BOUND`]) as
+/// one float, to 1/255 of the bound on each axis: exact in an f32 (under
+/// 2^24), and never 0, which means "none" (mesh.wgsl's `rock_point`).
+fn pack_rock_point(p: Vec3) -> f32 {
+    let bound = crate::mining::ROCK_BOUND as f32;
+    let q = (p / bound * 0.5 + Vec3::splat(0.5)).clamp(Vec3::ZERO, Vec3::ONE) * 255.0;
+    let [x, y, z] = [q.x, q.y, q.z].map(|c| c.round() as u32);
+    (1 + x + y * 256 + z * 65_536) as f32
+}
+
 /// What a rock's veins are made of, for their colour; must match
 /// `mesh.wgsl`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,19 +124,19 @@ impl Instance {
     }
 
     /// Rock: the veins a prospector has read, as points in the mesh's own
-    /// space (within ±[`crate::mining::ROCK_BOUND`]), drawn as ore seams in
-    /// the rock in the colour of `kind`, and how thick the belt's dust is
-    /// (per metre) between the camera and the rock.
-    pub fn with_veins(mut self, points: &[Vec3], kind: VeinKind, dust: f32) -> Self {
-        let bound = crate::mining::ROCK_BOUND as f32;
+    /// space, drawn as ore seams in the rock in the colour of `kind`.
+    pub fn with_veins(mut self, points: &[Vec3], kind: VeinKind) -> Self {
         for (slot, p) in self.aux.iter_mut().zip(points) {
-            let q = (*p / bound * 0.5 + Vec3::splat(0.5)).clamp(Vec3::ZERO, Vec3::ONE) * 255.0;
-            let [x, y, z] = [q.x, q.y, q.z].map(|c| c.round() as u32);
-            // Exact in an f32 (under 2^24); 0 means no vein.
-            *slot = (1 + x + y * 256 + z * 65_536) as f32;
+            *slot = pack_rock_point(*p);
         }
         self.params[3] = kind as u32 as f32;
-        self.color[3] = dust;
+        self
+    }
+
+    /// Rock: where the laser is cutting, in the mesh's own space. The
+    /// laser's heat glows round it rather than over the whole rock.
+    pub fn with_cut(mut self, at: Vec3) -> Self {
+        self.color[3] = pack_rock_point(at);
         self
     }
 

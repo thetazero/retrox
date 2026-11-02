@@ -47,7 +47,7 @@ use crate::world::{SECONDS_PER_DAY, rock_offset};
 /// How far the rock under the crosshair is read out, metres.
 pub const READOUT_RANGE: f64 = 2000.0;
 /// How thick a belt's dust is, per metre of sight: a rock 14 km off is
-/// half veiled by it (mesh.wgsl's dust).
+/// half veiled by it. Must match mesh.wgsl's `BELT_DUST`.
 pub const BELT_DUST: f64 = 5.0e-5;
 /// How far a prospector ping reaches, metres.
 pub const SCAN_RANGE: f64 = 3000.0;
