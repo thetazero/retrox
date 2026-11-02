@@ -138,6 +138,12 @@ pub fn board(
 
     let mut offers: Vec<(f64, Offer)> = Vec::new();
     for (system, jumps, days) in routes(state, origin.system, lane_days) {
+        // Nobody hires a captain for a hop within the system: it's a day's
+        // carriage, a few credits (issue #149), and the galaxy moves such
+        // goods by local shuttle, never by hauler (DESIGN §5.4.1).
+        if jumps == 0 {
+            continue;
+        }
         for (to, dest) in state.settlements_in(system) {
             // Only places the player can dock or land at.
             if to == here || matches!(dest.site, Site::Surface(_)) {
@@ -165,9 +171,14 @@ pub fn board(
                 }
                 let buy = |n: f64| market.price_at(good, market.stock[good] - n / 2.0, model);
                 let trip_days = days + SYSTEM_DAYS * f64::from(jumps + 1);
+                // Carriage is paid for the days the trip takes: the lanes
+                // and a day of handling, as the galaxy's haulers reckon a
+                // trip (DESIGN §5.4.1). The flying in each system is
+                // allowed for in the deadline, not paid (issue #149).
+                let paid_days = days + crate::haul::HANDLING_DAYS;
                 let price = |n: f64| {
                     let value = buy(n) * n;
-                    let fee = (n * FREIGHT_RATE + WAGE) * trip_days;
+                    let fee = (n * FREIGHT_RATE + WAGE) * paid_days;
                     (value, fee)
                 };
                 // The consignee only commits what it can afford.
@@ -194,7 +205,7 @@ pub fn board(
                     shortage,
                     urgent: dest_market.shortfall[good] > 0.01,
                 };
-                offers.push((fee / trip_days.max(1.0), offer));
+                offers.push((day_rate(&offer), offer));
             }
         }
     }
@@ -243,6 +254,13 @@ fn pick(offers: impl Iterator<Item = Offer>) -> Vec<Offer> {
         board.push(offer);
     }
     board
+}
+
+/// What a contract pays a day of the trip: the keep of its lot (DESIGN
+/// §7.8). The board is ordered by it, so a full lot pays the same per day
+/// however far it goes, and the shorter run comes first (issue #129).
+pub fn day_rate(offer: &Offer) -> f64 {
+    offer.amount * FREIGHT_RATE + WAGE
 }
 
 /// What the captain is paid for delivering on `day`, given the deadline:

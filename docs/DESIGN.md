@@ -1127,15 +1127,16 @@ Hour-to-hour work for the Trader path (§2), drawn from the economy, never
 from a random generator (pillar 5).
 
 - **Where they come from.** A settlement's dispatch board pairs a good it
-  can spare with a settlement within 5 jumps that is short of it,
+  can spare with a settlement 1–5 jumps away that is short of it,
   counting what traders already have on the way. A consignee posts
   once it holds less than 75% of its target, and the origin releases
   stock only down to 75% of its own target, so goods always flow from
   fuller markets to emptier ones. Lots are sized to the player's hold.
   A board holds 8 contracts at most, 2 per destination, best pay per day
   first. Boards change daily as markets do; some days a port has nothing.
-- **Short runs first** (#129). Pay per day is the hauler's keep, so a
-  full lot pays the same per day however far it goes: the long runs
+- **Short runs first** (#129). Pay per day of the trip is the hauler's
+  keep, so a full lot pays the same per day however far it goes, and
+  the board is ordered by it: the long runs
   only pay more in total. Among equal rates (to the cent) the run with
   fewer jumps comes first, and if the 8 places fill without a run of 1–2
   jumps when one is on offer, the last place goes to the best one. So a
@@ -1247,7 +1248,12 @@ the sim's own numbers:
   25 000 cr, which bought any medium ship on day one.)
 - **A contract pays carriage.** Its fee is the hauler's keep for the
   trip at the galaxy's own upkeep rates: 0.02 cr per tonne-day plus a
-  crew's 2 cr a day (§7.5.1). How short the consignee is decides whether
+  crew's 2 cr a day (§7.5.1), for the days the trip takes: its lanes and
+  a day of handling, as the galaxy's haulers reckon a trip (§5.4.1). The
+  days a deadline allows for flying across each system are slack, not
+  pay (#149). A hop within one system is a day's carriage, a few
+  credits, so no board posts one: the galaxy moves those goods by local
+  shuttle, never by hauler (§5.4.1). How short the consignee is decides whether
   it posts and how the board is ordered, not the pay. The price gap
   between the two markets, and a planned faction's delivery premium,
   belong to whoever buys the goods and carries them at their own risk:
@@ -1293,8 +1299,13 @@ In a courier, contracts now earn about 2.8× mining (they were ~1.5×
 with the bench's hand flying, which cost contracts most: they travel
 most). Short runs head the board (§7.5.1), so a courier delivers ~80 an
 hour. A miner's hour is ~25 minutes of cutting and ~20 of hops between
-rocks, and gluts at the local market set the price; mining is now the
-clear laggard, a balance question left to #149. Mining needs no capital
+rocks, and gluts at the local market set the price. Contracts and
+trading earn per galaxy day (fees by the day; markets refilling between
+runs) and a lane's days pass in seconds, while mining earns per minute
+at the rock, so contracts out-earn mining. That is accepted as it
+stands (#149): pay comes from the sim, not from rates tuned to a target.
+What mining fetches and where it can sell are mining's own levers, and
+trading's lead comes from markets that never fill (#196). Mining needs no capital
 and never meets a bare board. Trading pays best and swings most (the bot
 trader also used to plan sales to markets that couldn't pay for the lot,
 and loop when refused). Planned economies hold one price everywhere, so
