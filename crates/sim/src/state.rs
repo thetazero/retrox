@@ -45,6 +45,10 @@ pub struct GalaxyState {
     /// Remembered lane distances; see [`crate::haul::ReachCache`].
     #[serde(skip)]
     pub reach_cache: crate::haul::ReachCache,
+    /// Remembered lane distances from capitals; see
+    /// [`crate::politics::Distances`].
+    #[serde(skip)]
+    pub capital_distances: crate::politics::Distances,
     /// Recent takings from each harvest source; see [`crate::harvest`].
     #[serde(default)]
     pub strain: crate::harvest::Strain,
@@ -395,6 +399,13 @@ pub struct Faction {
     /// [`crate::fiscal::Welfare`].
     #[serde(default)]
     pub welfare: crate::fiscal::Welfare,
+    /// The faction it broke away from, if any (DESIGN §5.5).
+    #[serde(default)]
+    pub parent: Option<FactionId>,
+    /// The word its name is built on ("Kessa" in "Union of Kessa"), which
+    /// breakaways may carry on.
+    #[serde(default)]
+    pub stem: String,
 }
 
 /// How a faction runs its economy (§5.4).

@@ -278,6 +278,7 @@ pub fn arrive(state: &mut GalaxyState) {
             name: ship.name,
             founded: now,
             economy,
+            stability: 1.0,
         });
         ledger::pay(
             state,

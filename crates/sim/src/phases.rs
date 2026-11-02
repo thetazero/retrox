@@ -12,12 +12,14 @@ pub fn production(state: &mut GalaxyState) {
 }
 
 /// Decisions: the settlements whose monthly review falls today choose what
-/// to build and whether to send colonists. Plan quotas, fleet orders and
+/// to build, whether to send colonists and how loyal they feel; once a year
+/// unstable regions may break away. Plan quotas, fleet orders and
 /// diplomacy later.
 pub fn planning(state: &mut GalaxyState) {
     crate::construction::review(state);
     crate::colonize::launch(state);
     crate::pirates::review(state);
+    crate::politics::update(state);
 }
 
 /// Docked fleets sell their cargo and pick their next trip.

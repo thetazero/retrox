@@ -323,23 +323,36 @@ fn prehistory(seed: u64, years: u64) {
         state.factions.len()
     );
     println!(
-        "  {:>5} {:>9} {:>11} {:>8} {:>8} {:>10} {:>9}",
-        "year", "factions", "settlements", "systems", "colonies", "population", "ships"
+        "  {:>5} {:>9} {:>11} {:>8} {:>8} {:>10} {:>9}   {:>6} {:>7} {:>9}",
+        "year",
+        "factions",
+        "settlements",
+        "systems",
+        "colonies",
+        "population",
+        "ships",
+        "powers",
+        "largest",
+        "effective"
     );
     let end = GalaxyTime::from_years(years);
     loop {
         if state.time.day_of_year() == 0 && state.time.year().is_multiple_of(10) {
             let systems: HashSet<_> = state.settlements.values().map(|s| s.system).collect();
             let e = retrox_sim::economy::summarize(&state);
+            let b = retrox_sim::politics::balance(&state);
             println!(
-                "  {:>5} {:>9} {:>11} {:>8} {:>8} {:>10.0} {:>9}",
+                "  {:>5} {:>9} {:>11} {:>8} {:>8} {:>10.0} {:>9}   {:>6} {:>6.0}% {:>9.1}",
                 state.time.year(),
-                state.factions.len(),
+                b.living,
                 state.settlements.len(),
                 systems.len(),
                 state.colony_ships.len(),
                 e.population,
-                e.ships
+                e.ships,
+                b.major,
+                b.largest_share * 100.0,
+                b.effective
             );
         }
         if state.time >= end {
@@ -347,5 +360,60 @@ fn prehistory(seed: u64, years: u64) {
         }
         retrox_sim::tick(&mut state);
     }
+    print_lineages(&state);
     println!("ran in {:.1?}", start.elapsed());
+}
+
+/// The family tree of the factions still standing, founding nations first,
+/// and the secessions that made it.
+fn print_lineages(state: &retrox_sim::GalaxyState) {
+    use retrox_sim::{FactionId, HistoryKind};
+    let secessions = state
+        .history
+        .events()
+        .iter()
+        .filter(|e| matches!(e.kind, HistoryKind::Secession { .. }))
+        .count();
+    let mut people: BTreeMap<FactionId, (f64, usize)> = BTreeMap::new();
+    for s in state.settlements.values() {
+        let e = people.entry(s.owner).or_default();
+        e.0 += s.economy.population;
+        e.1 += 1;
+    }
+    println!(
+        "{secessions} secessions; {} factions ever, {} standing",
+        state.factions.len(),
+        people.len()
+    );
+    fn branch(
+        state: &retrox_sim::GalaxyState,
+        people: &BTreeMap<FactionId, (f64, usize)>,
+        id: FactionId,
+        depth: usize,
+    ) {
+        let f = &state.factions[id];
+        let (pop, held) = people.get(&id).copied().unwrap_or_default();
+        let status = if held == 0 {
+            "gone".to_owned()
+        } else {
+            format!("{pop:.0} people in {held} settlements")
+        };
+        println!(
+            "  {:indent$}{} (year {}): {status}",
+            "",
+            f.name,
+            f.founded.year(),
+            indent = depth * 2
+        );
+        for (child, c) in state.factions.iter() {
+            if c.parent == Some(id) && depth < 12 {
+                branch(state, people, child, depth + 1);
+            }
+        }
+    }
+    for (id, f) in state.factions.iter() {
+        if f.parent.is_none() {
+            branch(state, &people, id, 0);
+        }
+    }
 }
