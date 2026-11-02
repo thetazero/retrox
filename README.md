@@ -38,6 +38,7 @@ and `--menu pause|quit` opens over a fresh game.
 | `--station` | start docked at a station, in the first system with one |
 | `--undocked` | start in space: just out of the station, or launched |
 | `--field` | start in an asteroid field facing a rock, prospected |
+| `--sunward` | start in the field with the biggest sun in its sky, the sun behind the rock |
 | `--fire` | hold the mining laser's trigger down |
 | `--traffic` | start in space alongside a trader fleet |
 | `--skim` | start skimming a gas giant |
@@ -58,6 +59,7 @@ and `--menu pause|quit` opens over a fresh game.
 | `--contracts` | start on the dispatch board |
 | `--contract` | also take the first contract on it |
 | `--screen NAME` | start docked on `trade`, `hangar`, `shipyard`, `contracts` or `bounties` |
+| `--size WxH` | open the window this size (logical pixels) rather than fitted to the screen |
 | `--ship-view DEG` | look at your ship from that angle, close up (0 = from behind) |
 | `--screenshot PATH.ppm` | save the 90th frame and quit |
 | `--menu PAGE` | open a menu page: `title`, `new`, `load`, `settings`, or `pause` / `quit` over a fresh game |

@@ -9,7 +9,7 @@ use super::{
     ALARM, AMBER, CREAM_DIM, HudInput, INK, VFD, VFD_DIM, brackets, distance, mono, project,
 };
 use crate::combat::Tactic;
-use crate::widgets::shadowed_text;
+use crate::widgets::plated_text;
 use crate::world::{Mode, World};
 
 /// A thin two-tone bar: `value` of it lit.
@@ -104,9 +104,9 @@ pub fn draw(ctx: &egui::Context, h: &HudInput) {
                 format!("TRADER · {}", w.faction_name(faction).to_uppercase())
             }
         };
-        // Shadowed: the target is often just past the ship's own hull,
+        // On a plate: the target is often just past the ship's own hull,
         // and the label lands on it (#123, DESIGN §8.4).
-        shadowed_text(
+        plated_text(
             &painter,
             Pos2::new(x, y),
             Align2::LEFT_TOP,
@@ -119,7 +119,7 @@ pub fn draw(ctx: &egui::Context, h: &HudInput) {
         );
         y += 15.0;
         let closing = -(r.craft.vel - me.vel).dot((r.craft.pos - me.pos).normalize_or(DVec3::Z));
-        shadowed_text(
+        plated_text(
             &painter,
             Pos2::new(x, y),
             Align2::LEFT_TOP,
