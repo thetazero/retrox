@@ -12,7 +12,9 @@ mod ship;
 
 const USAGE: &str = "\
 usage:
-  retrox simulate [--seed N] [--years N]   run the sim headless, print timings
+  retrox simulate [--seed N] [--years N] [--csv PATH]
+                                           run the sim headless, print timings;
+                                           --csv writes monthly economy totals
   retrox map [--seed N] > galaxy.svg       render the generated galaxy as SVG
   retrox stats [--seed N]                  print generation statistics
   retrox ship [HULL]                       list stock ships, or show one in detail";
@@ -26,7 +28,7 @@ fn main() -> ExitCode {
     if command == "ship" {
         return ship::print(args.get(1).map(String::as_str));
     }
-    let (seed, years) = match parse_flags(&args[1..]) {
+    let Flags { seed, years, csv } = match parse_flags(&args[1..]) {
         Ok(flags) => flags,
         Err(err) => {
             eprintln!("{err}\n{USAGE}");
@@ -34,7 +36,12 @@ fn main() -> ExitCode {
         }
     };
     match command.as_str() {
-        "simulate" => simulate(seed, years),
+        "simulate" => {
+            if let Err(err) = simulate(seed, years, csv.as_deref()) {
+                eprintln!("{err}");
+                return ExitCode::FAILURE;
+            }
+        }
         "map" => {
             let state = generate(seed, &GalaxyConfig::default());
             print!("{}", map::svg(&state));
@@ -48,23 +55,36 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn parse_flags(args: &[String]) -> Result<(u64, u64), String> {
-    let (mut seed, mut years) = (0, 10);
+struct Flags {
+    seed: u64,
+    years: u64,
+    csv: Option<String>,
+}
+
+fn parse_flags(args: &[String]) -> Result<Flags, String> {
+    let mut flags = Flags {
+        seed: 0,
+        years: 10,
+        csv: None,
+    };
     let mut it = args.iter();
     while let Some(flag) = it.next() {
         let value = it
             .next()
             .ok_or_else(|| format!("missing value for {flag}"))?;
-        let value: u64 = value
-            .parse()
-            .map_err(|_| format!("{flag} expects a number, got {value:?}"))?;
+        let number = || {
+            value
+                .parse::<u64>()
+                .map_err(|_| format!("{flag} expects a number, got {value:?}"))
+        };
         match flag.as_str() {
-            "--seed" => seed = value,
-            "--years" => years = value,
+            "--seed" => flags.seed = number()?,
+            "--years" => flags.years = number()?,
+            "--csv" => flags.csv = Some(value.clone()),
             _ => return Err(format!("unknown flag {flag}")),
         }
     }
-    Ok((seed, years))
+    Ok(flags)
 }
 
 fn stats(seed: u64) {
@@ -128,7 +148,21 @@ fn stats(seed: u64) {
     }
 }
 
-fn simulate(seed: u64, years: u64) {
+fn simulate(seed: u64, years: u64, csv: Option<&str>) -> std::io::Result<()> {
+    use retrox_sim::economy::{Good, summarize};
+    use std::io::Write;
+
+    let mut csv = match csv {
+        Some(path) => {
+            let mut file = std::io::BufWriter::new(std::fs::File::create(path)?);
+            writeln!(
+                file,
+                "day,good,stock,demand,shortfall,mean_price,systems_short"
+            )?;
+            Some(file)
+        }
+        None => None,
+    };
     let mut state = generate(seed, &GalaxyConfig::default());
     let end = GalaxyTime::from_years(years);
     let mut per_phase: BTreeMap<&'static str, Duration> = BTreeMap::new();
@@ -138,6 +172,27 @@ fn simulate(seed: u64, years: u64) {
         tick_profiled(&mut state, |name, elapsed| {
             *per_phase.entry(name).or_default() += elapsed;
         });
+        if let Some(csv) = csv.as_mut()
+            && state.time.days().is_multiple_of(30)
+        {
+            let e = summarize(&state);
+            for good in Good::ALL {
+                writeln!(
+                    csv,
+                    "{},{},{:.1},{:.1},{:.1},{:.3},{}",
+                    state.time.days(),
+                    good.name(),
+                    e.stock[good],
+                    e.demand[good],
+                    e.shortfall[good],
+                    e.mean_price[good],
+                    e.systems_short[good]
+                )?;
+            }
+        }
+    }
+    if let Some(mut csv) = csv {
+        csv.flush()?;
     }
     let total = start.elapsed();
 
@@ -156,6 +211,7 @@ fn simulate(seed: u64, years: u64) {
     }
     println!("history: {} events", state.history.events().len());
     print_economy(&state);
+    Ok(())
 }
 
 fn print_economy(state: &retrox_sim::GalaxyState) {

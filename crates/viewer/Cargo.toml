@@ -1,0 +1,19 @@
+[package]
+name = "retrox-viewer"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Developer tool: watch the galaxy simulation run on a live map."
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "retrox-viewer"
+path = "src/main.rs"
+
+[dependencies]
+retrox-sim.workspace = true
+retrox-gen.workspace = true
+eframe = "0.37"
