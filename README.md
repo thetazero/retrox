@@ -59,6 +59,7 @@ and `--menu pause|quit` opens over a fresh game.
 | `--menu PAGE` | open a menu page: `title`, `new`, `load`, `settings`, or `pause` / `quit` over a fresh game |
 | `--keys K1,K2,…` | press these keys, one a frame (`waitN` waits N frames), then quit (`--screenshot` stops it early) |
 | `--mute` / `--sound` | silence any run / give sound to a screenshot or `--keys` run, which are silent by default |
+| `--remote PATH` | play turn by turn from steps appended to PATH: keys, `hold:KEY:N`, `click:X:Y`, `scroll:X:Y:DY`, `shot:PATH.ppm`, `info:PATH`; the world waits between steps (for playtests) |
 
 ### Tools
 
