@@ -70,6 +70,9 @@ struct Flags {
     map: bool,
     /// Start in this stock ship instead.
     ship: Option<String>,
+    /// With `ship`: put these sections (comma-separated ids) in its mounts,
+    /// in order, each filled with the biggest modules that fit.
+    sections: Option<String>,
     /// Save the 90th frame here and quit (for checking visual changes
     /// without a person at the window).
     screenshot: Option<PathBuf>,
@@ -100,6 +103,7 @@ impl Flags {
             take_contract: has("--contract"),
             map: has("--map"),
             ship: value("--ship"),
+            sections: value("--sections"),
             screenshot: value("--screenshot").map(PathBuf::from),
             ship_view: value("--ship-view").and_then(|s| s.parse().ok()),
             menu: value("--menu"),
@@ -134,7 +138,10 @@ impl Flags {
         if self.station {
             world.start_at_station();
         }
-        if let Some(fit) = self.ship.as_deref().and_then(retrox_content::ships::stock) {
+        if let Some(mut fit) = self.ship.as_deref().and_then(retrox_content::ships::stock) {
+            if let Some(ids) = &self.sections {
+                refit_sections(&mut fit, ids);
+            }
             world.player.ship.fit = fit;
         }
         if self.contracts {
@@ -1032,7 +1039,7 @@ impl Running {
             let rot = world.ship.rot;
             let dir =
                 DQuat::from_rotation_y(yaw.to_radians()) * DVec3::new(0.0, 0.4, 1.0).normalize();
-            let offset = rot * dir * 38.0;
+            let offset = rot * dir * (world.stats().length_m * 1.5).max(24.0);
             cam_pos = world.ship_position() + offset;
             cam_rot = rot * world::look_rotation(-dir);
         }
@@ -1535,4 +1542,29 @@ fn sky(world: &World) -> Vec<SkyVertex> {
             })
         })
         .collect()
+}
+
+/// Put the sections named in `ids` (comma-separated) into `fit`'s mounts in
+/// order, each slot filled with the biggest module of its kind that fits.
+fn refit_sections(fit: &mut retrox_sim::ship::Loadout, ids: &str) {
+    use retrox_content::ships::{MODULES, section};
+    for (mount, id) in ids.split(',').enumerate() {
+        let Some(s) = section(id.trim()) else {
+            eprintln!("--sections: no section {id}");
+            continue;
+        };
+        if let Err(e) = fit.set_section(mount, s) {
+            eprintln!("--sections: {id} won't go in mount {mount}: {e:?}");
+            continue;
+        }
+        for (i, slot) in s.slots.iter().enumerate() {
+            let best = MODULES
+                .iter()
+                .filter(|m| m.kind() == slot.kind && m.size <= slot.size)
+                .max_by_key(|m| m.size);
+            if let Some(m) = best {
+                let _ = fit.fit(mount, i, m);
+            }
+        }
+    }
 }
