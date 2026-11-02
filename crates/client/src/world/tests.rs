@@ -926,13 +926,19 @@ fn a_hostile_convoy_left_behind_leaves_the_scene() {
     world.enter_frame(Place::Convoy(key));
     world.ship.flight_assist = true;
     world.update(1.0 / 60.0, Controls::default());
-    assert!(world.combat.has_convoy(key), "its ships come into the scene");
+    assert!(
+        world.combat.has_convoy(key),
+        "its ships come into the scene"
+    );
     assert!(world.combat.raiders.iter().any(|r| r.hostile), "and fight");
     // Far off, out of their reach: they fly on, and the sim's fleet is
     // drawn again.
     world.ship.rel += DVec3::new(0.0, 200e3, 0.0);
     world.update(1.0 / 60.0, Controls::default());
-    assert!(!world.combat.has_convoy(key), "the convoy is still in the scene");
+    assert!(
+        !world.combat.has_convoy(key),
+        "the convoy is still in the scene"
+    );
 }
 
 #[test]

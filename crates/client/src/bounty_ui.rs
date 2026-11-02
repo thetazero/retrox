@@ -72,14 +72,12 @@ pub fn bounty_screen(
                     ui.add_space(8.0);
                     section(ui, "Wanted");
                     ui.label(
-                        RichText::new(
-                            format!(
-                                "warrants on pirate gangs within {} · the faction that posted \
+                        RichText::new(format!(
+                            "warrants on pirate gangs within {} · the faction that posted \
                                  a warrant pays it the moment a ship of the gang is destroyed · \
                                  gunships pay double",
-                                count(WANTED_JUMPS, "jump")
-                            ),
-                        )
+                            count(WANTED_JUMPS, "jump")
+                        ))
                         .size(11.0)
                         .color(CREAM_DIM),
                     );

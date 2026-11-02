@@ -66,11 +66,7 @@ fn system_resources(state: &GalaxyState, system: SystemId) -> Resources {
 /// Facilities and starting markets for every settlement.
 pub fn seed(rng: &mut Rng, state: &mut GalaxyState) {
     let mut holdings: SecondaryMap<FactionId, usize> = SecondaryMap::new();
-    for s in state
-        .settlements
-        .values()
-        .filter(|s| !state.is_port(s))
-    {
+    for s in state.settlements.values().filter(|s| !state.is_port(s)) {
         *holdings.entry(s.owner).unwrap().or_default() += 1;
     }
     let ids: Vec<SettlementId> = state.settlements.keys().collect();

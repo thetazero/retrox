@@ -518,7 +518,13 @@ fn review_gang(state: &mut GalaxyState, id: GangId) {
     let per_ship = (BOUNTY_BASE + BOUNTY_PER_T * gang.haul_t).min(BOUNTY_MAX);
     // What the whole gang would cost, a gunship at its double price.
     let ships: f64 = (gang.ships.iter())
-        .map(|h| if is_heavy(&hulls, h) { GUNSHIP_BOUNTY } else { 1.0 })
+        .map(|h| {
+            if is_heavy(&hulls, h) {
+                GUNSHIP_BOUNTY
+            } else {
+                1.0
+            }
+        })
         .sum();
     let current = gang
         .bounty
@@ -851,7 +857,8 @@ pub(crate) fn step(state: &mut GalaxyState) {
                         .expect("a hunt has a goal")
                     });
                     t += stretch;
-                    let prey_now = flight::add(prey.pos, flight::scale(prey.vel, t - SECONDS_PER_DAY));
+                    let prey_now =
+                        flight::add(prey.pos, flight::scale(prey.vel, t - SECONDS_PER_DAY));
                     caught = arrived.is_some()
                         || flight::length(flight::sub(next.ship.pos, prey_now)) < CATCH_M;
                 }

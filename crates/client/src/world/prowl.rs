@@ -427,8 +427,5 @@ fn segment_to_origin(a: DVec3, b: DVec3) -> f64 {
 
 /// What the HUD says when standing crosses into a new rank.
 pub fn rank_news(faction: &str, rank: Rank) -> String {
-    match rank {
-        Rank::Hostile => format!("The {faction} now count us hostile"),
-        r => format!("The {faction} now count us {}", r.name().to_lowercase()),
-    }
+    format!("The {faction} now count us {}", rank.name().to_lowercase())
 }

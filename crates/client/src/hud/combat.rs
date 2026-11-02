@@ -11,7 +11,6 @@ use super::{
 use crate::combat::Tactic;
 use crate::world::{Mode, World};
 
-
 /// A thin two-tone bar: `value` of it lit.
 fn bar(painter: &egui::Painter, rect: Rect, value: f32, color: Color32) {
     painter.rect_filled(rect, 0.0, VFD_DIM);

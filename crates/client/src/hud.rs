@@ -235,7 +235,11 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
             let dist = (c.pos - me).length();
             let hunting = c.aim == retrox_sim::pirates::Aim::Stalk;
             // A gang about its own business is a dimmer red.
-            let color = if hunting { ALARM } else { ALARM.gamma_multiply(0.7) };
+            let color = if hunting {
+                ALARM
+            } else {
+                ALARM.gamma_multiply(0.7)
+            };
             diamond(&painter, p, 4.5, color);
             if hunting {
                 diamond(&painter, p, 8.0, color.gamma_multiply(0.7));
@@ -516,7 +520,10 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
             let (title, detail) = match trip.leg {
                 Leg::To(place) => {
                     let d = w.distance_to(place);
-                    ("Fast travel", format!("{} · {}", w.name(place), distance(d)))
+                    (
+                        "Fast travel",
+                        format!("{} · {}", w.name(place), distance(d)),
+                    )
                 }
                 Leg::Intercept(fleet) => {
                     let company = w
