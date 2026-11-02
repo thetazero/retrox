@@ -9,7 +9,7 @@ use egui::{
 };
 use glam::{DVec3, Mat4, Vec4};
 use retrox_sim::economy::Good;
-use retrox_sim::{BodyKind, EconomyModel, SettlementId};
+use retrox_sim::{BodyKind, EconomyModel, SettlementId, SystemId};
 
 mod combat;
 pub(crate) mod guide;
@@ -375,6 +375,20 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
             )),
             _ => {}
         }
+        if let (Some(next), Some(dest)) = (prompts.jump, w.course) {
+            let next_name = &w.galaxy.systems[next].name;
+            lines.push((
+                Some("J"),
+                if next == dest {
+                    format!("jump to {next_name} · your course")
+                } else {
+                    format!(
+                        "jump to {next_name} · on course for {}",
+                        w.galaxy.systems[dest].name
+                    )
+                },
+            ));
+        }
         if let Some(s) = prompts.dock {
             lines.push((Some("F"), format!("dock at {}", w.name(Place::Station(s)))));
         }
@@ -432,6 +446,18 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
                         .set_state(egui::LayerId::new(egui::Order::Middle, nav_id), state)
                 });
             }
+        }
+        // A new course opens HYPERLANES, folded or not, so its ▶ lane and
+        // JUMP key are in sight (#188).
+        let lanes_id = egui::Id::unique("hyperlanes");
+        let course_seen = egui::Id::unique("hyperlanes-course");
+        if ctx.data(|d| d.get_temp::<Option<SystemId>>(course_seen)) != Some(w.course) {
+            ctx.data_mut(|d| {
+                d.insert_temp(course_seen, w.course);
+                if w.course.is_some() {
+                    d.insert_temp(lanes_id, true);
+                }
+            });
         }
         panel(
             ctx,
@@ -878,7 +904,8 @@ fn lanes_list(ui: &mut egui::Ui, w: &World, open_space: bool, actions: &mut Vec<
     if !open_space {
         ui.horizontal(|ui| {
             lamp(ui, "IN WELL", true, AMBER);
-            ui.label(RichText::new("leave the gravity well to jump").color(AMBER));
+            keycap(ui, "J");
+            ui.label(RichText::new("climbs out of the well to jump").color(AMBER));
         });
         ui.add_space(6.0);
     }

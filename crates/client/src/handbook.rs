@@ -122,7 +122,8 @@ fn first_steps(ui: &mut egui::Ui) {
         1,
         "Take a contract",
         "Open CONTRACTS on the city's menu. Each job pays to carry goods to a settlement that's \
-         short of them. ACCEPT one: the goods load and you leave a deposit. Then PLOT COURSE.",
+         short of them. ACCEPT one: the goods load, you leave a deposit, and your course is set \
+         for its system (PLOT COURSE sets it again if you change it).",
     );
     step(
         ui,
@@ -142,8 +143,9 @@ fn first_steps(ui: &mut egui::Ui) {
         ui,
         4,
         "Jump",
-        "The HYPERLANES panel marks the next lane of your course with ▶. Press JUMP. Days pass \
-         in a jump, and the galaxy moves on.",
+        "Out in open space, [J] jumps the next lane of your course; the HYPERLANES panel marks \
+         it with ▶ and its JUMP key does the same. Days pass in a jump, and the galaxy moves \
+         on. On a longer course, [J] again at each system.",
     );
     step(
         ui,
@@ -262,8 +264,10 @@ fn living(ui: &mut egui::Ui) {
         "Combat",
         "Pirate gangs hole up in asteroid fields away from faction capitals; NAVIGATION marks a \
          field where one lairs. They close in when you arrive, and they hunt: a gang that \
-         spots you in fast travel can pull you out of it. [LMB] or [R] fires every gun \
-         you carry; put the boresight on the red lead pip and the guns swing onto it. [Y] picks \
+         spots you in fast travel can pull you out of it. With hostiles within 20 km your \
+         guns are hot and [LMB] or [R] fires every gun you carry instead of the mining laser; \
+         [B] arms them by hand, to fire on a ship that isn't hostile (its faction won't forget). \
+         Put the boresight on the red lead pip and the guns swing onto it. [Y] picks \
          the next hostile. Shields soak hits first and come back once you stop taking them; \
          heat and power are shared, so burning hard and firing hot will lock your guns. Wrecks \
          spill salvage for the tractor. While raiders are near you can't fast travel, jump or \

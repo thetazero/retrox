@@ -1,9 +1,9 @@
 //! Combat (DESIGN §7.2): guns, shields and hulls, and the raiders who lurk
 //! in asteroid fields.
 //!
-//! **Guns.** The trigger fires every gun fitted to a weapon slot (mining
-//! lasers have their own gauge, and stand down while hostiles are near;
-//! see [`crate::mining`]). Autocannons throw shells at [`SHELL_SPEED`] on top of the ship's own velocity; lasers hit
+//! **Guns.** While the guns are hot (hostiles near, or armed by hand: see
+//! `World::guns_hot`) the trigger fires every gun fitted to a weapon slot;
+//! on safe it's the mining laser's alone (see [`crate::mining`]). Autocannons throw shells at [`SHELL_SPEED`] on top of the ship's own velocity; lasers hit
 //! along their line at once. Fixed guns swing up to [`GIMBAL`] to meet the
 //! target's lead, so a pilot who puts the nose on the lead pip hits.
 //!

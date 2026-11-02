@@ -230,7 +230,8 @@ pub struct Controls {
     pub strafe: f64,
     pub lift: f64,
     pub boost: bool,
-    /// The mining laser's trigger is held.
+    /// The trigger is held: the mining laser's, or the guns' while they
+    /// are hot (see [`World::guns_hot`]).
     pub fire: bool,
 }
 
@@ -282,6 +283,8 @@ pub enum Action {
     Intercept,
     /// Point the guns at the next hostile.
     CycleHostile,
+    /// Arm the guns by hand, or put them back on safe (issue #189).
+    ToggleGuns,
 }
 
 /// The screens of a station or city, while docked or landed.
@@ -313,6 +316,9 @@ pub struct Prompts {
     /// The well [J] would climb out of, when there's nowhere in it to
     /// fast travel to.
     pub climb: Option<Place>,
+    /// The next lane of the plotted course, which [J] jumps when there's
+    /// no target to fast travel to and the ship is in open space (#188).
+    pub jump: Option<SystemId>,
 }
 
 /// A market that buys a good, for the mining and skimming panels.
@@ -428,6 +434,9 @@ pub struct World {
     convoy_seen: Option<(retrox_sim::bubble::FleetKey, DVec3, DVec3, f64)>,
     /// When each trader fleet last took offence at our shots.
     complaints: std::collections::HashMap<retrox_sim::bubble::FleetKey, f64>,
+    /// The pilot armed the guns by hand ([B]): the trigger fires them even
+    /// with nobody hostile near. Safe again on docking or landing.
+    pub guns_armed: bool,
 }
 
 /// A wait in progress (DESIGN §3): docked or landed only, a day at a time,
@@ -545,6 +554,7 @@ impl World {
             travel_view: 0.0,
             travel_rot: DQuat::IDENTITY,
             complaints: Default::default(),
+            guns_armed: false,
             convoy_seen: None,
             player,
         };
@@ -920,6 +930,9 @@ impl World {
             if p.fast_travel.is_none() {
                 p.climb = well;
             }
+            if p.fast_travel.is_none() && well.is_none() && self.stats().drive_tier > 0 {
+                p.jump = self.next_hop();
+            }
         }
         p
     }
@@ -964,6 +977,13 @@ impl World {
                 self.target = Some(next.0);
                 self.landing = next.1;
             }
+            // With nothing to fast travel to in open space, [J] goes on
+            // along the plotted course: it jumps the next lane (#188).
+            Action::FastTravel if self.mode == Mode::Normal && prompts.jump.is_some() => {
+                if let Some(next) = prompts.jump {
+                    self.act(Action::Jump(next));
+                }
+            }
             Action::FastTravel => match (self.mode, prompts.fast_travel, prompts.climb) {
                 (Mode::Normal, _, _) if self.hostiles_near() > 0 => {
                     self.say("Can't fast travel: hostiles within 20 km");
@@ -979,6 +999,20 @@ impl World {
             },
             Action::Scan => self.scan(),
             Action::Intercept => self.intercept(),
+            Action::ToggleGuns => {
+                if self.combat.player.guns.is_empty() {
+                    self.say("No guns fitted");
+                } else {
+                    self.guns_armed = !self.guns_armed;
+                    self.say(if self.guns_armed {
+                        "Guns armed: the trigger fires them"
+                    } else if self.foes_near() {
+                        "Guns stay hot while hostiles are near"
+                    } else {
+                        "Guns safe: the trigger is the mining laser's"
+                    });
+                }
+            }
             Action::CycleHostile => {
                 let me = self.combat_position();
                 self.combat.cycle_target(me);
@@ -1162,6 +1196,19 @@ impl World {
                 match contracts::accept(&mut self.player, capacity, &mut self.galaxy, &offer) {
                     Ok(text) => {
                         self.board.remove(i);
+                        // Taking a job sets the course to it, as BUY & GO
+                        // does for a trade run (#188), unless the player
+                        // already has one plotted.
+                        let system = self.galaxy.settlements[offer.to].system;
+                        if self.course.is_none() && system != self.system {
+                            self.act(Action::PlotCourse(Some(system)));
+                        }
+                        let text = match self.course {
+                            Some(c) if c == system => {
+                                format!("{text} · course set for {}", self.galaxy.systems[c].name)
+                            }
+                            _ => text,
+                        };
                         self.say(text);
                     }
                     Err(text) => self.say(text),
@@ -1375,21 +1422,32 @@ impl World {
         self.settle_contracts();
         self.refresh_board();
         self.update_field();
+        if matches!(self.mode, Mode::Docked(_) | Mode::Landed { .. }) {
+            self.guns_armed = false;
+        }
         let trigger = controls.fire && self.mode == Mode::Normal && self.combat.lost.is_none();
-        // Mid-fight the trigger is the guns' alone.
-        let fighting = self.hostiles_near() > 0 && !self.combat.player.guns.is_empty();
-        // In a giant's skimming band the trigger opens the scoop instead.
+        // One trigger: the guns' while they're hot, else the mining laser's
+        // (or, in a giant's skimming band, the scoop's). Mining never fires
+        // a gun (issue #189).
+        let hot = self.guns_hot();
         let pass = self.skim_pass();
         let skimming = pass.is_some_and(|p| crate::skim::density(p.altitude_m) > 0.0);
-        self.mine(dt, trigger && !fighting && !skimming);
-        self.skim(dt, pass, trigger && !fighting);
+        self.mine(dt, trigger && !hot && !skimming);
+        self.skim(dt, pass, trigger && !hot);
         self.convoys();
-        self.fight(dt, trigger);
+        self.fight(dt, trigger && hot);
         self.repair_docked();
         self.update_camera(dt);
         let mut progress = std::mem::take(&mut self.player.progress);
         progress.observe(self);
         self.player.progress = progress;
+    }
+
+    /// Whether the trigger fires the guns: there are some, and a hostile
+    /// ship (running or not) is within [`crate::combat::HOSTILE_RANGE`] or
+    /// the pilot armed them by hand. Otherwise they're on safe (DESIGN §7.2.1).
+    pub fn guns_hot(&self) -> bool {
+        !self.combat.player.guns.is_empty() && (self.guns_armed || self.foes_near())
     }
 
     /// The ship's pass over a gas giant, if it's within twice the arrival

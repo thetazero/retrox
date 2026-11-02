@@ -156,8 +156,9 @@ pub fn draw(ctx: &egui::Context, h: &HudInput) {
         }
     }
 
-    // The guns' boresight: where they point, at the target's range.
-    if !c.player.guns.is_empty() {
+    // The guns' boresight: where they point, at the target's range. Only
+    // while they're hot: on safe the trigger is the laser's.
+    if !c.player.guns.is_empty() && h.world.guns_hot() {
         let range = c.target.and_then(|t| c.raider(t)).map_or(1500.0, |r| {
             (r.craft.pos - me.pos).length().clamp(200.0, 6000.0)
         });
@@ -271,9 +272,25 @@ pub fn gauges(ui: &mut egui::Ui, w: &World, width: f32) {
         .map(|i| v.parts[i].name)
         .collect();
     let starved = v.firing && v.gun_power < 0.98;
-    if v.locked || starved || !wrecked.is_empty() {
+    let armed = !v.guns.is_empty();
+    if armed || v.locked || starved || !wrecked.is_empty() {
         ui.add_space(4.0);
         ui.horizontal(|ui| {
+            // Whose the trigger is: the guns' while they're hot, else the
+            // mining laser's (DESIGN §7.2.1).
+            if armed {
+                let hot = w.guns_hot();
+                super::lamp(
+                    ui,
+                    if hot { "GUNS HOT" } else { "GUNS SAFE" },
+                    hot,
+                    if hot { ALARM } else { CREAM_DIM },
+                );
+                if !w.foes_near() {
+                    super::keycap(ui, "B");
+                    ui.label(RichText::new(if hot { "safe" } else { "arm" }).color(CREAM_DIM));
+                }
+            }
             if v.locked {
                 super::lamp(ui, "GUNS VENTING", true, ALARM);
             }

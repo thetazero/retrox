@@ -104,7 +104,10 @@ const FLIGHT_KEYS_INVERTED: &[KeyRow] = &[
 
 pub const TRAVEL_KEYS: &[KeyRow] = &[
     (&["T"], "next target"),
-    (&["J"], "fast travel · again: drop out"),
+    (
+        &["J"],
+        "fast travel · on a course: climb out, jump · again: drop out",
+    ),
     (&["F"], "dock at a station"),
     (&["L"], "land at a city"),
     (&["M"], "galaxy map"),
@@ -112,7 +115,8 @@ pub const TRAVEL_KEYS: &[KeyRow] = &[
 
 pub const WORK_KEYS: &[KeyRow] = &[
     (&["G"], "prospect: read the rocks"),
-    (&["LMB", "R"], "fire guns · mining laser · gas scoop"),
+    (&["LMB", "R"], "mining laser · gas scoop · guns when hot"),
+    (&["B"], "arm the guns / back on safe"),
     (&["Y"], "next hostile target"),
     (&["I"], "intercept the trader in your sights"),
     (&["V"], "cockpit / chase camera"),
@@ -236,16 +240,44 @@ pub fn hint(w: &World) -> Option<String> {
             Screen::Contracts if first.is_none() => {
                 let pick = "Pick a job and press ACCEPT: the goods load into your hold, and \
                             you're paid when they arrive.";
+                // ACCEPT plots the course only when none is set (#188).
+                let then = if w.course.is_none() {
+                    "Taking a job sets your course for it."
+                } else {
+                    "Then PLOT COURSE on it."
+                };
                 match nearest_job(w) {
                     Some(o) => format!(
-                        "{pick} The nearest, to {} ({}), pays soonest. Then PLOT COURSE.",
+                        "{pick} The nearest, to {} ({}), pays soonest. {then}",
                         w.galaxy.settlements[o.to].name,
                         crate::hud::jumps_text(o.jumps)
                     ),
-                    None => format!("{pick} Then PLOT COURSE."),
+                    None => format!("{pick} {then}"),
                 }
             }
-            Screen::Contracts => "Cargo aboard. [ESC] back to the menu, then LAUNCH.".into(),
+            // Taking a job plots its course (#188); say where it goes, and
+            // how to plot it if another course was kept.
+            Screen::Contracts => match &first {
+                Some((_, name, system)) if *system != w.system => {
+                    let there = &w.galaxy.systems[*system].name;
+                    let jumps = w
+                        .route(*system)
+                        .map(|r| format!(" ({})", crate::hud::jumps_text(r.len() as u32 - 1)))
+                        .unwrap_or_default();
+                    if w.course == Some(*system) {
+                        format!(
+                            "Cargo aboard for {name}. Your course is set for {there}{jumps}: \
+                             [ESC] back to the menu, then LAUNCH."
+                        )
+                    } else {
+                        format!(
+                            "Cargo aboard for {name}, in {there}{jumps}. Press PLOT COURSE on \
+                             it, then [ESC] back to the menu and LAUNCH."
+                        )
+                    }
+                }
+                _ => "Cargo aboard. [ESC] back to the menu, then LAUNCH.".into(),
+            },
             Screen::Trade if selling_here => "Your cargo sells best here: press ALL in the \
                  teal SELL bank on its row."
                 .into(),
@@ -313,7 +345,8 @@ pub fn hint(w: &World) -> Option<String> {
                                       its edge, where you can jump or fast travel on."
                     .into(),
                 Leg::Intercept(_) => "Intercepting: the autopilot brings you alongside the \
-                                      convoy. Shooting it makes its faction hostile."
+                                      convoy. [B] arms the guns; shooting it makes its \
+                                      faction hostile."
                     .into(),
             });
         }
@@ -346,22 +379,36 @@ pub fn hint(w: &World) -> Option<String> {
         );
     }
     let well = prompts.well.map(|p| w.name(p));
-    // On a plotted course: out of the well, then onto the lane.
-    let jump = || match &well {
-        Some(well) => {
+    // On a plotted course: out of the well, then onto the lane, with [J]
+    // both times (#188).
+    let jump = || match (&well, prompts.jump) {
+        (Some(well), _) => {
             format!("Jumps need open space: [J] to climb out of the gravity well of {well}.")
         }
-        None => "Clear to jump: press JUMP on the ▶ lane in HYPERLANES.".to_owned(),
+        (None, Some(next)) => format!(
+            "Clear to jump: [J] jumps the lane to {}, or press JUMP on the ▶ lane in \
+             HYPERLANES.",
+            w.galaxy.systems[next].name
+        ),
+        (None, None) => "Clear to jump: press JUMP on the ▶ lane in HYPERLANES.".to_owned(),
     };
     if let Some((to, name, system)) = &first {
         if *system != w.system {
             let there = &w.galaxy.systems[*system].name;
+            let jumps = w
+                .route(*system)
+                .map(|r| format!(" ({})", crate::hud::jumps_text(r.len() as u32 - 1)))
+                .unwrap_or_default();
             return Some(if w.course == Some(*system) {
-                jump()
-            } else {
                 format!(
-                    "{bound_for} {name}, in {there}. Open the galaxy map [M] and click \
-                     {there} to plot a course."
+                    "{bound_for} {name}, in {there}{jumps}: course set. {}",
+                    jump()
+                )
+            } else {
+                // The system is a link: a click plots the course (#165).
+                format!(
+                    "{bound_for} {name}, in {{{there}}}{jumps}: click it to plot a course, or \
+                     find it on the galaxy map [M]."
                 )
             });
         }
@@ -509,6 +556,48 @@ mod tests {
         let hint = hint(&w).expect("a hint");
         let name = &w.galaxy.settlements[nearest.to].name;
         assert!(hint.contains(name.as_str()), "{hint}");
+    }
+
+    /// Issue #188: after taking a job, every hint on the way names the
+    /// destination system and the next key, docked and in flight.
+    #[test]
+    fn contract_hints_lead_to_the_destination() {
+        use crate::world::Action;
+        let mut w = World::new(1);
+        w.screen = Screen::Contracts;
+        let i = w
+            .board
+            .iter()
+            .position(|o| w.galaxy.settlements[o.to].system != w.system)
+            .expect("a job in another system");
+        let dest = w.galaxy.settlements[w.board[i].to].system;
+        let there = w.galaxy.systems[dest].name.clone();
+        w.act(Action::AcceptContract(i));
+        let h = hint(&w).unwrap();
+        assert!(h.contains(&there) && h.contains("course is set"), "{h}");
+
+        // With the course cleared, the board says to plot it.
+        w.act(Action::PlotCourse(None));
+        let h = hint(&w).unwrap();
+        assert!(h.contains("PLOT COURSE"), "{h}");
+
+        // Launched without a course: the system is a link to plot it.
+        w.act(Action::Launch);
+        let h = hint(&w).unwrap();
+        assert!(h.contains(&format!("{{{there}}}")), "{h}");
+
+        // On course, in the well: [J] climbs.
+        w.act(Action::PlotCourse(Some(dest)));
+        let h = hint(&w).unwrap();
+        assert!(h.contains("[J] to climb"), "{h}");
+
+        // In open space: [J] jumps.
+        w.ship.frame = Place::Star;
+        w.ship.rel = glam::DVec3::new(0.0, 5.0 * crate::world::AU, 0.0);
+        w.target = None;
+        assert!(w.prompts().jump.is_some());
+        let h = hint(&w).unwrap();
+        assert!(h.contains("[J] jumps"), "{h}");
     }
 
     #[test]

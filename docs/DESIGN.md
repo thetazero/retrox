@@ -525,6 +525,20 @@ Wells cost **galaxy time and a stop**, not real minutes (pillar 4):
   the player's and NPCs': plumes lit by thrust along the nose, dark while
   turning over or holding still.
 
+#### 7.1.3 Following a course with [J]
+
+- **Taking work sets the course.** ACCEPT on a contract plots the course
+  to its system, as BUY & GO does for a trade run (§7.8.1), unless a
+  course is already set.
+- **[J] is the one key for going on.** Inside a well it climbs out
+  (§7.1.1); with a target in reach it fast travels; in open space on a
+  course with nothing to fast travel to, it jumps the course's next lane,
+  one [J] per system. A target picked in the system comes first, and the
+  prompt strip says which [J] will do.
+- **HYPERLANES opens whenever a new course is set**, so the next lane is
+  in sight. Hints and the course panel name the destination system and
+  the next key at every step.
+
 ### 7.2 Combat
 
 - Small/medium ships: direct dogfighting.
@@ -534,13 +548,18 @@ Wells cost **galaxy time and a stop**, not real minutes (pillar 4):
 
 #### 7.2.1 Dogfighting
 
-- **Guns.** The trigger (LMB or R) fires every gun. Fixed guns swing a few
-  degrees to meet the target's lead, so putting the boresight on the HUD's
-  **lead pip** hits. Y picks the next hostile; the nearest is picked for
-  you.
-- **Mining never fires the guns.** The mining laser and the guns are
-  separate, so a miner cutting rock never hits anyone near the field.
-  Today the trigger fires both while no hostile is near (#189).
+- **Guns are safe or hot** (#189). One trigger (LMB or R). On safe it is
+  the mining laser's or the gas scoop's and no gun fires, so mining never
+  hits anyone near a field. The guns go hot, and the trigger is theirs
+  alone, while a ship fighting the player or a pirate running from it is
+  near, or when the pilot arms them by hand with [B] to fire on a ship
+  that isn't hostile (the Pirate path, §7.2.2); [B] again, docking or
+  landing makes them safe. A hostile faction's traders passing by don't
+  make them hot. The flight panel shows which, and the boresight shows
+  only while hot.
+- **Aiming.** Fixed guns swing a few degrees to meet the target's lead, so
+  putting the boresight on the HUD's **lead pip** hits. Y picks the next
+  hostile; the nearest is picked for you.
 - **Budgets (§7.4) in flight.** Engines, shields and guns draw power and
   make heat by what they're doing; the reactor feeds the guns last, so an
   over-budget fit fires slower while it burns and recharges, and heat the
@@ -720,7 +739,7 @@ Hour-to-hour work for the Trader path (§2), drawn from the economy, never
 from a random generator (pillar 5).
 
 - **Where they come from.** A settlement's dispatch board pairs a good it
-  can spare with a settlement within a few jumps that is short of it,
+  can spare with a settlement one to a few jumps away that is short of it,
   counting what traders already have on the way, so goods flow from
   fuller markets to emptier ones. Lots are sized to the player's hold.
   Boards change daily as markets do; some days a port has nothing.
@@ -729,9 +748,14 @@ from a random generator (pillar 5).
   pilot's first payment comes after one jump, not five.
 - **Who pays, and what.** The consignee buys the goods at the origin's
   price and pays the fee from its own treasury, only what it can afford.
-  The fee is a hauler's wage, not the trade's profit: the price gap and
-  any delivery premium belong to whoever buys the goods and carries them
-  at their own risk (§7.8). The wage must still feel worth the trip.
+  The fee pays what the galaxy's haulers cost for the days the trip
+  takes, its lanes and a day of handling (§5.4.1); a deadline's slack
+  isn't paid. A hop within one system is a few credits of carriage, so no
+  board posts one: that is local shuttle work. The fee is a wage, not the
+  trade's profit: the price gap and any delivery premium belong to
+  whoever buys the goods and carries them at their own risk (§7.8). The
+  wage must still feel worth the trip; today it is tens of credits a job,
+  and what contracts should pay for is an open question (§11).
 - **Deposit.** Taking a contract costs a deposit of the cargo's value,
   returned on delivery. Contract cargo rides in the hold but can't be
   sold.
@@ -792,9 +816,9 @@ own numbers.
   A trader who guesses wrong should lose money.
 - **No career dominates.** Contracts pay surely but modestly; trading pays
   most for skill and judgement, and can lose; mining needs no capital and
-  never meets a bare board; bounties pay for risk. Today trading in a
-  courier out-earns everything many times over, and mining trails
-  contracts well behind (#149).
+  never meets a bare board; bounties pay for risk. Pay comes from the sim,
+  never from rates tuned to a target. Today trading out-earns everything
+  many times over, because short markets never fill (#196).
 - **The ladder is long.** Ships cost about twice their materials, and NPCs
   pay the same. A new pilot owns the courier and a little money: enough
   for a first deposit or a hold of cargo, not another ship. The next small
@@ -805,8 +829,9 @@ own numbers.
   more lasers and a bigger hold, not only by a bigger ship.
 - **Measured** with the career bench (`cargo test -p retrox-client careers
   -- --ignored --nocapture`): bots play an hour of each career in a fresh
-  game, paying the travel a player pays. It is the check for every rule in
-  this section.
+  game, paying the travel a player pays. Bots work far faster than a
+  person (a contract a minute), so what a person earns is the bench's pay
+  per job at a human pace, not its pay per hour.
 
 #### 7.8.1 Trade runs
 
@@ -1117,3 +1142,5 @@ retrox/
 - How many lane tiers, and how lanes are split between them.
 - How historical figures are generated (lifespans, which events earn a
   name).
+- What a freight contract should pay for: hauling at the galaxy's cheap
+  carriage rates pays tens of credits a job.

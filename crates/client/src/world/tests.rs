@@ -508,6 +508,61 @@ fn a_plotted_course_is_followed_hop_by_hop() {
     assert_eq!(world.course, None, "no course to where you are");
 }
 
+/// Issue #188: taking a contract sets its course, and from the launch
+/// [J] alone gets the ship there: up out of the well, then lane by lane.
+#[test]
+fn a_contract_is_reached_with_j_alone() {
+    let mut world = World::new(1);
+    let i = world
+        .board
+        .iter()
+        .position(|o| world.galaxy.settlements[o.to].system != world.system)
+        .expect("a job in another system");
+    let dest = world.galaxy.settlements[world.board[i].to].system;
+    world.act(Action::AcceptContract(i));
+    assert_eq!(world.course, Some(dest), "ACCEPT plots the course");
+
+    world.act(Action::Launch);
+    assert!(world.prompts().climb.is_some(), "launched inside a well");
+    assert_eq!(world.prompts().jump, None, "no jumping from in the well");
+    for _ in 0..20 {
+        if world.system == dest {
+            break;
+        }
+        world.act(Action::FastTravel);
+        assert_ne!(world.mode, Mode::Normal, "[J] does something");
+        for _ in 0..600 {
+            run(&mut world, 1.0);
+            if world.mode == Mode::Normal {
+                break;
+            }
+        }
+    }
+    assert_eq!(world.system, dest);
+    assert_eq!(world.course, None);
+}
+
+/// A course kept from before isn't replaced by taking a job.
+#[test]
+fn accepting_keeps_a_course_already_plotted() {
+    let mut world = World::new(1);
+    let i = world
+        .board
+        .iter()
+        .position(|o| world.galaxy.settlements[o.to].system != world.system)
+        .expect("a job in another system");
+    let dest = world.galaxy.settlements[world.board[i].to].system;
+    let other = world
+        .lanes()
+        .into_iter()
+        .map(|l| l.to)
+        .find(|&s| s != dest)
+        .expect("another lane");
+    world.act(Action::PlotCourse(Some(other)));
+    world.act(Action::AcceptContract(i));
+    assert_eq!(world.course, Some(other));
+}
+
 #[test]
 fn the_starting_board_carries_real_shortages() {
     for seed in 1..=3 {
@@ -1275,6 +1330,107 @@ fn with_hostiles_near_the_trigger_fires_the_guns_and_not_the_mining_laser() {
         lasing |= world.mining.firing;
     }
     assert!(lasing, "with nobody near, the trigger cuts rock");
+}
+
+#[test]
+fn mining_never_fires_the_guns() {
+    // Issue #189: the courier's autocannon went off with every cut, so a
+    // new miner could shoot the harvester crews and traders around them.
+    let mut world = World::new(1);
+    assert!(world.start_at_field());
+    assert!(
+        !world.combat.player.guns.is_empty(),
+        "the courier has a gun"
+    );
+    assert_eq!(world.hostiles_near(), 0);
+    world.act(Action::Scan);
+    let factions: Vec<_> = world.galaxy.factions.iter().map(|(id, _)| id).collect();
+    let standing =
+        |w: &World| -> Vec<f64> { factions.iter().map(|&f| w.player.standing.get(f)).collect() };
+    let before = standing(&world);
+    let fire = Controls {
+        fire: true,
+        ..Default::default()
+    };
+    let mut lasing = false;
+    for _ in 0..(20 * 60) {
+        world.update(1.0 / 60.0, fire);
+        lasing |= world.mining.firing;
+        assert!(!world.guns_hot(), "the guns stay on safe");
+    }
+    assert!(lasing, "the trigger cuts rock");
+    let t = world.combat.tally;
+    assert_eq!((t.fired, t.lasers), (0, 0), "no gun fired");
+    assert_eq!(standing(&world), before, "no standing lost");
+}
+
+#[test]
+fn armed_by_hand_the_trigger_fires_the_guns() {
+    let mut world = World::new(1);
+    assert!(world.start_at_field());
+    assert_eq!(world.hostiles_near(), 0);
+    world.act(Action::ToggleGuns);
+    assert!(world.guns_hot(), "{}", said(&world));
+    let fire = Controls {
+        fire: true,
+        ..Default::default()
+    };
+    for _ in 0..30 {
+        world.update(1.0 / 60.0, fire);
+        assert!(!world.mining.firing, "the laser stands down");
+    }
+    assert!(world.combat.tally.fired > 0, "the guns fire");
+    // And back on safe, the trigger is the laser's again.
+    world.act(Action::ToggleGuns);
+    assert!(!world.guns_hot());
+    let mut lasing = false;
+    for _ in 0..30 {
+        world.update(1.0 / 60.0, fire);
+        lasing |= world.mining.firing;
+    }
+    assert!(lasing);
+}
+
+#[test]
+fn a_running_raider_can_still_be_shot() {
+    let mut world = among_raiders();
+    for r in &mut world.combat.raiders {
+        r.tactic = crate::combat::Tactic::Flee;
+    }
+    // Running, it no longer holds the ship from fast travel...
+    assert_eq!(world.hostiles_near(), 0);
+    // ...but the guns stay hot to finish it.
+    assert!(world.guns_hot());
+}
+
+#[test]
+fn a_hostile_factions_traders_running_by_dont_stop_mining() {
+    let mut world = World::new(1);
+    assert!(world.start_by_traffic(), "seed 1 has traffic");
+    let key = world
+        .traffic
+        .contacts
+        .iter()
+        .max_by_key(|c| c.ships)
+        .unwrap()
+        .key;
+    world.enter_frame(Place::Convoy(key));
+    world.update(1.0 / 60.0, Controls::default());
+    assert!(
+        world
+            .combat
+            .raiders
+            .iter()
+            .any(|r| r.trader_fleet().is_some())
+    );
+    for r in &mut world.combat.raiders {
+        r.hostile = true;
+        r.tactic = crate::combat::Tactic::Flee;
+    }
+    assert!(!world.guns_hot(), "running traders leave the guns on safe");
+    // One that turns to fight heats them.
+    world.combat.raiders[0].tactic = crate::combat::Tactic::Attack;
+    assert!(world.guns_hot());
 }
 
 #[test]
