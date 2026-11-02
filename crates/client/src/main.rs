@@ -40,6 +40,8 @@ fn main() {
     event_loop.set_control_flow(ControlFlow::Poll);
     let undocked = std::env::args().any(|a| a == "--undocked");
     let station = std::env::args().any(|a| a == "--station");
+    // `--map`: start with the galaxy map open.
+    let map = std::env::args().any(|a| a == "--map");
     // `--ship <hull>`: start in that stock ship instead (for testing).
     let ship = std::env::args().skip_while(|a| a != "--ship").nth(1);
     // `--screenshot <path.ppm>`: save the 90th frame and quit (for checking
@@ -52,6 +54,7 @@ fn main() {
         seed,
         undocked,
         station,
+        map,
         ship,
         screenshot,
         running: None,
@@ -65,6 +68,8 @@ struct App {
     undocked: bool,
     /// Start docked at a station, in the first system that has one.
     station: bool,
+    /// Start with the galaxy map open.
+    map: bool,
     ship: Option<String>,
     screenshot: Option<std::path::PathBuf>,
     running: Option<Running>,
@@ -139,6 +144,8 @@ impl ApplicationHandler for App {
             world.cam_rot = world.ship.rot;
         }
 
+        world.map_open = self.map;
+
         let meshes = Meshes {
             sphere: renderer.add_mesh(&meshes::icosphere(5)),
             ship: MeshId::default(),
@@ -211,7 +218,7 @@ impl ApplicationHandler for App {
                 state: ElementState::Pressed,
                 button: MouseButton::Left,
                 ..
-            } if !consumed && !r.captured && r.world.mode == Mode::Normal => {
+            } if !consumed && !r.captured && r.world.mode == Mode::Normal && !r.world.map_open => {
                 r.set_captured(true);
             }
             WindowEvent::Focused(false) => r.set_captured(false),
@@ -297,6 +304,7 @@ impl Running {
                 KeyCode::KeyT => Some(Action::CycleTarget),
                 KeyCode::KeyV => Some(Action::ToggleCamera),
                 KeyCode::KeyZ => Some(Action::ToggleFlightAssist),
+                KeyCode::KeyM => Some(Action::ToggleMap),
                 KeyCode::KeyX => {
                     self.world.ship.throttle = 0.0;
                     None
@@ -305,6 +313,7 @@ impl Running {
                     self.set_captured(!self.captured);
                     None
                 }
+                KeyCode::Escape if self.world.map_open => Some(Action::ToggleMap),
                 KeyCode::Escape => {
                     self.set_captured(false);
                     // Back out of a docked screen to the menu.
@@ -357,7 +366,7 @@ impl Running {
             self.world.act(a);
         }
         self.world.update(dt, controls);
-        if self.world.mode != Mode::Normal && self.captured {
+        if (self.world.mode != Mode::Normal || self.world.map_open) && self.captured {
             self.set_captured(false);
         }
 

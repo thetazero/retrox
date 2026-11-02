@@ -10,6 +10,8 @@ use egui::{
 use glam::{DVec3, Mat4, Vec4};
 use retrox_sim::{BodyKind, EconomyModel};
 
+mod map;
+
 use crate::world::{AU, Action, COMBAT_SPEED, Mode, Place, SECONDS_PER_DAY, World};
 
 /// Enamel cream: body text and rules.
@@ -131,6 +133,11 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
     let mut actions = Vec::new();
     let w = h.world;
     let screen = ctx.content_rect();
+
+    if w.map_open && w.map_available() {
+        map::draw(ctx, w, &mut actions);
+        return actions;
+    }
 
     // Markers for every place; labels placed nearest-first (target always
     // first) and skipped where they'd overlap one already drawn.
@@ -341,12 +348,17 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
                 if !open_space {
                     ui.label(RichText::new("leave the gravity well to jump").color(AMBER));
                 }
+                let next_hop = w.next_hop();
                 egui::Grid::new("lanes")
                     .num_columns(3)
                     .spacing([12.0, 4.0])
                     .show(ui, |ui| {
                         for lane in w.lanes() {
-                            ui.label(&lane.name);
+                            if next_hop == Some(lane.to) {
+                                ui.label(RichText::new(format!("▶ {}", lane.name)).color(AMBER));
+                            } else {
+                                ui.label(&lane.name);
+                            }
                             ui.label(
                                 RichText::new(format!(
                                     "{:.1} ly · {:.0} d",
@@ -363,6 +375,19 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
                             ui.end_row();
                         }
                     });
+                if let Some(dest) = w.course {
+                    ui.label(
+                        RichText::new(format!("course plotted to {}", w.galaxy.systems[dest].name))
+                            .color(AMBER),
+                    );
+                }
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    keycap(ui, "M");
+                    if ui.button("GALAXY MAP").clicked() {
+                        actions.push(Action::ToggleMap);
+                    }
+                });
             },
         );
         panel(
@@ -503,9 +528,9 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
         .show(ctx, |ui| {
             let text = if h.captured {
                 "mouse steer · W/S throttle · X stop · A/D strafe · SPACE/CTRL lift · Q/E roll · SHIFT boost\n\
-                 J fast travel · T next target · V camera · Z flight assist · TAB free mouse"
+                 J fast travel · T next target · M galaxy map · V camera · Z flight assist · TAB free mouse"
             } else {
-                "TAB or click the view to fly with the mouse · arrow keys also steer"
+                "TAB or click the view to fly with the mouse · arrow keys also steer · M galaxy map"
             };
             ui.label(RichText::new(text).size(11.0).color(CREAM_DIM));
         });
