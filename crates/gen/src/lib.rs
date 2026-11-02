@@ -89,6 +89,7 @@ pub fn generate(seed: u64, config: &GalaxyConfig) -> GalaxyState {
     haulers::raider_hulls(&mut state);
     // Until prehistory grows them, some crews have already gone over.
     retrox_sim::pirates::seed(&mut state, PIRATE_SHARE);
+    retrox_sim::politics::refresh_all(&mut state);
     state
 }
 
@@ -107,6 +108,7 @@ pub fn generate_cradle(seed: u64, config: &GalaxyConfig) -> GalaxyState {
     haulers::seed(&mut Rng::derive(seed, "companies"), &mut state, &classes);
     haulers::seed_harvesters(&mut Rng::derive(seed, "harvesters"), &mut state, &classes);
     haulers::raider_hulls(&mut state);
+    retrox_sim::politics::refresh_all(&mut state);
     state
 }
 

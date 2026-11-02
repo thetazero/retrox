@@ -85,6 +85,7 @@ pub fn found(rng: &mut Rng, state: &mut GalaxyState) {
                 population: port_population,
                 ..LocalEconomy::default()
             },
+            to_capital: None,
         });
         state.history.record(
             founded,

@@ -24,6 +24,11 @@ pub struct Settlement {
     pub name: String,
     pub founded: GalaxyTime,
     pub economy: LocalEconomy,
+    /// How far it is from its faction's capital, along the lanes; `None`
+    /// if the lanes don't join them, or if it hasn't been worked out (see
+    /// [`crate::politics`]).
+    #[serde(default)]
+    pub to_capital: Option<crate::politics::ToCapital>,
 }
 
 /// Where a settlement is.

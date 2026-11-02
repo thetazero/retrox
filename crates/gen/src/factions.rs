@@ -134,6 +134,7 @@ pub fn found(rng: &mut Rng, state: &mut GalaxyState, territory: &Territory, popu
                 population,
                 ..LocalEconomy::default()
             },
+            to_capital: None,
         });
         let faction = &mut state.factions[owner];
         // An independent's only settlement is its capital.

@@ -262,8 +262,12 @@ pub fn decode(bytes: &[u8]) -> Result<Loaded, String> {
     };
     let state: PlayerState =
         serde_json::from_str(lines.next().unwrap_or("")).map_err(unreadable)?;
-    let galaxy: GalaxyState =
+    let mut galaxy: GalaxyState =
         serde_json::from_str(lines.next().unwrap_or("")).map_err(unreadable)?;
+    // Saves from before settlements stored how far their capital is.
+    if galaxy.settlements.values().any(|s| s.to_capital.is_none()) {
+        retrox_sim::politics::refresh_all(&mut galaxy);
+    }
     if galaxy.systems.get(state.system).is_none() {
         return Err("This save is damaged: its system isn't in its galaxy.".to_owned());
     }

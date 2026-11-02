@@ -104,6 +104,7 @@ pub fn found(rng: &mut Rng, state: &mut GalaxyState, config: &GalaxyConfig) -> V
                 population: rng.range(NATION_POPULATION.0, NATION_POPULATION.1),
                 ..LocalEconomy::default()
             },
+            to_capital: None,
         });
         state.factions[faction].capital = capital;
         state.history.record(

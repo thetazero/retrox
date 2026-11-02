@@ -474,7 +474,9 @@ pub fn arrive(state: &mut GalaxyState) {
             name: ship.name,
             founded: now,
             economy,
+            to_capital: None,
         });
+        crate::politics::founded(state, settlement);
         ledger::pay(
             state,
             Account::Colony(key),

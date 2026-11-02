@@ -58,6 +58,7 @@ fn small_galaxy() -> GalaxyState {
             population: 10.0,
             ..LocalEconomy::default()
         },
+        to_capital: None,
     });
     state.factions[faction].capital = capital;
     state.add_settlement(Settlement {
@@ -67,6 +68,7 @@ fn small_galaxy() -> GalaxyState {
         name: "Polaris Station".into(),
         founded: GalaxyTime::ZERO,
         economy: LocalEconomy::default(),
+        to_capital: None,
     });
     state
 }
