@@ -23,18 +23,21 @@ pub enum Decision {
     Harvest,
     /// A settlement's review of whether a pirate gang forms there.
     Pirates,
+    /// A settlement's review of its loyalty to its faction.
+    Politics,
     /// Refreshing one system's trade lists.
     TradeLists,
 }
 
 impl Decision {
-    pub const ALL: [Decision; 7] = [
+    pub const ALL: [Decision; 8] = [
         Decision::Construction,
         Decision::Colonization,
         Decision::Founding,
         Decision::Route,
         Decision::Harvest,
         Decision::Pirates,
+        Decision::Politics,
         Decision::TradeLists,
     ];
 
@@ -46,6 +49,7 @@ impl Decision {
             Decision::Route => "route",
             Decision::Harvest => "harvest",
             Decision::Pirates => "pirates",
+            Decision::Politics => "politics",
             Decision::TradeLists => "trade lists",
         }
     }

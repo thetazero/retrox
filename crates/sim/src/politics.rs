@@ -133,11 +133,13 @@ pub fn update(state: &mut GalaxyState) {
         let Some(id) = state.settlements.key_at(i) else {
             continue;
         };
-        let s = &state.settlements[id];
-        let distance = from_capital(state, s.owner, s.system);
-        let target = target(state, id, distance);
-        let s = &mut state.settlements[id];
-        s.stability += (target - s.stability) * rate;
+        crate::decisions::time(crate::decisions::Decision::Politics, || {
+            let s = &state.settlements[id];
+            let distance = from_capital(state, s.owner, s.system);
+            let target = target(state, id, distance);
+            let s = &mut state.settlements[id];
+            s.stability += (target - s.stability) * rate;
+        });
     }
     if state.time.day_of_year() == SECESSION_DAY {
         secessions(state);

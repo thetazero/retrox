@@ -324,11 +324,12 @@ times each kind of decision.
   count of settled places that caps gangs is kept until a settlement is
   founded, and a gang choosing a lair reads fields from an index by
   system instead of scanning every field.
-- **Politics** isn't built yet, but each settlement already stores its
-  lane distance to its capital (`to_capital`): worked out when it is
-  founded, and again only when its owner or its faction's capital
-  changes (`politics::set_owner`, `set_capital`), never at a review.
-  Saves made before it was stored work it out on loading.
+- **Politics** (§5.5.1, #18) reads a settlement's distance to its
+  capital from a table of lane distances from that capital's system to
+  every system, made once per capital system and kept (the lanes never
+  change). That stands in for storing the distance on each settlement:
+  a changed capital or owner reads another table, and nothing is
+  searched at a review.
 - **Where it stands** (seed 0, static galaxy of ~4,450 settlements, one
   core, ns per decision, before → after):
 
@@ -340,6 +341,7 @@ times each kind of decision.
   | colonization | 1,260 | 310 |
   | pirates (now every due settlement, ports included) | 6,900 | 310 |
   | construction | 330 | 310 |
+  | politics (#18, already from tables) | — | 150 |
   | harvester's run (unchanged) | 1,770 | 1,710 |
 
   A day went from 3.1 to 1.8 ms: planning from 115 to 35 ns per

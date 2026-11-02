@@ -23,6 +23,7 @@ fn settle(state: &mut retrox_sim::GalaxyState, system: SystemId, site: retrox_si
         name: "Test".into(),
         founded: GalaxyTime::ZERO,
         economy: Default::default(),
+        stability: 1.0,
     });
 }
 
