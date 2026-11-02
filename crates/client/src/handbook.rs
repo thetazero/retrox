@@ -278,7 +278,11 @@ fn living(ui: &mut egui::Ui) {
         ui,
         "Ships",
         "The HANGAR refits your ship (cargo racks, radiators, reactors, drives); the SHIPYARD \
-         sells new hulls. Ships you leave behind wait in storage where you left them.",
+         sells new hulls. Only the big industrial settlements build ships. To find one, open \
+         the star chart [M]: NEAREST SHIPYARDS lists the closest, with what each has on the lot; \
+         click one to plot a course. In NAVIGATION a YARD tag marks them in this system, and a \
+         station's menu names the nearest when it has none. Every shipyard refits too. Ships \
+         you leave behind wait in storage where you left them.",
     );
     topic(
         ui,

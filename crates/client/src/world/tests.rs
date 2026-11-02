@@ -1382,3 +1382,32 @@ fn navigation_puts_stations_up_top_and_shortens_field_names() {
         "two fields read the same"
     );
 }
+
+/// Issue #161: the nearest shipyards are places the player can reach (a
+/// station or a city, never a surface camp), quickest first, and each
+/// sells ships; a city with none names one.
+#[test]
+fn nearest_shipyards_are_reachable_and_ordered() {
+    for seed in 1..=4 {
+        let world = World::new(seed);
+        let yards = world.nearest(Service::Shipyard, 4);
+        assert!(!yards.is_empty(), "seed {seed}: no shipyard in reach");
+        for pair in yards.windows(2) {
+            assert!(pair[0].days <= pair[1].days, "seed {seed}: out of order");
+        }
+        for y in &yards {
+            let st = &world.galaxy.settlements[y.at];
+            assert!(
+                !matches!(st.site, Site::Surface(_)),
+                "seed {seed}: {}",
+                st.name
+            );
+            assert!(crate::hangar::services(&st.economy).shipyard);
+            assert_eq!(st.system, y.system);
+            let route = world.route(y.system).expect("a route there");
+            assert_eq!(route.len() as u32 - 1, y.jumps, "seed {seed}: jumps");
+        }
+        let refits = world.nearest(Service::Refit, 1);
+        assert!(!refits.is_empty(), "seed {seed}: nowhere to refit");
+    }
+}
