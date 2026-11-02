@@ -5,7 +5,7 @@ use egui::{Align2, Color32, Pos2, Rect, RichText, Sense, Stroke, Vec2};
 use retrox_sim::economy::Good;
 
 use super::{
-    ALARM, AMBER, CREAM, CREAM_DIM, HudInput, Panel, RULE, VFD, VFD_DIM, credits, glow_label,
+    ALARM, AMBER, CREAM, CREAM_DIM, HudInput, Panel, RULE, VFD, VFD_DIM, glow_label,
     keycap, lamp, mono, panel, segment_bar, tag,
 };
 use crate::skim::{self, BAND_M};
@@ -106,16 +106,7 @@ pub fn draw(ctx: &egui::Context, h: &HudInput) {
                     tag(ui, "gas", GAS);
                     ui.label(RichText::new(format!("{t:.1} t skimmed")).color(CREAM));
                 });
-                if let Some((price, at)) = w.best_local_price(Good::Gas) {
-                    ui.label(
-                        RichText::new(format!(
-                            "≈ {} at {} ({price:.1}/t)",
-                            credits(t * price),
-                            w.name(Place::Station(at))
-                        ))
-                        .color(CREAM_DIM),
-                    );
-                }
+                super::mining::buyers(ui, w, Good::Gas, w.player.cargo[Good::Gas].max(t));
                 ui.add_space(4.0);
             }
             ui.horizontal(|ui| {

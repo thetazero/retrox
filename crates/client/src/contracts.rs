@@ -121,16 +121,18 @@ pub fn deliver(player: &mut Player, galaxy: &mut GalaxyState, here: SettlementId
         economy.treasury += o.fee - pay - o.value;
         player.credits += o.value + pay;
         let late = today.days().saturating_sub(o.deadline.days());
+        // The deposit comes back too: say so, so the purse's jump adds up.
+        let deposit = crate::hud::credits(o.value);
         said.push(if late == 0 {
             format!(
-                "Delivered {:.0} t of {}: paid {}",
+                "Delivered {:.0} t of {}: paid {}, and the {deposit} deposit back",
                 o.amount,
                 o.good.name(),
                 crate::hud::credits(pay)
             )
         } else {
             format!(
-                "Delivered {late} d late: paid {} of {}",
+                "Delivered {late} d late: paid {} of {}, and the {deposit} deposit back",
                 crate::hud::credits(pay),
                 crate::hud::credits(o.fee)
             )
