@@ -54,6 +54,9 @@ pub struct GalaxyState {
     /// The agent tier around the player; see [`crate::bubble`].
     #[serde(default)]
     pub bubble: crate::bubble::Bubble,
+    /// Pirate gangs and their prowls; see [`crate::pirates`].
+    #[serde(default)]
+    pub pirates: crate::pirates::Pirates,
     pub colony_ships: Pool<crate::colonize::ColonyShipId, crate::colonize::ColonyShip>,
     pub history: History,
 }

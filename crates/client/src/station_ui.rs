@@ -25,6 +25,7 @@ pub fn draw(ctx: &egui::Context, w: &World, here: SettlementId, actions: &mut Ve
         Screen::Hangar => crate::hangar_ui::hangar_screen(ctx, w, here, actions),
         Screen::Shipyard => crate::hangar_ui::shipyard_screen(ctx, w, here, actions),
         Screen::Contracts => crate::contracts_ui::contracts_screen(ctx, w, here, actions),
+        Screen::Bounties => crate::bounty_ui::bounty_screen(ctx, w, here, actions),
     }
 }
 
@@ -71,6 +72,11 @@ fn hub(ctx: &egui::Context, w: &World, here: SettlementId, actions: &mut Vec<Act
             ui.label(
                 RichText::new(format!("population {:.1}k", economy.population)).color(CREAM_DIM),
             );
+            let rank = w.player.standing.rank(settlement.owner);
+            ui.label(
+                RichText::new(format!("they count you {}", rank.name().to_lowercase()))
+                    .color(crate::bounty_ui::rank_color(rank)),
+            );
             ui.add_space(14.0);
             ui.spacing_mut().item_spacing.y = 8.0;
 
@@ -105,6 +111,15 @@ fn hub(ctx: &egui::Context, w: &World, here: SettlementId, actions: &mut Vec<Act
             };
             if menu_button(ui, "Contracts", &contracts_note, true) {
                 actions.push(Action::Open(Screen::Contracts));
+            }
+            let warrants = crate::bounty_ui::wanted(w).len();
+            let bounty_note = match warrants {
+                0 => "no warrants posted nearby".to_owned(),
+                1 => "1 gang wanted nearby".to_owned(),
+                n => format!("{n} gangs wanted nearby"),
+            };
+            if menu_button(ui, "Bounties", &bounty_note, true) {
+                actions.push(Action::Open(Screen::Bounties));
             }
             let stored_here = w.player.stored.iter().filter(|s| s.at == here).count();
             let hangar_note = match (services.outfitter, stored_here) {

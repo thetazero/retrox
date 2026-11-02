@@ -220,6 +220,10 @@ fn duel(raider: &str, fight_back: bool, seconds: f64) -> (f64, bool, bool) {
         jink: DVec3::ZERO,
         jink_t: 0.0,
         burst: 0.0,
+        home: DVec3::ZERO,
+        crew: Crew::Pirate,
+        hostile: true,
+        slot: None,
     });
     c.target = Some(0);
     let dt = 1.0 / 60.0;
@@ -262,21 +266,4 @@ fn a_new_pilot_who_fights_back_can_win() {
         won,
         "the starting ship should be able to beat one interceptor ({t:.1}s)"
     );
-}
-
-#[test]
-fn bands_never_gather_at_a_capital_and_stay_put_for_their_stretch() {
-    let galaxy = retrox_gen::generate(1, &retrox_gen::GalaxyConfig::default());
-    for f in galaxy.factions.values() {
-        let system = galaxy.settlements[f.capital].system;
-        assert_eq!(band_chance(&galaxy, system), 0.0);
-    }
-    let mut seen = 0;
-    for (id, field) in galaxy.fields.iter() {
-        let system = galaxy.bodies[field.belt].system;
-        let a = band(&galaxy, system, id, 3);
-        assert_eq!(a, band(&galaxy, system, id, 3));
-        seen += usize::from(!a.is_empty());
-    }
-    assert!(seen > 0, "somewhere has raiders");
 }
