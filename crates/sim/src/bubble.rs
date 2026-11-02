@@ -39,6 +39,8 @@ const METRES_PER_AU: f64 = 1.496e11;
 const SECONDS_PER_DAY: f64 = 86_400.0;
 /// Jump points sit this far from a star, toward the system on the far end.
 pub const JUMP_POINT_AU: f64 = 0.3;
+/// A planet's port sits this many radii above its centre, over the pole.
+const PORT_ALTITUDE_RADII: f64 = 1.5;
 /// How far the bubble reaches from the player's system, in jumps.
 pub const RADIUS_JUMPS: usize = 3;
 
@@ -147,16 +149,24 @@ pub fn settlement_goal(state: &GalaxyState, id: SettlementId, t_days: f64) -> Go
 
 /// A site's position and velocity at `t_days`, in metres from its star.
 pub fn site_goal(state: &GalaxyState, system: SystemId, site: Site, t_days: f64) -> Goal {
-    let (pos, vel) = match site {
-        Site::Region(r) => {
-            let b = &state.bodies[state.regions[r].body];
-            state.orbit_state(system, &b.orbit, t_days)
-        }
-        Site::Surface(b) => state.orbit_state(system, &state.bodies[b].orbit, t_days),
-        Site::Space(orbit) => state.orbit_state(system, &orbit, t_days),
+    let body = match site {
+        Site::Region(r) => Some(state.regions[r].body),
+        Site::Surface(b) => Some(b),
+        Site::Space(_) => None,
     };
+    let (pos, vel) = match (site, body) {
+        (Site::Space(orbit), _) => state.orbit_state(system, &orbit, t_days),
+        (_, Some(b)) => state.orbit_state(system, &state.bodies[b].orbit, t_days),
+        _ => unreachable!("a site on a body has its body"),
+    };
+    let mut pos = flight::scale(pos, METRES_PER_AU);
+    // A planet's port is a holding point above its north pole, clear of
+    // the planet: ships come and go from there, not from its centre.
+    if let Some(b) = body {
+        pos[2] += state.bodies[b].radius_km * 1000.0 * PORT_ALTITUDE_RADII;
+    }
     Goal {
-        pos: flight::scale(pos, METRES_PER_AU),
+        pos,
         vel: flight::scale(vel, METRES_PER_AU / SECONDS_PER_DAY),
     }
 }
@@ -202,6 +212,20 @@ pub fn flights_in(
             Stage::Flying { system: s, ship } if s == system => Some((key, f, ship)),
             _ => None,
         })
+}
+
+/// Where a flight flying in `system` is headed at day `t_days`: its
+/// destination if it's there, or the jump point toward the next system on
+/// its path. What [`step`] flies toward, for anyone predicting a flight
+/// between ticks.
+pub fn goal(state: &GalaxyState, flight: &Flight, system: SystemId, t_days: f64) -> Goal {
+    match flight.path.first() {
+        Some(&next) => Goal {
+            pos: jump_point(state, system, next),
+            vel: [0.0; 3],
+        },
+        None => settlement_goal(state, flight.to, t_days),
+    }
 }
 
 /// Put the bubble around `centre`, or take it away with `None`. Flights the
@@ -784,18 +808,9 @@ pub(crate) fn step(state: &mut GalaxyState, contracts: &haul::Contracts, board: 
             }
             Stage::Flying { system, mut ship } => {
                 let next = flight.path.first().copied();
-                let arrived = match next {
-                    None => flight::fly(&mut ship, accel, SECONDS_PER_DAY, |t, _| {
-                        settlement_goal(state, to, t0 + t / SECONDS_PER_DAY)
-                    }),
-                    Some(next) => {
-                        let point = Goal {
-                            pos: jump_point(state, system, next),
-                            vel: [0.0; 3],
-                        };
-                        flight::fly(&mut ship, accel, SECONDS_PER_DAY, |_, _| point)
-                    }
-                };
+                let arrived = flight::fly(&mut ship, accel, SECONDS_PER_DAY, |t, _| {
+                    goal(state, flight, system, t0 + t / SECONDS_PER_DAY)
+                });
                 match (arrived, next) {
                     (None, _) => {
                         state.bubble.flights.get_mut(&key).expect("flight").stage =
@@ -804,6 +819,20 @@ pub(crate) fn step(state: &mut GalaxyState, contracts: &haul::Contracts, board: 
                     (Some(_), None) => {
                         state.bubble.flights.remove(&key);
                         haul::dock(state, contracts, board, key.0, n, to, true);
+                        // Straight out again: today is flown, so the next
+                        // trip starts from where the port is tomorrow.
+                        if let Some(f) = state.bubble.flights.get(&key) {
+                            let start = settlement_goal(state, f.from, t0 + 1.0);
+                            if let Some(f) = state.bubble.flights.get_mut(&key) {
+                                f.stage = Stage::Flying {
+                                    system: f.stage.system(),
+                                    ship: Kinematics {
+                                        pos: start.pos,
+                                        vel: start.vel,
+                                    },
+                                };
+                            }
+                        }
                     }
                     (Some(_), Some(next)) => {
                         let days = (lane_ly(state, system, next) / jump_laden).ceil().max(1.0);

@@ -32,7 +32,9 @@ use retrox_sim::ship::ShipStats;
 use crate::contracts;
 use crate::hangar::{self, Job, Player};
 use crate::mining::{self, Mining};
+use crate::traffic::Traffic;
 use retrox_gen::{GalaxyConfig, Rock, generate, rocks};
+use retrox_sim::bubble;
 use retrox_sim::economy::Good;
 use retrox_sim::flight::{self, Goal, Kinematics};
 use retrox_sim::freight::{self, Offer};
@@ -299,6 +301,8 @@ pub struct World {
     /// What the board was drawn up for: settlement, day, and the player's
     /// hold and contracts then.
     board_key: Option<(SettlementId, u64, u64, usize)>,
+    /// The bubble's fleets flying in this system.
+    pub traffic: Traffic,
 }
 
 impl World {
@@ -357,11 +361,14 @@ impl World {
             course: None,
             board: Vec::new(),
             board_key: None,
+            traffic: Traffic::default(),
         };
         // Generation leaves every market exactly on target. Let the galaxy
         // run for a while first, so the player arrives in a going concern:
         // traders under way, some markets short, others with goods to spare.
         world.advance_clock(WARM_UP_DAYS * SECONDS_PER_DAY);
+        // Then traders near the player become ships (DESIGN §5.2).
+        bubble::set_centre(&mut world.galaxy, Some(system));
         world.refresh_board();
         world
     }
@@ -741,6 +748,9 @@ impl World {
             }
             Action::Wait(days) => {
                 if matches!(self.mode, Mode::Docked(_) | Mode::Landed { .. }) {
+                    // Time compresses: the bubble folds back into the coarse
+                    // tier while we wait, and comes back after (DESIGN §5.2).
+                    bubble::set_centre(&mut self.galaxy, None);
                     // Waiting stops when a contract falls due (DESIGN §3).
                     let mut waited = 0;
                     let mut due = None;
@@ -758,6 +768,7 @@ impl World {
                             break;
                         }
                     }
+                    bubble::set_centre(&mut self.galaxy, Some(self.system));
                     let plural = if waited == 1 { "" } else { "s" };
                     match due {
                         Some(to) if waited < days => self.say(format!(
@@ -1011,6 +1022,7 @@ impl World {
             }
         }
 
+        self.traffic.update(&self.galaxy, self.system, self.clock_s);
         self.settle_contracts();
         self.refresh_board();
         self.update_field();
@@ -1300,6 +1312,56 @@ impl World {
         true
     }
 
+    /// Start in space alongside a trader fleet, drifting with it (for
+    /// testing the bubble's traffic). Returns false if none is flying.
+    pub fn start_by_traffic(&mut self) -> bool {
+        for _ in 0..4 {
+            self.traffic.update(&self.galaxy, self.system, self.clock_s);
+            if !self.traffic.contacts.is_empty() {
+                break;
+            }
+            let Some(system) = self
+                .galaxy
+                .bubble
+                .flights
+                .values()
+                .find_map(|f| match f.stage {
+                    bubble::Stage::Flying { system, .. } => Some(system),
+                    bubble::Stage::Jumping { .. } => None,
+                })
+            else {
+                return false;
+            };
+            self.arrive_jump(system);
+        }
+        let Some(c) = self
+            .traffic
+            .contacts
+            .iter()
+            .max_by_key(|c| c.ships)
+            .cloned()
+        else {
+            return false;
+        };
+        // Off its flank and a little above, looking across at it, moving
+        // with it, flight assist off so we keep pace.
+        let length = c.fit.stats().length_m.max(10.0);
+        let across = c.vel.cross(DVec3::Y).normalize_or(DVec3::X);
+        let at = c.pos
+            + (across * 2.2 + DVec3::Y * 0.5 - c.vel.normalize_or(DVec3::Z) * 0.6)
+                * (length * (3.0 + f64::from(c.ships)));
+        self.mode = Mode::Normal;
+        self.ship.frame = Place::Star;
+        self.ship.rel = at;
+        self.ship.vel = c.vel;
+        self.ship.throttle = 0.0;
+        self.ship.flight_assist = false;
+        self.ship.rot = look_rotation(c.pos - at);
+        self.cam_rot = self.ship.rot;
+        self.message = None;
+        true
+    }
+
     /// Move to the first system with a station and dock there (for
     /// testing). Does nothing if there are no stations anywhere.
     pub fn start_at_station(&mut self) {
@@ -1321,7 +1383,10 @@ impl World {
             .iter()
             .find(|l| l.to == to)
             .map_or(3.0, |l| l.days);
+        // Days in the lanes: no bubble until we come out the other side.
+        bubble::set_centre(&mut self.galaxy, None);
         self.advance_clock(days * SECONDS_PER_DAY);
+        bubble::set_centre(&mut self.galaxy, Some(to));
 
         self.system = to;
         self.view = SystemView::new(&self.galaxy, to);
