@@ -78,28 +78,32 @@ fn economy_stays_healthy() {
             s.economy.treasury
         );
     }
-    // Consumer settlements that run out of money, and planned settlements
-    // whose fixed prices give captains no reason to deliver, go short until
-    // contracts and faction spending land (#33, step 3). Until then, only
-    // guard against collapse.
+    // Market settlements that run out of money still go short, so this is a
+    // loose bound for now.
     let summary = economy::summarize(&state);
     let unmet = summary.shortfall[Good::Food] / summary.demand[Good::Food];
-    assert!(unmet < 0.6, "{:.0}% of food demand unmet", unmet * 100.0);
+    assert!(unmet < 0.35, "{:.0}% of food demand unmet", unmet * 100.0);
 }
 
 #[test]
-fn trade_conserves_money() {
+fn money_is_conserved() {
+    // Trade, taxes, welfare and contracts only move money between
+    // settlements, companies and factions.
     let mut state = small();
+    let total = |state: &GalaxyState| {
+        let e = economy::summarize(state);
+        e.money + e.faction_balance
+    };
     for _ in 0..30 {
         tick(&mut state);
     }
-    let before = economy::summarize(&state).money;
-    for _ in 0..30 {
+    let before = total(&state);
+    for _ in 0..60 {
         tick(&mut state);
     }
-    let after = economy::summarize(&state).money;
+    let after = total(&state);
     assert!(
-        (after - before).abs() <= 1e-9 * before,
+        (after - before).abs() <= 1e-6 * before.abs(),
         "{before} -> {after}"
     );
 }

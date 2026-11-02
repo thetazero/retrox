@@ -12,6 +12,7 @@ fn small_galaxy() -> GalaxyState {
         capital: SettlementId::default(),
         color: [200, 60, 50],
         founded: GalaxyTime::ZERO,
+        treasury: 0.0,
     });
     state
         .history

@@ -270,8 +270,8 @@ fn print_economy(state: &retrox_sim::GalaxyState) {
     use retrox_sim::economy::{Good, summarize};
     let e = summarize(state);
     println!(
-        "economy: population {:.0}, money {:.0} credits",
-        e.population, e.money
+        "economy: population {:.0}, money {:.0} credits, faction balances {:.0}",
+        e.population, e.money, e.faction_balance
     );
     println!(
         "  hauling: {} companies, {} ships ({} travelling)",

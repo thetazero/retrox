@@ -316,6 +316,8 @@ pub struct EconomySummary {
     pub population: f64,
     /// Credits held by all settlements and companies.
     pub money: f64,
+    /// Sum of faction balances; negative means money factions have issued.
+    pub faction_balance: f64,
     pub companies: usize,
     pub ships: u32,
     pub ships_travelling: u32,
@@ -356,6 +358,7 @@ pub fn summarize(state: &GalaxyState) -> EconomySummary {
             out.mean_price[good] /= price_n[good] as f64;
         }
     }
+    out.faction_balance = state.factions.values().map(|f| f.treasury).sum();
     out.companies = state.companies.len();
     for company in state.companies.values() {
         out.money += company.credits;

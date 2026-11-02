@@ -159,6 +159,8 @@ struct Ctx {
     inbound: HashMap<(SettlementId, Good), f64>,
     /// Empty hold capacity already flying to each settlement to load.
     claimed: HashMap<SettlementId, f64>,
+    /// Factions posting delivery contracts this tick.
+    contracts: slotmap::SecondaryMap<crate::FactionId, bool>,
 }
 
 impl Ctx {
@@ -198,6 +200,7 @@ impl Ctx {
             mean_price,
             inbound,
             claimed,
+            contracts: crate::fiscal::open_contracts(state),
         }
     }
 
@@ -311,12 +314,19 @@ fn best_trip(
             for &(good, amount, buy) in &offers {
                 let coming = ctx.inbound.get(&(to, good)).copied().unwrap_or(0.0);
                 let expected_stock = dest.market.stock[good] + coming + amount / 2.0;
-                let sell = dest.market.price_at(good, expected_stock, dest_model);
-                let amount = amount.min(dest.treasury.max(0.0) * MAX_SPEND_SHARE / sell);
+                let price = dest.market.price_at(good, expected_stock, dest_model);
+                let premium = crate::fiscal::contract_premium(
+                    state,
+                    &ctx.contracts,
+                    to,
+                    good,
+                    expected_stock,
+                );
+                let amount = amount.min(dest.treasury.max(0.0) * MAX_SPEND_SHARE / price);
                 if amount < 1.0 {
                     continue;
                 }
-                let profit = amount * (sell - buy) - fuel_per_day * days * fuel_price;
+                let profit = amount * (price + premium - buy) - fuel_per_day * days * fuel_price;
                 let per_day = profit / (days + HANDLING_DAYS);
                 if per_day > MIN_PROFIT_PER_DAY && best.as_ref().is_none_or(|(b, _)| per_day > *b) {
                     best = Some((
@@ -399,7 +409,7 @@ pub fn trade(state: &mut GalaxyState) {
             if !state.settlements.contains_key(here) {
                 continue;
             }
-            sell(state, key, n, here);
+            sell(state, &ctx, key, n, here);
             if state.companies[key].fleets[n].idle_until > now {
                 continue;
             }
@@ -425,18 +435,18 @@ pub fn trade(state: &mut GalaxyState) {
 }
 
 /// Sell as much of a docked fleet's cargo as the settlement can afford.
-fn sell(state: &mut GalaxyState, key: CompanyId, n: usize, here: SettlementId) {
+/// The settlement pays the price; its faction pays any contract premium.
+fn sell(state: &mut GalaxyState, ctx: &Ctx, key: CompanyId, n: usize, here: SettlementId) {
     let Some(cargo) = state.companies[key].fleets[n].cargo else {
         return;
     };
     let model = model(state, here);
+    let stock = state.settlements[here].economy.market.stock[cargo.good] + cargo.amount / 2.0;
+    let premium = crate::fiscal::contract_premium(state, &ctx.contracts, here, cargo.good, stock);
+    let owner = state.settlements[here].owner;
     let settlement = &mut state.settlements[here];
     let market = &settlement.economy.market;
-    let price = market.price_at(
-        cargo.good,
-        market.stock[cargo.good] + cargo.amount / 2.0,
-        model,
-    );
+    let price = market.price_at(cargo.good, stock, model);
     let amount = cargo
         .amount
         .min(settlement.economy.treasury.max(0.0) * MAX_SPEND_SHARE / price);
@@ -445,8 +455,9 @@ fn sell(state: &mut GalaxyState, key: CompanyId, n: usize, here: SettlementId) {
     }
     settlement.economy.market.stock[cargo.good] += amount;
     settlement.economy.treasury -= amount * price;
+    state.factions[owner].treasury -= amount * premium;
     let company = &mut state.companies[key];
-    company.credits += amount * price;
+    company.credits += amount * (price + premium);
     let left = cargo.amount - amount;
     company.fleets[n].cargo = (left > 1e-6).then_some(Cargo {
         good: cargo.good,
