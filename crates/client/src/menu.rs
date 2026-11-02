@@ -134,6 +134,11 @@ impl Menu {
         }
     }
 
+    /// Which handbook chapter is open.
+    pub fn set_chapter(&mut self, chapter: usize) {
+        self.chapter = chapter.min(crate::handbook::CHAPTERS.len() - 1);
+    }
+
     /// Esc: back a page, or out of the pause menu.
     pub fn back(&mut self, in_game: bool) -> Option<MenuAction> {
         if self.page != Page::Main {
@@ -306,7 +311,11 @@ impl Menu {
                 ..Item::action("Save", &save_note, MenuAction::Save)
             },
             Item::page("Load", "a save or checkpoint", Page::Load),
-            Item::page("Handbook", "controls and how to get started", Page::Handbook),
+            Item::page(
+                "Handbook",
+                "controls and how to get started",
+                Page::Handbook,
+            ),
             Item::page("Settings", "controls and display", Page::Settings),
             Item::page("Quit to title", "leave this game", Page::ConfirmQuit),
         ]

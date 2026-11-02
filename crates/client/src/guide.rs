@@ -66,7 +66,7 @@ impl Progress {
 pub type KeyRow = (&'static [&'static str], &'static str);
 
 pub const FLIGHT_KEYS: &[KeyRow] = &[
-    (&["MOUSE"], "steer, once the view has the mouse"),
+    (&["MOUSE"], "steer (click the view first)"),
     (&["↑", "↓", "←", "→"], "steer with the keys"),
     (&["W", "S"], "throttle up / down"),
     (&["X"], "cut the throttle"),
@@ -78,11 +78,11 @@ pub const FLIGHT_KEYS: &[KeyRow] = &[
 ];
 
 pub const TRAVEL_KEYS: &[KeyRow] = &[
-    (&["T"], "next target (or click NAVIGATION)"),
-    (&["J"], "fast travel to it · again to drop out"),
-    (&["F"], "dock at a station close by"),
-    (&["L"], "land at a city below"),
-    (&["M"], "galaxy map: plot a course"),
+    (&["T"], "next target"),
+    (&["J"], "fast travel · again: drop out"),
+    (&["F"], "dock at a station"),
+    (&["L"], "land at a city"),
+    (&["M"], "galaxy map"),
 ];
 
 pub const WORK_KEYS: &[KeyRow] = &[
@@ -90,8 +90,8 @@ pub const WORK_KEYS: &[KeyRow] = &[
     (&["LMB", "R"], "mining laser"),
     (&["V"], "cockpit / chase camera"),
     (&["TAB"], "take or free the mouse"),
-    (&["H"], "this card"),
-    (&["ESC"], "menu · back out of a screen"),
+    (&["H"], "controls card"),
+    (&["ESC"], "menu, or back"),
 ];
 
 /// A run of text with keys in it: `[J]` is drawn as a keycap.
@@ -141,9 +141,11 @@ pub fn hint(w: &World) -> Option<String> {
     let carrying = w.player.cargo_t() > 0.0;
     if w.docked_at().is_some() {
         return Some(match w.screen {
-            Screen::Contracts if first.is_none() => "Pick a job and press ACCEPT: the goods load into \
+            Screen::Contracts if first.is_none() => {
+                "Pick a job and press ACCEPT: the goods load into \
                  your hold, and you're paid when they arrive. Then PLOT COURSE."
-                .into(),
+                    .into()
+            }
             Screen::Contracts => "Cargo aboard. [ESC] back to the menu, then LAUNCH.".into(),
             Screen::Trade => "Buy what's in SURPLUS here and sell it where it's short. Ore \
                  from mining sells here too."
@@ -179,11 +181,21 @@ pub fn hint(w: &World) -> Option<String> {
     }
 
     let prompts = w.prompts();
-    if let Some(s) = prompts.dock {
+    // Docking or landing is the next thing only where you were going:
+    // not back where you just launched from.
+    let bound = |s| first.as_ref().is_some_and(|f| f.0 == s);
+    if let Some(s) = prompts.dock
+        && (w.target == Some(Place::Station(s)) || bound(s))
+    {
         return Some(format!("[F] to dock at {}.", w.name(Place::Station(s))));
     }
-    if let Some((city, _)) = prompts.land {
-        return Some(format!("[L] to land at {}.", w.galaxy.settlements[city].name));
+    if let Some((city, body)) = prompts.land
+        && (w.target == Some(Place::Body(body)) || bound(city))
+    {
+        return Some(format!(
+            "[L] to land at {}.",
+            w.galaxy.settlements[city].name
+        ));
     }
     if w.field_rocks.is_some() {
         return Some(
@@ -205,9 +217,7 @@ pub fn hint(w: &World) -> Option<String> {
                     "Leave the gravity well of {well} to jump: throttle up with [W] and fly \
                      away from it."
                 ),
-                (true, None) => {
-                    "Clear to jump: press JUMP on the ▶ lane in HYPERLANES.".to_owned()
-                }
+                (true, None) => "Clear to jump: press JUMP on the ▶ lane in HYPERLANES.".to_owned(),
             });
         }
         if let Some(place) = contract_place(w, *to)
@@ -284,5 +294,18 @@ mod tests {
         assert!(p.took_work && p.launched && p.targeted, "{p:?}");
         assert!(!p.arrived && !p.earned, "{p:?}");
         assert!(hint(&w).is_some());
+    }
+
+    #[test]
+    fn delivering_a_contract_lights_get_paid() {
+        let mut w = World::new(1);
+        w.act(crate::world::Action::AcceptContract(0));
+        let to = w.player.contracts[0].offer.to;
+        let before = w.player.credits;
+        w.mode = Mode::Docked(to);
+        w.update(0.01, Default::default());
+        assert!(w.player.contracts.is_empty(), "delivered");
+        assert!(w.player.credits > before);
+        assert!(w.player.progress.earned);
     }
 }

@@ -98,6 +98,7 @@ mod tests {
             invert_pitch: true,
             fullscreen: true,
             ui_scale: 1.25,
+            first_steps: false,
         };
         changed.save(&path).unwrap();
         assert_eq!(Settings::load(&path), changed);

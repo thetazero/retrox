@@ -17,6 +17,7 @@ pub fn draw(ui: &mut egui::Ui, chapter: &mut usize, max_h: f32) {
     egui::ScrollArea::vertical()
         .id_salt(("handbook", *chapter))
         .max_height(max_h)
+        .min_scrolled_height(max_h)
         .auto_shrink([false, true])
         .show(ui, |ui| match *chapter {
             0 => first_steps(ui),
@@ -243,6 +244,9 @@ fn living(ui: &mut egui::Ui) {
     );
     // Draw a closing rule so the end of the chapter reads as an end.
     let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 6.0), Sense::hover());
-    ui.painter()
-        .rect_filled(Rect::from_min_size(rect.min, Vec2::new(40.0, 4.0)), 0.0, RED);
+    ui.painter().rect_filled(
+        Rect::from_min_size(rect.min, Vec2::new(40.0, 4.0)),
+        0.0,
+        RED,
+    );
 }

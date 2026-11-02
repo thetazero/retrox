@@ -4,8 +4,8 @@
 use egui::{Align2, Color32, Margin, Pos2, Rect, RichText, Sense, Stroke, Vec2};
 
 use super::{
-    AMBER, CREAM, CREAM_DIM, INK, PANEL, Panel, RULE, VFD, VFD_DIM, brackets, keycap, mono,
-    panel, section, title_band,
+    AMBER, CREAM, CREAM_DIM, INK, Panel, RULE, VFD, VFD_DIM, brackets, keycap, mono, panel,
+    section, title_band,
 };
 use crate::guide::{self, KeyRow, Seg};
 use crate::world::{Mode, World};
@@ -181,21 +181,23 @@ pub fn controls_card(ctx: &egui::Context) {
         egui::Id::unique("controls-shade"),
     ));
     shade.rect_filled(screen, 0.0, INK.gamma_multiply(0.45));
-    let col_w = 300.0;
+    let col_w = 330.0;
     let width = col_w * 3.0 + 2.0 * 28.0 + 32.0;
     egui::Area::new(egui::Id::unique("controls-card"))
         .order(egui::Order::Foreground)
         .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
         .interactable(false)
         .show(ctx, |ui| {
+            // Opaque: the card sits over other panels.
             let frame = egui::Frame::new()
-                .fill(PANEL)
+                .fill(Color32::from_rgb(11, 9, 16))
                 .stroke(Stroke::new(1.0, RULE))
                 .show(ui, |ui| {
                     ui.set_width(width);
                     ui.spacing_mut().item_spacing.y = 0.0;
-                    let (band, _) = ui.allocate_exact_size(Vec2::new(width, 36.0), Sense::hover());
-                    title_band(ui.painter(), band, "Controls", None, false);
+                    // Room for the title band, painted once the card's
+                    // width is known.
+                    ui.allocate_exact_size(Vec2::new(width, 36.0), Sense::hover());
                     egui::Frame::new()
                         .inner_margin(Margin {
                             left: 16,
@@ -228,19 +230,22 @@ pub fn controls_card(ctx: &egui::Context) {
                             ui.add_space(8.0);
                             rich_hint(
                                 ui,
-                                "Jumps: press JUMP in the HYPERLANES panel or on the galaxy map, \
-                                 clear of gravity wells.   [H] closes this card · the HANDBOOK in \
-                                 the [ESC] menu explains how to get started.",
+                                "Click a name in NAVIGATION to target it. Jump with the JUMP \
+                                 buttons in HYPERLANES, clear of gravity wells.  [H] closes this \
+                                 card; the HANDBOOK in the [ESC] menu explains how to start.",
                                 CREAM_DIM,
                             );
                         });
                 });
-            brackets(
+            let card = frame.response.rect;
+            title_band(
                 ui.painter(),
-                frame.response.rect.expand(4.0),
-                14.0,
-                CREAM_DIM,
+                Rect::from_min_size(card.min, Vec2::new(card.width(), 36.0)),
+                "Controls",
+                None,
+                false,
             );
+            brackets(ui.painter(), card.expand(4.0), 14.0, CREAM_DIM);
         });
 }
 
@@ -250,10 +255,10 @@ pub(crate) fn key_table(ui: &mut egui::Ui, title: &str, rows: &[KeyRow]) {
     ui.add_space(6.0);
     for (keys, what) in rows {
         ui.horizontal(|ui| {
-            ui.set_min_height(25.0);
+            ui.set_min_height(23.0);
             ui.spacing_mut().item_spacing.x = 3.0;
             // Keys in a fixed-width gutter so the descriptions line up.
-            let gutter = 112.0;
+            let gutter = 100.0;
             let start = ui.cursor().left();
             for k in *keys {
                 keycap(ui, k);
