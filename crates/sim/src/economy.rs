@@ -107,16 +107,20 @@ pub enum FacilityKind {
     Hydroponics,
     FuelPlant,
     Factory,
+    /// Builds ship hulls: its output goes to [`LocalEconomy::hull_t`], not
+    /// the market.
+    Shipyard,
 }
 
 impl FacilityKind {
-    pub const ALL: [FacilityKind; 6] = [
+    pub const ALL: [FacilityKind; 7] = [
         FacilityKind::Mine,
         FacilityKind::IceHarvester,
         FacilityKind::Refinery,
         FacilityKind::Hydroponics,
         FacilityKind::FuelPlant,
         FacilityKind::Factory,
+        FacilityKind::Shipyard,
     ];
 
     pub const fn recipe(self) -> &'static Recipe {
@@ -146,6 +150,11 @@ impl FacilityKind {
                 inputs: &[(Metal, 1.0), (Fuel, 0.5)],
                 outputs: &[(Components, 1.0)],
             },
+            // One tonne of hull per run; see `HULL_T_PER_RUN`.
+            FacilityKind::Shipyard => &Recipe {
+                inputs: &[(Metal, 1.0), (Components, 0.3), (Fuel, 0.1)],
+                outputs: &[],
+            },
         }
     }
 }
@@ -163,6 +172,21 @@ pub const PER_CAPITA_DEMAND: [(Good, f64); 3] = [
     (Good::Fuel, 0.3),
     (Good::Components, 0.05),
 ];
+
+/// Tonnes of hull a shipyard builds per run of its recipe.
+pub const HULL_T_PER_RUN: f64 = 1.0;
+/// Shipyards stop once they hold this many days of their own output.
+pub const HULL_STORAGE_DAYS: f64 = 120.0;
+/// What a tonne of finished hull sells for, in credits.
+pub const HULL_PRICE_PER_T: f64 = 60.0;
+
+/// Daily consumption of `good` per unit of population.
+pub fn per_capita(good: Good) -> f64 {
+    PER_CAPITA_DEMAND
+        .iter()
+        .find(|(g, _)| *g == good)
+        .map_or(0.0, |&(_, amount)| amount)
+}
 
 /// Markets aim to hold this many days of their own demand.
 pub const TARGET_DAYS: f64 = 30.0;
@@ -216,6 +240,13 @@ pub struct LocalEconomy {
     pub population: f64,
     pub facilities: Vec<Facility>,
     pub market: Market,
+    /// Share of food demand going unmet, averaged over about a month; see
+    /// [`crate::demography`].
+    pub hunger: f64,
+    /// Whether the settlement is in famine.
+    pub famine: bool,
+    /// Finished ship hull ready for sale, in tonnes. Built by shipyards.
+    pub hull_t: f64,
     /// The settlement's money, in credits. Trade only moves money; nothing
     /// creates or destroys it yet.
     pub treasury: f64,
@@ -258,6 +289,10 @@ impl LocalEconomy {
                     rate = 0.0;
                 }
             }
+            let shipyard = facility.kind == FacilityKind::Shipyard;
+            if shipyard && self.hull_t >= facility.scale * HULL_T_PER_RUN * HULL_STORAGE_DAYS {
+                rate = 0.0;
+            }
             let rate = rate.clamp(0.0, 1.0);
             for &(good, amount) in recipe.inputs {
                 let need = amount * facility.scale;
@@ -266,6 +301,9 @@ impl LocalEconomy {
             }
             for &(good, amount) in recipe.outputs {
                 market.stock[good] += amount * facility.scale * rate;
+            }
+            if shipyard {
+                self.hull_t += facility.scale * HULL_T_PER_RUN * rate;
             }
         }
 
@@ -316,6 +354,8 @@ pub struct EconomySummary {
     pub population: f64,
     /// Credits held by all settlements and companies.
     pub money: f64,
+    /// Sum of faction balances; negative means money factions have issued.
+    pub faction_balance: f64,
     pub companies: usize,
     pub ships: u32,
     pub ships_travelling: u32,
@@ -356,6 +396,7 @@ pub fn summarize(state: &GalaxyState) -> EconomySummary {
             out.mean_price[good] /= price_n[good] as f64;
         }
     }
+    out.faction_balance = state.factions.values().map(|f| f.treasury).sum();
     out.companies = state.companies.len();
     for company in state.companies.values() {
         out.money += company.credits;

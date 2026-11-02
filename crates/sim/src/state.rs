@@ -284,6 +284,9 @@ pub struct Faction {
     /// Map and branding colour, sRGB.
     pub color: [u8; 3],
     pub founded: GalaxyTime,
+    /// The faction's balance, in credits. Taxes raise it and spending
+    /// lowers it; below zero, the faction has issued that much money.
+    pub treasury: f64,
 }
 
 /// How a faction runs its economy (§5.4).

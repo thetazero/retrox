@@ -1,5 +1,5 @@
 use retrox_gen::{GalaxyConfig, generate};
-use retrox_sim::economy::{self, Good};
+use retrox_sim::economy::{self, FacilityKind, Good};
 use retrox_sim::haul;
 use retrox_sim::{GalaxyState, tick};
 
@@ -78,28 +78,79 @@ fn economy_stays_healthy() {
             s.economy.treasury
         );
     }
-    // Consumer settlements that run out of money, and planned settlements
-    // whose fixed prices give captains no reason to deliver, go short until
-    // contracts and faction spending land (#33, step 3). Until then, only
-    // guard against collapse.
+    // Market settlements that run out of money still go short, so this is a
+    // loose bound for now.
     let summary = economy::summarize(&state);
     let unmet = summary.shortfall[Good::Food] / summary.demand[Good::Food];
-    assert!(unmet < 0.6, "{:.0}% of food demand unmet", unmet * 100.0);
+    assert!(unmet < 0.35, "{:.0}% of food demand unmet", unmet * 100.0);
 }
 
 #[test]
-fn trade_conserves_money() {
+fn money_is_conserved() {
+    // Trade, taxes, welfare and contracts only move money between
+    // settlements, companies and factions.
     let mut state = small();
+    let total = |state: &GalaxyState| {
+        let e = economy::summarize(state);
+        e.money + e.faction_balance
+    };
     for _ in 0..30 {
         tick(&mut state);
     }
-    let before = economy::summarize(&state).money;
-    for _ in 0..30 {
+    let before = total(&state);
+    for _ in 0..60 {
         tick(&mut state);
     }
-    let after = economy::summarize(&state).money;
+    let after = total(&state);
     assert!(
-        (after - before).abs() <= 1e-9 * before,
+        (after - before).abs() <= 1e-6 * before.abs(),
         "{before} -> {after}"
+    );
+}
+
+#[test]
+fn shipyards_grow_the_fleet() {
+    let mut state = small();
+    let start = economy::summarize(&state).ships;
+    assert!(
+        state.settlements.values().any(|s| s
+            .economy
+            .facilities
+            .iter()
+            .any(|f| f.kind == FacilityKind::Shipyard)),
+        "no shipyards"
+    );
+    for _ in 0..360 * 2 {
+        tick(&mut state);
+    }
+    let end = economy::summarize(&state).ships;
+    assert!(end > start, "fleet didn't grow: {start} -> {end}");
+}
+
+#[test]
+fn populations_change_and_stay_sane() {
+    let mut state = small();
+    let start: Vec<f64> = state
+        .settlements
+        .values()
+        .map(|s| s.economy.population)
+        .collect();
+    for _ in 0..360 * 2 {
+        tick(&mut state);
+    }
+    let end: Vec<f64> = state
+        .settlements
+        .values()
+        .map(|s| s.economy.population)
+        .collect();
+    assert!(end.iter().all(|p| p.is_finite() && *p >= 0.0));
+    let changed = start
+        .iter()
+        .zip(&end)
+        .filter(|(a, b)| (*a - *b).abs() > 1e-3 * a.max(1.0))
+        .count();
+    assert!(
+        changed * 2 > start.len(),
+        "only {changed} populations changed"
     );
 }

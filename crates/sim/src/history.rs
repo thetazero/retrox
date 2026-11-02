@@ -41,4 +41,6 @@ pub enum HistoryKind {
         settlement: SettlementId,
         faction: FactionId,
     },
+    /// A settlement started going badly hungry.
+    Famine { settlement: SettlementId },
 }

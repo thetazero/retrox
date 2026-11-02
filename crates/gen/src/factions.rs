@@ -102,6 +102,7 @@ pub fn found(rng: &mut Rng, state: &mut GalaxyState, territory: &Territory, popu
             // Spread hues around the wheel by the golden angle.
             color: hsl((i as f64 * 137.508) % 360.0, 0.65, 0.6),
             founded: GalaxyTime::ZERO,
+            treasury: 0.0,
         });
         state.history.record(
             GalaxyTime::ZERO,
@@ -252,6 +253,7 @@ fn independent(
         // Muted, so independents don't drown out the major powers.
         color: hsl(r.range(0.0, 360.0), 0.12, 0.42),
         founded: GalaxyTime::ZERO,
+        treasury: 0.0,
     });
     state.history.record(
         GalaxyTime::ZERO,
