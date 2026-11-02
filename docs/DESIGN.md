@@ -841,6 +841,23 @@ somewhere, live somewhere, and fly for real near the player.
 - **Collect:** a tractor pulls loose chunks into the hold (as the market
   goods ore and ice) when you fly close; when the hold is full, they stay
   floating. Sell at any market.
+- **Getting there** (#122): fast travel to a field flies in among its
+  rocks and stops 400 m off one, nose-on to it and inside the light
+  laser's 500 m reach: arrive, [G], fire. The rock is the whole one
+  nearest the point halfway in on the side you came from, 20–60 m across
+  (big enough to fill a courier's hold, small enough to fracture) and
+  not volatile. Rocks thin out toward a field's edge, so stopping at the
+  outermost rock left long hops to the next (the career bench lost a
+  third of its pay there). Fast travel used to stop 10 km outside the
+  field's radius, so a run began with ~25 km of hand flying.
+- **Where it sells** (#122): the mining panel lists, under what this run
+  has mined, the three markets in this system or one jump out that pay
+  most per tonne for the hold's load of it, with what the load fetches
+  (the price for the whole lot: selling moves a market). A market in
+  surplus pays little, so the choice of where to sell is the miner's
+  main lever. The skimming panel shows the same for gas. One jump is as
+  far as a pilot hears prices from; a trader still learns the rest by
+  going (§7.8).
 - Fields remember: broken and worked rocks stay that way for ~120 galaxy
   days, then the field is whole again.
 
@@ -912,6 +929,13 @@ from a random generator (pillar 5).
   fuller markets to emptier ones. Lots are sized to the player's hold.
   A board holds 8 contracts at most, 2 per destination, best pay per day
   first. Boards change daily as markets do; some days a port has nothing.
+- **Short runs first** (#129). Pay per day is the hauler's keep, so a
+  full lot pays the same per day however far it goes: the long runs
+  only pay more in total. Among equal rates (to the cent) the run with
+  fewer jumps comes first, and if the 8 places fill without a run of 1–2
+  jumps when one is on offer, the last place goes to the best one. So a
+  new pilot's first board usually starts with a short job, and the
+  first payment comes after one jump, not five.
 - **Who pays, and what.** The consignee buys the goods at the origin's
   price and pays the fee from its own treasury: freight for the expected
   trip (a rate per tonne-day plus the crew's wage, both the galaxy's own
@@ -1037,32 +1061,45 @@ play an hour of each career in a fresh game, seeds 1–4. They fly the real
 world, with turning, nudging around a field and menus charged at a
 practised pilot's pace. They play well, so a new player should expect
 somewhat less, contracts most of all (the bot reads a board instantly).
+Since #122 the bench pays the travel a player pays, no more and no less:
+it climbs out of wells with [J], docks, lands or starts cutting where
+fast travel stops (§7.1.2, §7.3), and fast travels again if raiders cut
+a trip short. It used to fly out of every well and in to every station
+and field by hand, up to 30 minutes of an hour.
 
 | Career, ship | cr per hour (seeds 1–4) |
 |---|---|
-| Mining, courier (12 t, light laser) | 1 950 · 2 990 · 970 · 1 670 |
-| Freight contracts, courier | 2 840 · 3 920 · 2 340 · 2 530 |
-| Trading, courier | 16 510 · 4 360 · 8 920 · −980 |
-| Mining, gunship refit (180 t, 2 lasers) | 1 520 · 8 080 · 1 120 · 1 720 |
-| Freight contracts, hauler (360 t) | 8 900 · 7 180 · 7 620 · 8 210 |
-| Trading, hauler | 27 280 · 9 870 · 17 110 · 7 470 |
+| Mining, courier (12 t, light laser) | 1 720 · 2 640 · 2 220 · 830 |
+| Freight contracts, courier | 5 640 · 5 150 · 4 530 · 5 430 |
+| Trading, courier | 45 750 · 12 420 · 31 550 · 28 350 |
+| Mining, gunship refit (180 t, 2 lasers) | 2 210 · 8 540 · 1 670 · 460 |
+| Freight contracts, hauler (360 t) | 11 320 · 16 280 · 19 250 · 16 750 |
+| Trading, hauler | 67 910 · 78 070 · 22 080 · 66 840 |
 
-In a courier, contracts earn about 1.5× mining on average (1.3× to 2.4×
-by seed). Mining needs no capital and never meets a bare board. Trading
-pays best and swings most. Planned economies hold one price everywhere,
-so the money is in market space and across the border (§5.4). A trader
-who guesses wrong loses money. The bot trader also knows prices two jumps
+In a courier, contracts now earn about 2.8× mining (they were ~1.5×
+with the bench's hand flying, which cost contracts most: they travel
+most). Short runs head the board (§7.5.1), so a courier delivers ~80 an
+hour. A miner's hour is ~25 minutes of cutting and ~20 of hops between
+rocks, and gluts at the local market set the price; mining is now the
+clear laggard, a balance question left to #149. Mining needs no capital
+and never meets a bare board. Trading pays best and swings most (the bot
+trader also used to plan sales to markets that couldn't pay for the lot,
+and loop when refused). Planned economies hold one price everywhere, so
+the money is in market space and across the border (§5.4). A trader who
+guesses wrong loses money. The bot trader also knows prices two jumps
 out, which a player has to learn.
 
 **The ladder** (stock fits): racer 4 060, courier 5 930, interceptor
 6 180, light trader 6 590, heavy fighter 10 150; blockade runner 38 800,
 hauler 41 200, gunship 50 500; express freighter 243 000, bulk freighter
 302 000, frigate 413 000. From the courier and 2 000 cr, the light
-trader (twice the hold) is about 2 hours of contracts or 2–4 of mining
-away; a medium ship is ~15–20 hours of either, less for a good trader. A
-medium freighter on contracts takes ~30 hours to buy a large ship (a
-trader, half that), which leaves fleets and capital ships (§7.5) the
-rest of the ~100-hour arc (§2).
+trader (twice the hold) is about 1 hour of contracts or 2–4 of mining
+away; a medium ship is ~8 hours of contracts or ~20 of mining, less for
+a good trader. A medium freighter on contracts takes ~15 hours to buy a
+large ship (a trader, a few), which leaves fleets and capital ships
+(§7.5) the rest of the ~100-hour arc (§2). These hours shrank with the
+bench's travel times (#122); whether the ladder needs stretching again
+goes with #149.
 
 ## 8. Art direction & audio
 
@@ -1149,7 +1186,10 @@ player.
   card draw from the same key tables, so they can't disagree.
 - The suggested first run is a freight contract: it pays for sure and
   walks the player through launching, the galaxy map, a jump, fast travel
-  and docking. Mining and trade are offered as the other ways in.
+  and docking. Mining and trade are offered as the other ways in. On the
+  dispatch board the hint names the nearest job the player can take
+  (#129), the quickest to pay. Delivery says what came back in full: the
+  fee and the deposit, so the jump in the purse adds up.
 - **Edge arrows** (#117): a target off screen gets an arrow at the edge
   of the view (amber for the target, red for hostiles) pointing the short
   way round to turn toward it, whether it is beside, behind or below the

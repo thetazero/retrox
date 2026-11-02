@@ -302,6 +302,16 @@ pub struct Prompts {
     pub climb: Option<Place>,
 }
 
+/// A market that buys a good, for the mining and skimming panels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Buyer {
+    pub at: SettlementId,
+    /// 0 in this system.
+    pub jumps: u32,
+    /// Credits per tonne, for the whole lot.
+    pub per_t: f64,
+}
+
 pub struct World {
     pub galaxy: GalaxyState,
     pub system: SystemId,
@@ -318,6 +328,10 @@ pub struct World {
     pub cam_rot: DQuat,
     /// Rocks of the asteroid field the ship is in, if any.
     pub field_rocks: Option<(FieldId, Vec<Rock>)>,
+    /// Fast travel into a field stops by this rock (issue #122): the
+    /// field, the rock's offset from its centre and the stand-off from the
+    /// rock's centre. Picked when the trip starts.
+    pub field_stop: Option<(FieldId, DVec3, f64)>,
     /// The mining laser and what it has done to every field.
     pub mining: Mining,
     /// The gas scoop, near a gas giant (issue #68).
@@ -450,6 +464,7 @@ impl World {
             cockpit: false,
             cam_rot,
             field_rocks: None,
+            field_stop: None,
             mining: Mining::default(),
             skim: crate::skim::Skim::default(),
             beam: None,
@@ -744,7 +759,8 @@ impl World {
         Some((target, city))
     }
 
-    /// Where fast travel to `place` stops, measured from its centre.
+    /// Where fast travel to `place` stops, measured from its centre. A
+    /// field's is only roughly so: the trip stops by one of its rocks.
     pub fn arrival_distance(&self, place: Place) -> f64 {
         match place {
             // Gas giants: just above the cloud deck, ready to skim.
@@ -753,7 +769,10 @@ impl World {
             }
             Place::Body(b) if self.has_city(b) => self.place_radius(place) * APPROACH_RADII,
             Place::Star | Place::Body(_) => self.well_radius(place) * 1.05,
-            Place::Field(_) => self.place_radius(place) + 10e3,
+            // Fast travel stops by a rock at the field's edge
+            // ([`World::field_stop`]); this is the edge of its rocks, for
+            // the prompts.
+            Place::Field(_) => self.place_radius(place),
             // Inside the dock prompt's reach ([`World::prompts`]), clear of
             // the hull: arrive, [F] to dock.
             Place::Station(s) => self.station_size_m(s) * 1.2 + 200.0,
@@ -1298,21 +1317,34 @@ impl World {
         }
     }
 
-    /// The best price a tonne of `good` sells for in this system, and
-    /// where.
-    pub fn best_local_price(&self, good: Good) -> Option<(f64, SettlementId)> {
-        self.view
-            .stations
-            .iter()
-            .copied()
-            .chain(self.view.cities.iter().map(|&(c, _)| c))
-            .filter_map(|s| {
-                let settlement = self.galaxy.settlements.get(s)?;
-                let model = self.galaxy.factions.get(settlement.owner)?.economy;
-                let price = crate::trade::sell_value(&settlement.economy.market, model, good, 1.0);
-                Some((price, s))
+    /// Where `tonnes` of `good` sell best (issue #122): the markets in this
+    /// system and one jump out, best price per tonne first, at most
+    /// `max`. Selling a hold moves a market's price, so it's the price for
+    /// the whole lot.
+    pub fn buyers(&self, good: Good, tonnes: f64, max: usize) -> Vec<Buyer> {
+        let tonnes = tonnes.max(1.0);
+        let systems =
+            std::iter::once((self.system, 0)).chain(self.lanes().into_iter().map(|l| (l.to, 1)));
+        let mut out: Vec<Buyer> = systems
+            .flat_map(|(system, jumps)| {
+                self.galaxy
+                    .settlements_in(system)
+                    .filter(|(_, s)| !matches!(s.site, Site::Surface(_)))
+                    .filter_map(move |(at, s)| {
+                        let model = self.galaxy.factions.get(s.owner)?.economy;
+                        let value =
+                            crate::trade::sell_value(&s.economy.market, model, good, tonnes);
+                        Some(Buyer {
+                            at,
+                            jumps,
+                            per_t: value / tonnes,
+                        })
+                    })
             })
-            .max_by(|a, b| a.0.total_cmp(&b.0))
+            .collect();
+        out.sort_by(|a, b| b.per_t.total_cmp(&a.per_t).then(a.jumps.cmp(&b.jumps)));
+        out.truncate(max);
+        out
     }
 
     /// Skim the richest gas giant in this system (or the first system with

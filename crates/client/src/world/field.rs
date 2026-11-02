@@ -5,7 +5,18 @@ use glam::DVec3;
 use retrox_gen::rocks;
 
 use super::{Mode, Place, World};
-use crate::mining;
+use crate::mining::{self, RockId};
+use retrox_sim::FieldId;
+
+/// Fast travel into a field stops this far off a rock's surface: inside
+/// the light mining laser's reach, so the first cut is a press away.
+pub const STOP_CLEARANCE_M: f64 = 400.0;
+/// The rock it stops by is at least this big: one that fills a courier's
+/// hold, and fractures into chunks rather than crumbling.
+const STOP_ROCK_MIN_M: f64 = 20.0;
+/// How far in from a field's centre (as a share of its radius) fast
+/// travel looks for that rock, on the side it comes in from.
+const STOP_DEPTH: f64 = 0.5;
 
 impl World {
     pub(super) fn update_field(&mut self) {
@@ -23,6 +34,26 @@ impl World {
             }
             (None, None) => {}
         }
+    }
+
+    /// The rock fast travel into `field` stops by (issue #122), coming in
+    /// from `side` (a unit vector out from the field's centre): the whole
+    /// rock worth cutting, neither a quarry nor volatile, nearest the
+    /// point halfway in on that side. Rocks thin out toward a field's
+    /// edge, so that's among enough of them to fill a hold or two without
+    /// long hops. Its offset from the field's centre, and how far from its
+    /// centre to stop.
+    pub fn field_stop(&self, field: FieldId, side: DVec3) -> Option<(DVec3, f64)> {
+        let f = &self.galaxy.fields[field];
+        let rocks = rocks(f);
+        let aim = side * self.place_radius(Place::Field(field)) * STOP_DEPTH;
+        self.mining
+            .live_rocks(field, f, &rocks, self.clock_s)
+            .filter(|r| matches!(r.id, RockId::Base(_)))
+            .filter(|r| (STOP_ROCK_MIN_M..=mining::QUARRY_RADIUS).contains(&r.radius))
+            .filter(|r| !r.lode.volatile)
+            .min_by(|a, b| (a.pos - aim).length().total_cmp(&(b.pos - aim).length()))
+            .map(|r| (r.pos, r.radius + STOP_CLEARANCE_M))
     }
 
     /// Where the mining laser's muzzle is, in ship space (metres, nose

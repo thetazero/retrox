@@ -164,6 +164,16 @@ fn where_name(w: &World, to: retrox_sim::SettlementId) -> String {
     }
 }
 
+/// The job on the board with the fewest jumps that the player can take
+/// now (issue #129): the quickest first payment.
+fn nearest_job(w: &World) -> Option<&retrox_sim::freight::Offer> {
+    let capacity = w.stats().cargo_t;
+    w.board
+        .iter()
+        .filter(|o| crate::contracts::refusal(&w.player, capacity, o).is_none())
+        .min_by_key(|o| o.jumps)
+}
+
 /// What to do next, from where things stand: one or two sentences, keys
 /// in brackets. `None` while there's nothing to say (a jump under way).
 pub fn hint(w: &World) -> Option<String> {
@@ -175,9 +185,16 @@ pub fn hint(w: &World) -> Option<String> {
     if w.docked_at().is_some() {
         return Some(match w.screen {
             Screen::Contracts if first.is_none() => {
-                "Pick a job and press ACCEPT: the goods load into \
-                 your hold, and you're paid when they arrive. Then PLOT COURSE."
-                    .into()
+                let pick = "Pick a job and press ACCEPT: the goods load into your hold, and \
+                            you're paid when they arrive.";
+                match nearest_job(w) {
+                    Some(o) => format!(
+                        "{pick} The nearest, to {} ({}), pays soonest. Then PLOT COURSE.",
+                        w.galaxy.settlements[o.to].name,
+                        crate::hud::jumps_text(o.jumps)
+                    ),
+                    None => format!("{pick} Then PLOT COURSE."),
+                }
             }
             Screen::Contracts => "Cargo aboard. [ESC] back to the menu, then LAUNCH.".into(),
             Screen::Trade => "Buy what's in SURPLUS here and sell it where it's short. Ore \
@@ -336,6 +353,17 @@ mod tests {
         assert!(!w.player.progress.launched);
         let hint = hint(&w).expect("landed: a hint");
         assert!(hint.contains("CONTRACTS"), "{hint}");
+    }
+
+    #[test]
+    fn the_board_hint_names_the_nearest_job() {
+        let mut w = World::new(1);
+        w.screen = Screen::Contracts;
+        let nearest = nearest_job(&w).expect("work on the first board").clone();
+        assert!(w.board.iter().all(|o| o.jumps >= nearest.jumps));
+        let hint = hint(&w).expect("a hint");
+        let name = &w.galaxy.settlements[nearest.to].name;
+        assert!(hint.contains(name.as_str()), "{hint}");
     }
 
     #[test]

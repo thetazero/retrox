@@ -46,6 +46,10 @@ pub const MAX_JUMPS: u32 = 5;
 pub const BOARD_SIZE: usize = 8;
 /// At most this many contracts to the same settlement.
 const PER_DESTINATION: usize = 2;
+/// A run of at most this many jumps is a short one: a board keeps a place
+/// for one when the economy offers one (issue #129), so a captain new to a
+/// port, or with an hour to spare, can be paid soon.
+pub const SHORT_RUN_JUMPS: u32 = 2;
 /// A settlement posts for a good only once it is this far below target
 /// (as a share of target), counting what's already on the way.
 const MIN_SHORTAGE: f64 = 0.25;
@@ -112,7 +116,7 @@ pub struct Pending {
 }
 
 /// The board at `here`: contracts sized to a hold of `lot_t` tonnes,
-/// best pay per day first. `lane_days` is how many days the player's ship
+/// best pay per day first, the shorter run first among equals. `lane_days` is how many days the player's ship
 /// takes to cross a lane of a given length in light-years. `pending` is
 /// what the player already carries under contract.
 pub fn board(
@@ -195,23 +199,48 @@ pub fn board(
         }
     }
 
-    // Best pay per day first; ties broken by ids so the order is stable.
+    // Best pay per day first, to the cent. Full lots all pay the same per
+    // day, so the shorter run goes first (issue #129); then ids, so the
+    // order is stable.
+    let cents = |rate: f64| (rate * 100.0).round();
     offers.sort_by(|a, b| {
-        b.0.total_cmp(&a.0)
+        cents(b.0)
+            .total_cmp(&cents(a.0))
+            .then_with(|| a.1.jumps.cmp(&b.1.jumps))
             .then_with(|| a.1.to.cmp(&b.1.to))
             .then_with(|| a.1.good.cmp(&b.1.good))
     });
+    pick(offers.into_iter().map(|(_, o)| o))
+}
+
+/// The board from every offer, best pay per day first: the first
+/// [`BOARD_SIZE`], at most [`PER_DESTINATION`] to each settlement, and the
+/// last place kept for the best short run if none made it.
+fn pick(offers: impl Iterator<Item = Offer>) -> Vec<Offer> {
     let mut board: Vec<Offer> = Vec::new();
-    for (_, offer) in offers {
-        if board.len() >= BOARD_SIZE {
-            break;
-        }
+    // The best short run, kept back in case the board fills without one.
+    let mut short: Option<Offer> = None;
+    for offer in offers {
         // A destination gets a few contracts at most, so the board has
         // range.
         let to_there = board.iter().filter(|o| o.to == offer.to).count();
-        if to_there < PER_DESTINATION {
-            board.push(offer);
+        if to_there >= PER_DESTINATION {
+            continue;
         }
+        if board.len() < BOARD_SIZE {
+            board.push(offer);
+        } else if short.is_none() && offer.jumps <= SHORT_RUN_JUMPS {
+            short = Some(offer);
+            break;
+        }
+    }
+    // Pay per day barely varies with distance, so long runs can fill the
+    // board. Keep the last place for the best short one.
+    if let Some(offer) = short
+        && !board.iter().any(|o| o.jumps <= SHORT_RUN_JUMPS)
+    {
+        board.pop();
+        board.push(offer);
     }
     board
 }
@@ -258,4 +287,44 @@ fn model(state: &GalaxyState, id: SettlementId) -> EconomyModel {
 
 fn model_of(state: &GalaxyState, owner: crate::FactionId) -> EconomyModel {
     state.factions[owner].economy
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use slotmap::KeyData;
+
+    fn offer(to: u64, jumps: u32) -> Offer {
+        Offer {
+            from: SettlementId::from(KeyData::from_ffi(1)),
+            to: SettlementId::from(KeyData::from_ffi(to << 32 | 1)),
+            good: Good::Food,
+            amount: 10.0,
+            jumps,
+            trip_days: 10.0,
+            deadline: GalaxyTime::from_days(40),
+            value: 100.0,
+            fee: 50.0,
+            shortage: 0.5,
+            urgent: false,
+        }
+    }
+
+    #[test]
+    fn a_full_board_keeps_its_last_place_for_a_short_run() {
+        let long = (2..20).map(|to| offer(to, 4));
+        let board = pick(long.clone().chain([offer(30, 1), offer(31, 2)]));
+        assert_eq!(board.len(), BOARD_SIZE);
+        assert_eq!(board[BOARD_SIZE - 1].jumps, 1, "the best short run");
+        assert!(board[..BOARD_SIZE - 1].iter().all(|o| o.jumps == 4));
+        // With a short run on it already, or none to be had, nothing
+        // changes.
+        let board = pick([offer(30, 1)].into_iter().chain(long.clone()));
+        assert_eq!(
+            board.iter().filter(|o| o.jumps <= SHORT_RUN_JUMPS).count(),
+            1
+        );
+        let board = pick(long);
+        assert!(board.iter().all(|o| o.jumps == 4));
+    }
 }

@@ -76,7 +76,15 @@ fn fast_travel_reaches_every_place_and_only_climbs_out_of_a_well() {
         world.act(Action::FastTravel);
         assert!(matches!(world.mode, Mode::FastTravel(_)), "{target:?}");
         real_seconds_until(&mut world, 30.0, |w| w.mode == Mode::Normal);
-        let (d, expected) = (world.distance_to(target), world.arrival_distance(target));
+        // A field's trip stops by a rock at its edge (#122); anywhere
+        // else at the place's arrival distance.
+        let (offset, expected) = match (target, world.field_stop) {
+            (Place::Field(f), Some((field, offset, standoff))) if f == field => (offset, standoff),
+            (Place::Field(_), _) => panic!("{}: no rock to stop by", world.name(target)),
+            _ => (DVec3::ZERO, world.arrival_distance(target)),
+        };
+        let stop = |w: &World| w.position(target) + offset;
+        let d = (stop(&world) - world.ship_position()).length();
         assert!(
             (d - expected).abs() < expected * 0.05 + 1.0,
             "{}: arrived {d:.3e} m away, expected {expected:.3e}",
@@ -87,7 +95,7 @@ fn fast_travel_reaches_every_place_and_only_climbs_out_of_a_well() {
         // sitting tail-first from the braking.
         let turn = real_seconds_until(&mut world, 8.0, |w| w.turn_over.is_none());
         let nose = world.ship.rot * DVec3::NEG_Z;
-        let to = (world.position(target) - world.ship_position()).normalize();
+        let to = (stop(&world) - world.ship_position()).normalize();
         let off = nose.angle_between(to).to_degrees();
         assert!(
             off < 1.0,
@@ -1269,6 +1277,39 @@ fn t_cycles_through_cities_under_their_planet() {
     }
     world.act(Action::CycleTarget);
     assert_eq!(world.landing.filter(|c| cities.contains(c)), None);
+}
+
+#[test]
+fn fast_travel_into_a_field_stops_in_laser_reach_of_a_rock() {
+    // Issue #122: not 10 km past the field's edge, a long hand flight
+    // from its rocks.
+    let mut world = World::new(1);
+    let field = world.view.fields[0];
+    open_space(&mut world);
+    world.target = Some(Place::Field(field));
+    world.act(Action::FastTravel);
+    while matches!(world.mode, Mode::FastTravel(_)) {
+        world.update(1.0 / 60.0, Controls::default());
+    }
+    let (_, rocks) = world.field_rocks.clone().expect("in the field's rocks");
+    let f = &world.galaxy.fields[field];
+    let ship = world.ship.rel;
+    let nearest = world
+        .mining
+        .live_rocks(field, f, &rocks, world.clock_s)
+        .map(|r| (r.pos - ship).length() - r.radius)
+        .fold(f64::INFINITY, f64::min);
+    let reach = world.stats().mining_range_m;
+    assert!(
+        nearest < reach,
+        "nearest rock {nearest:.0} m off, laser reaches {reach:.0}"
+    );
+    // Turned nose-on to it: prospect and fire.
+    real_seconds_until(&mut world, 8.0, |w| w.turn_over.is_none());
+    assert!(
+        world.mining.aim.is_some_and(|a| a.distance < reach),
+        "the laser is on a rock as the trip ends"
+    );
 }
 
 /// NAVIGATION (issue #119): stations hang under the body they orbit, the
