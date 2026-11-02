@@ -310,6 +310,17 @@ impl Bot {
             .sum()
     }
 
+    /// Print the real minutes spent on each kind of leg.
+    fn report_legs(&self) {
+        println!(
+            "    legs (min): {:?}",
+            self.legs
+                .iter()
+                .map(|(k, v)| (*k, (v / 60.0 * 10.0).round() / 10.0))
+                .collect::<Vec<_>>()
+        );
+    }
+
     fn worth(&self) -> f64 {
         self.w.player.credits
     }
@@ -506,6 +517,10 @@ fn mining_hour(seed: u64) {
     b.go(port);
     let begin = b.real_s;
     while b.real_s - begin < HOUR {
+        // Back home if the last sale was somewhere without a field.
+        if b.w.view.fields.is_empty() {
+            b.go(port);
+        }
         let quiet_field = |w: &World| w.view.fields.iter().copied().find(|&f| !w.gang_reported(f));
         // Every field has a band out: sit it out docked, a day at a time.
         let mut waited = 0;
@@ -524,22 +539,19 @@ fn mining_hour(seed: u64) {
         let t0 = b.real_s;
         mined += mine_hold(&mut b, begin + HOUR);
         in_field += b.real_s - t0;
-        // Sell where it pays best in this system.
-        let best = if b.w.view.stations.is_empty() {
-            port
-        } else {
-            *b.w.view
-                .stations
-                .iter()
+        // Sell where the hold fetches most per trip among the ports the
+        // trade screen lists for it (this system and one jump out), a
+        // jump counting as 2.5 trips in-system as TRADE RUNS ranks them.
+        let tonnes = b.w.player.cargo[Good::Ore].floor();
+        let best =
+            b.w.buyers(Good::Ore, tonnes, 8)
+                .into_iter()
+                .filter(|x| b.place_of(x.at).is_some() && listed(&b.w, x.at))
                 .max_by(|x, y| {
-                    let p = |s: SettlementId| {
-                        let st = &b.w.galaxy.settlements[s];
-                        crate::trade::sell_value(&st.economy.market, model(&b.w, s), Good::Ore, 1.0)
-                    };
-                    p(**x).total_cmp(&p(**y))
+                    let r = |x: &Buyer| x.per_t / (1.0 + 2.5 * f64::from(x.jumps));
+                    r(x).total_cmp(&r(y))
                 })
-                .unwrap()
-        };
+                .map_or(port, |x| x.at);
         b.go(best);
         b.sell_all();
     }
@@ -550,13 +562,7 @@ fn mining_hour(seed: u64) {
         in_field / 60.0,
         (b.worth() - start) / hours
     );
-    println!(
-        "    legs (min): {:?}",
-        b.legs
-            .iter()
-            .map(|(k, v)| (*k, (v / 60.0 * 10.0).round() / 10.0))
-            .collect::<Vec<_>>()
-    );
+    b.report_legs();
 }
 
 // --------------------------------------------------------------- trading
@@ -615,6 +621,8 @@ fn trading_hour(seed: u64) {
     let start = b.worth();
     let begin = b.real_s;
     let cap = b.w.stats().cargo_t;
+    let day0 = b.w.galaxy.time.days();
+    let mut trips = 0;
     let mut visited: Vec<SettlementId> = Vec::new();
     while b.real_s - begin < HOUR {
         let here = b.w.docked_at().expect("docked");
@@ -671,6 +679,7 @@ fn trading_hour(seed: u64) {
                 }
                 b.go(to);
                 b.sell_all();
+                trips += 1;
             }
             _ => {
                 if std::env::var("BENCH_DEBUG").is_ok() {
@@ -705,9 +714,11 @@ fn trading_hour(seed: u64) {
     let hours = (b.real_s - begin) / HOUR;
     let rate = (b.worth() - start) / hours;
     println!(
-        "trading seed {seed}: {:.0} min, earned {rate:.0} cr/h",
-        (b.real_s - begin) / 60.0
+        "trading seed {seed}: {trips} runs in {:.0} min, {:.0} galaxy days, earned {rate:.0} cr/h",
+        (b.real_s - begin) / 60.0,
+        b.w.galaxy.time.days() - day0
     );
+    b.report_legs();
 }
 
 // ------------------------------------------------------------- contracts
@@ -718,6 +729,7 @@ fn contracts_hour(seed: u64) {
     let mut b = Bot::new(seed);
     let start = b.worth();
     let begin = b.real_s;
+    let day0 = b.w.galaxy.time.days();
     let mut done = 0;
     let mut idle_days = 0;
     let mut visited: Vec<SettlementId> = Vec::new();
@@ -776,8 +788,9 @@ fn contracts_hour(seed: u64) {
     println!(
         "freight seed {seed}: {done} contracts in {:.0} min, {:.0} galaxy days, earned {rate:.0} cr/h",
         (b.real_s - begin) / 60.0,
-        b.w.galaxy.time.days()
+        b.w.galaxy.time.days() - day0
     );
+    b.report_legs();
 }
 
 #[test]
