@@ -154,3 +154,32 @@ fn populations_change_and_stay_sane() {
         "only {changed} populations changed"
     );
 }
+
+#[test]
+fn construction_builds_without_running_away() {
+    let mut state = small();
+    let scale = |state: &GalaxyState| -> f64 {
+        state
+            .settlements
+            .values()
+            .flat_map(|s| s.economy.facilities.iter())
+            .map(|f| f.scale)
+            .sum()
+    };
+    let start = scale(&state);
+    let mut projects = 0;
+    for _ in 0..360 * 3 {
+        tick(&mut state);
+        projects = projects.max(
+            state
+                .settlements
+                .values()
+                .filter(|s| s.economy.project.is_some())
+                .count(),
+        );
+    }
+    let end = scale(&state);
+    assert!(projects > 0, "nothing was ever built");
+    assert!(end > start, "industry shrank: {start} -> {end}");
+    assert!(end < 3.0 * start, "industry ran away: {start} -> {end}");
+}

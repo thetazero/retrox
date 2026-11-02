@@ -14,6 +14,7 @@ pub fn production(state: &mut GalaxyState) {
 /// diplomacy later.
 pub fn planning(state: &mut GalaxyState) {
     crate::fiscal::taxes_and_welfare(state);
+    crate::construction::build(state);
 }
 
 /// Docked fleets sell their cargo and pick their next trip.
