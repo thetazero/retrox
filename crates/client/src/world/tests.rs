@@ -578,34 +578,83 @@ fn a_planet_city_stop_takes_seconds_not_minutes() {
     );
 }
 
+/// The highport above the starting city planet (#112).
+fn highport(world: &World, body: BodyId) -> SettlementId {
+    world
+        .view
+        .stations
+        .iter()
+        .copied()
+        .find(|&s| {
+            matches!(world.galaxy.settlements[s].site,
+                Site::Space(o) if o.parent == retrox_sim::Orbiting::Body(body))
+        })
+        .expect("a highport above the capital")
+}
+
 #[test]
-fn fast_travel_flies_down_a_well_to_what_is_in_it() {
-    // High in a city planet's well, the city below is a fast-travel hop,
-    // not a climb out and back (DESIGN §7.1.1). Seed 1 has no station
-    // inside a city planet's well, so the hop down is from open space in
-    // the well itself.
+fn a_highport_is_a_hop_from_the_city_below() {
+    // DESIGN §7.1.1: inside a well the autopilot flies down to anything
+    // whose arrival point is in the same well. Every city planet has a
+    // station above it, so this happens in play: undock, hop down, land;
+    // launch, hop up. No climb out and back either way.
     let mut world = World::new(1);
     let Mode::Landed { body, .. } = world.mode else {
         panic!("starts landed");
     };
     let planet = Place::Body(body);
-    world.mode = Mode::Normal;
-    world.ship.frame = planet;
-    world.ship.rel = DVec3::X * world.place_radius(planet) * 3.0;
-    world.ship.vel = DVec3::ZERO;
-    assert_eq!(world.current_well(), Some(planet), "placed inside the well");
+    let port = highport(&world, body);
+    assert!(world.arrives_within(Place::Station(port), planet));
+
+    // Undock at the highport: still inside the planet's well.
+    world.mode = Mode::Docked(port);
+    world.ship.frame = Place::Station(port);
+    world.ship.rel = DVec3::ZERO;
+    world.act(Action::Undock);
+    assert_eq!(world.mode, Mode::Normal);
+    assert_eq!(
+        world.current_well(),
+        Some(planet),
+        "undocked inside the well"
+    );
+
+    // Down to the city.
     world.target = Some(planet);
     assert_eq!(world.prompts().fast_travel, Some(planet));
     world.act(Action::FastTravel);
     let Mode::FastTravel(trip) = world.mode else {
         panic!("[J] flies down");
     };
-    assert!(
-        !matches!(trip.leg, Leg::Climb { .. }),
-        "a hop within the well doesn't climb out first"
+    assert_eq!(trip.leg, Leg::To(planet), "no climb out first");
+    let down = real_seconds_until(&mut world, 15.0, |w| w.mode == Mode::Normal);
+    assert!(world.prompts().land.is_some(), "can land on arrival");
+
+    // Land, launch, and back up to the port.
+    world.act(Action::Land);
+    while matches!(world.mode, Mode::Landed { timer, .. } if timer > 0.0) {
+        world.update(1.0 / 60.0, Controls::default());
+    }
+    assert!(matches!(world.mode, Mode::Landed { .. }), "landed");
+    world.act(Action::Launch);
+    world.target = Some(Place::Station(port));
+    assert_eq!(world.prompts().fast_travel, Some(Place::Station(port)));
+    world.act(Action::FastTravel);
+    let Mode::FastTravel(trip) = world.mode else {
+        panic!("[J] flies up");
+    };
+    assert_eq!(
+        trip.leg,
+        Leg::To(Place::Station(port)),
+        "no climb out first"
     );
-    real_seconds_until(&mut world, 15.0, |w| w.mode == Mode::Normal);
-    assert!(world.prompts().land.is_some());
+    let up = real_seconds_until(&mut world, 15.0, |w| w.mode == Mode::Normal);
+    let station = Place::Station(port);
+    assert!(
+        world.distance_to(station) < world.arrival_distance(station) * 1.2,
+        "stopped at the port's arrival point"
+    );
+    assert_eq!(world.current_well(), Some(planet), "never left the well");
+    assert!(down + up < 20.0, "{down:.1} s down, {up:.1} s up");
 }
 
 #[test]

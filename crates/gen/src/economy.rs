@@ -66,7 +66,11 @@ fn system_resources(state: &GalaxyState, system: SystemId) -> Resources {
 /// Facilities and starting markets for every settlement.
 pub fn seed(rng: &mut Rng, state: &mut GalaxyState) {
     let mut holdings: SecondaryMap<FactionId, usize> = SecondaryMap::new();
-    for s in state.settlements.values() {
+    for s in state
+        .settlements
+        .values()
+        .filter(|s| !crate::highports::is_port(state, s))
+    {
         *holdings.entry(s.owner).unwrap().or_default() += 1;
     }
     let ids: Vec<SettlementId> = state.settlements.keys().collect();
@@ -75,8 +79,18 @@ pub fn seed(rng: &mut Rng, state: &mut GalaxyState) {
     let mut placed: Vec<(usize, FacilityKind, f64)> = Vec::new();
     for (i, &id) in ids.iter().enumerate() {
         let settlement = &state.settlements[id];
-        let mut r = rng.fork(settlement.system.index() as u64);
-        let res = system_resources(state, settlement.system);
+        // A highport's rolls are its own, and the planet below does the
+        // mining.
+        let port = crate::highports::is_port(state, settlement);
+        let mut r = rng.fork(settlement.system.index() as u64 | u64::from(port) << 40);
+        let res = if port {
+            Resources {
+                gas: system_resources(state, settlement.system).gas,
+                ..Resources::default()
+            }
+        } else {
+            system_resources(state, settlement.system)
+        };
         let pop = settlement.economy.population;
         // Independent outposts mine at half weight, as unclaimed space did.
         let owned = holdings[settlement.owner] > 1;

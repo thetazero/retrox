@@ -98,6 +98,39 @@ fn totals(state: &GalaxyState) -> (f64, Vec<f64>, u32) {
     )
 }
 
+/// Totals after moving the bubble, with the ships and cargo lost coming
+/// out of the lanes added back. A coarse trip that enters the bubble past
+/// its last lane takes those losses as it starts flying (they'd otherwise
+/// have been taken on arrival), so they're the only things moving the
+/// bubble may lose.
+fn totals_counting_lane_losses(before: &GalaxyState, after: &GalaxyState) -> (f64, Vec<f64>, u32) {
+    let (money, mut goods, mut ships) = totals(after);
+    for (key, company) in &before.companies {
+        for fleet in &company.fleets {
+            let Location::Travelling { jumps: true, .. } = fleet.at else {
+                continue;
+            };
+            let now = after
+                .companies
+                .get(key)
+                .and_then(|c| c.fleets.iter().find(|f| f.id == fleet.id));
+            let (left, cargo_left) = match now {
+                Some(f) => match after.bubble.flights.get(&(key, f.id)) {
+                    Some(flight) if !flight.jumps => (f.ships, f.cargo.map_or(0.0, |c| c.amount)),
+                    _ => continue,
+                },
+                None => (0, 0.0),
+            };
+            ships += fleet.ships - left;
+            if let Some(c) = fleet.cargo {
+                let i = Good::ALL.iter().position(|&g| g == c.good).expect("a good");
+                goods[i] += c.amount - cargo_left;
+            }
+        }
+    }
+    (money, goods, ships)
+}
+
 #[test]
 fn materializing_and_collapsing_conserve_everything() {
     let mut state = warm(60);
@@ -184,9 +217,9 @@ fn moving_the_bubble_keeps_the_books() {
     for day in 0..120 {
         if day % 10 == 0 {
             let to = if day % 20 == 0 { far } else { centre };
-            let before = totals(&state);
+            let (snapshot, before) = (state.clone(), totals(&state));
             bubble::set_centre(&mut state, Some(to));
-            assert_eq!(totals(&state), before);
+            assert_eq!(totals_counting_lane_losses(&snapshot, &state), before);
             consistent(&state);
         }
         tick(&mut state);

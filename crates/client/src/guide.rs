@@ -252,7 +252,11 @@ pub fn hint(w: &World) -> Option<String> {
     if prompts.fast_travel.is_some() {
         return Some(format!("[J] to fast travel to {name}."));
     }
-    if let Some(well) = well {
+    // A target in the same well (a highport above its city, #112) is just
+    // close: fly the rest.
+    if let Some(well) = well
+        && prompts.well.is_some_and(|p| !w.arrives_within(target, p))
+    {
         return Some(format!(
             "{name} is outside the gravity well of {well}: [J] to climb out, then [J] again \
              to fast travel."
@@ -305,6 +309,20 @@ mod tests {
         assert!(p.took_work && p.launched && p.targeted, "{p:?}");
         assert!(!p.arrived && !p.earned, "{p:?}");
         assert!(hint(&w).is_some());
+    }
+
+    #[test]
+    fn a_highport_in_the_same_well_is_docked_at_not_climbed_to() {
+        // Just undocked from the highport above the capital (#112): it's
+        // in the planet's well, so the hint is to dock, not climb out.
+        let mut w = World::new(1);
+        let port = w.view.stations[0];
+        w.mode = Mode::Docked(port);
+        w.act(crate::world::Action::Undock);
+        w.target = Some(crate::world::Place::Station(port));
+        assert!(w.prompts().well.is_some(), "undocked inside the well");
+        let hint = hint(&w).expect("a hint");
+        assert!(hint.contains("[F] to dock"), "{hint}");
     }
 
     #[test]

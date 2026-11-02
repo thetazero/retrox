@@ -117,6 +117,35 @@ impl GalaxyState {
         id
     }
 
+    /// Whether a settlement is a highport: a station orbiting a body that
+    /// has a city on it (#112). A city and the port above it are one
+    /// settled place, for anything that counts places (pirate gangs).
+    pub fn is_port(&self, settlement: &Settlement) -> bool {
+        let crate::Site::Space(orbit) = settlement.site else {
+            return false;
+        };
+        let crate::Orbiting::Body(body) = orbit.parent else {
+            return false;
+        };
+        self.settlements_in(settlement.system)
+            .any(|(_, s)| matches!(s.site, crate::Site::Region(r) if self.regions[r].body == body))
+    }
+
+    /// Settled places: settlements, not counting highports.
+    pub fn places(&self) -> usize {
+        self.settlements
+            .values()
+            .filter(|s| !self.is_port(s))
+            .count()
+    }
+
+    /// Settled places in a system: its settlements, not counting highports.
+    pub fn places_in(&self, system: SystemId) -> usize {
+        self.settlements_in(system)
+            .filter(|(_, s)| !self.is_port(s))
+            .count()
+    }
+
     /// The settlements in a system, in founding order.
     pub fn settlements_in(
         &self,

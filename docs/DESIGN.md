@@ -585,6 +585,21 @@ minutes (pillar 4):
   breaks at its edge. That stop, the galaxy time the climb takes, and the
   fact that every launch starts inside one are what make wells matter.
 - Flying out by hand still works, for anyone who wants to.
+- **Every city planet has a highport above it** (#112), so the hop from a
+  station down to the city really happens: undock, [J] down, land; launch,
+  [J] up. The galaxy generator puts one station over each planet with a
+  city of at least 1 population (on seed 1, 708 of 754 city planets; the
+  frontier outposts go without). It is a settlement of its own, named
+  "*Planet* Highport", owned by the planet's biggest city and holding 8%
+  of that city's people, so a system's population is unchanged. It has
+  its own market but does no mining (the planet below does that); it can
+  run a gas plant if the system has gas. It orbits at 2.6–3.2 radii:
+  above the 2-radii landing range, with its 20 km arrival point well
+  inside the 4-radii well. A colony that finds its site taken settles a
+  station at 3 radii instead of on the well's edge, for the same reason.
+  Cities founded later in history get no port by rule; that is left to
+  colonization. The cradle (§4.2) starts without one: at the dawn of FTL
+  the nations have only their cities.
 
 A planet stop now takes about as long as a station stop: a few seconds
 of autopilot each way plus the landing sequence.
@@ -677,6 +692,14 @@ somewhere, live somewhere, and fly for real near the player.
   25 t per ship of the cargo, and one time in twenty a ship (much more
   often and replacement ships outrun the freight: the economy test's
   idle share goes past a fifth).
+- **Highports (#112) don't add pirates.** A city and the port above it are
+  one settled place: the gang cap, the starting gangs, the monthly
+  founding rolls and a lair's prey and law all count places, not
+  settlements. A run between a port and the city below never leaves the
+  planet's well and stays under the port, so coarse raids skip it. With
+  both, the share of loaded freight robbed stays as tuned (1.47% against
+  1.40% before highports, over four seeds of a year on the small test
+  galaxy; within seed noise).
 - **Raids, in the bubble.** A gang whose lair is in the bubble flies,
   under the shared autopilot and flight model like every other ship:
   it holds at its field, spots the nearest laden trader within 0.4 AU,
