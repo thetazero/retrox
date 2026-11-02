@@ -662,6 +662,9 @@ pub struct Combat {
     pending: Vec<(Side, f64, DVec3, DVec3)>,
     said: Vec<String>,
     dropped: Vec<(DVec3, DVec3, Good, f64, u64)>,
+    /// Nothing has happened since [`Combat::new`]: the ship is as a
+    /// loaded game has it.
+    fresh: bool,
 }
 
 impl Combat {
@@ -689,7 +692,23 @@ impl Combat {
             pending: Vec::new(),
             said: Vec::new(),
             dropped: Vec::new(),
+            fresh: true,
         }
+    }
+
+    /// The ship at rest in a dock or a city: cool, shields up, guns ready,
+    /// nothing in flight. That is just how a loaded checkpoint has it, so
+    /// the game after a checkpoint plays the same whether it was restored
+    /// or not (DESIGN §7.7). The bands fought are remembered.
+    pub fn rest(&mut self, fit: &Loadout, damage: &Damage) {
+        if self.fresh && self.player.fit == *fit && self.player.damage == *damage {
+            return;
+        }
+        let mut c = Combat::new(fit.clone(), damage.clone());
+        c.bands = std::mem::take(&mut self.bands);
+        // The sound follows these counts; they only go up.
+        c.tally = self.tally;
+        *self = c;
     }
 
     /// Raiders within `range` of `pos`.
@@ -781,6 +800,11 @@ impl Combat {
             0
         };
         let mut rng = Rng::new((field.index() as u64) ^ epoch.wrapping_mul(0x9e37_79b9_7f4a_7c15));
+        // The fight's own dice (shot scatter, wreckage) start over too, from
+        // the band and who of it is left: what came before (guns fired at
+        // nothing, an earlier fight) isn't saved, and a restored checkpoint
+        // has to meet the same fight (DESIGN §7.7).
+        self.rng = Rng::new(rng.next_u64() ^ u64::from(killed).wrapping_mul(0xd6e8_feb8_6659_fd93));
         // They come from deeper in the field, toward the ship.
         let inward = (-player.pos).normalize_or(DVec3::X);
         let side = inward.cross(DVec3::Y).normalize_or(DVec3::Z);
@@ -827,6 +851,7 @@ impl Combat {
     /// One frame of the fight.
     pub fn update(&mut self, dt: f64, pilot: Pilot, solids: &[(DVec3, f64)]) -> Outcome {
         let mut out = Outcome::default();
+        self.fresh = false;
         self.since_scored += dt;
         self.since_shield_hit += dt;
         self.since_hull_hit += dt;

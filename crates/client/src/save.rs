@@ -641,6 +641,107 @@ mod tests {
         assert_same(&world, &replay);
     }
 
+    /// The same hands on the controls, frame by frame: weave a little and
+    /// fire in bursts, then stop and take what comes.
+    fn pilot(frame: u32) -> Controls {
+        let t = f64::from(frame) / 60.0;
+        let fighting = t < 25.0;
+        Controls {
+            stick: DVec3::new((t * 0.7).sin() * 0.4, (t * 0.45).cos() * 0.3, 0.0)
+                * f64::from(u8::from(fighting)),
+            fire: fighting && (t % 3.0) < 1.2,
+            ..Controls::default()
+        }
+    }
+
+    /// Fly `world` with [`pilot`] for up to `seconds`, writing down where
+    /// everyone is each frame, and stopping a few seconds after the ship is
+    /// lost.
+    fn fly_and_record(world: &mut World, seconds: u32, steer: fn(u32) -> Controls) -> Vec<String> {
+        let mut trace = Vec::new();
+        for frame in 0..seconds * 60 {
+            world.update(1.0 / 60.0, steer(frame));
+            let c = &world.combat;
+            trace.push(format!(
+                "{frame} {:?} {:?} {:?} {:?} {:?} {:?} {:?}",
+                world.clock_s,
+                world.ship.rel,
+                world.ship.vel,
+                world.player.ship.damage,
+                c.lost,
+                c.raiders
+                    .iter()
+                    .map(|r| (r.id, r.craft.pos, r.vessel.hull_left()))
+                    .collect::<Vec<_>>(),
+                c.shots.len(),
+            ));
+            if c.lost.is_some_and(|t| t > 3.0) {
+                break;
+            }
+        }
+        trace
+    }
+
+    /// DESIGN §7.7: losing the ship brings back the checkpoint with the
+    /// galaxy as it was, and the same hands meet the same fight and the
+    /// same end; different ones change it.
+    #[test]
+    fn a_lost_fight_replays_from_the_checkpoint() {
+        let mut world = World::new(1);
+        world.start_at_station();
+        world.act(Action::Undock);
+        // Guns fired at nothing before the checkpoint: their dice aren't
+        // saved, so they mustn't change the fight to come.
+        for frame in 0..90 {
+            world.update(1.0 / 60.0, Controls { fire: frame % 2 == 0, ..Controls::default() });
+        }
+        // Back in, and the checkpoint written as it is on docking.
+        world.start_at_station();
+        world.update(1.0 / 60.0, Controls::default());
+        let checkpoint = snapshot(&world, &GameId::new(1), Kind::Checkpoint, 0.0)
+            .unwrap()
+            .encode();
+        // Out to the raiders' field (as fast travel and a jump would).
+        let sortie = |w: &mut World| assert!(w.start_by_raiders(), "seed 1 has raiders near");
+
+        sortie(&mut world);
+        let first = fly_and_record(&mut world, 300, pilot);
+        assert!(
+            world.combat.lost.is_some(),
+            "the raiders win: {}",
+            first.last().unwrap()
+        );
+        assert!(
+            can_save(&world).is_err(),
+            "a lost ship isn't a checkpoint"
+        );
+
+        // Restored: the galaxy as it was then, the ship whole.
+        let mut restored = decode(&checkpoint).unwrap().world;
+        let before = decode(&checkpoint).unwrap().world;
+        assert_same(&restored, &before);
+        assert!(restored.combat.lost.is_none());
+        assert!(restored.clock_s < world.clock_s, "time went back");
+
+        sortie(&mut restored);
+        let again = fly_and_record(&mut restored, 300, pilot);
+        assert_eq!(first.len(), again.len(), "lost on the same frame");
+        for (a, b) in first.iter().zip(&again) {
+            assert_eq!(a, b, "the replay drifted");
+        }
+        assert_same(&world, &restored);
+
+        // What you learned is yours to use: run instead, and it goes
+        // differently.
+        let mut wiser = decode(&checkpoint).unwrap().world;
+        sortie(&mut wiser);
+        let fled = fly_and_record(&mut wiser, 60, |_| Controls {
+            throttle_delta: 1.0,
+            ..Controls::default()
+        });
+        assert_ne!(fled[600], first[600], "different hands, different fight");
+    }
+
     #[test]
     fn mining_survives_a_save() {
         let mut world = World::new(3);

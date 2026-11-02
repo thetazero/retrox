@@ -110,9 +110,13 @@ impl World {
             }
         }
 
+        if self.docked_at().is_some() {
+            self.combat
+                .rest(&self.player.ship.fit, &self.player.ship.damage);
+            return;
+        }
         if self.mode != Mode::Normal {
-            // Docked, landed or in transit: the ship cools and its shields
-            // come back.
+            // In transit: the ship cools and its shields come back.
             self.combat.player.systems(dt, 0.0, false);
             return;
         }
