@@ -1420,3 +1420,65 @@ fn nearest_shipyards_are_reachable_and_ordered() {
         assert!(!refits.is_empty(), "seed {seed}: nowhere to refit");
     }
 }
+
+/// A new pilot at the start can find a trade run (issue #160): in
+/// market space, something to buy here and a port within one jump that
+/// pays more for it, and buying it heads the ship there; in planned
+/// space, where one price holds everywhere, the way to market space.
+#[test]
+fn the_start_shows_a_trade_run_or_the_way_to_one() {
+    let mut market_starts = 0;
+    for seed in 1..=4 {
+        let mut w = World::new(seed);
+        let here = w.docked_at().expect("starts landed");
+        let model = w.galaxy.factions[w.galaxy.settlements[here].owner].economy;
+        let runs = w.trade_runs(4);
+        if runs.is_empty() {
+            assert_eq!(
+                model,
+                retrox_sim::EconomyModel::Planned,
+                "a market start has runs"
+            );
+            let (port, jumps) = w.nearest_market_space().expect("market space somewhere");
+            assert!(jumps >= 1);
+            let s = &w.galaxy.settlements[port];
+            assert_eq!(
+                w.galaxy.factions[s.owner].economy,
+                retrox_sim::EconomyModel::Market
+            );
+            continue;
+        }
+        if model == retrox_sim::EconomyModel::Market {
+            market_starts += 1;
+        }
+        let run = runs[0];
+        assert!(run.profit() > 0.0 && run.jumps <= 1);
+        assert!(runs.windows(2).all(|p| p[0].good != p[1].good));
+        w.act(Action::TakeRun(run));
+        assert_eq!(w.player.cargo[run.good], run.tonnes, "bought the lot");
+        assert_eq!(w.player.sell_at, Some(run.to));
+        let to_system = w.galaxy.settlements[run.to].system;
+        if to_system == w.system {
+            assert!(w.target.is_some(), "targeted");
+        } else {
+            assert_eq!(w.course, Some(to_system), "course plotted");
+        }
+        let hint = crate::guide::hint(&w).expect("a hint");
+        assert!(hint.contains("LAUNCH"), "{hint}");
+        // Sold where it goes, it pays more than it cost, and the hold
+        // is no longer bound anywhere.
+        w.mode = Mode::Docked(run.to);
+        if w.city_body(run.to).is_some() {
+            w.mode = Mode::Landed {
+                city: run.to,
+                body: w.city_body(run.to).unwrap(),
+                timer: 0.0,
+            };
+        }
+        let before = w.player.credits;
+        w.act(Action::Trade(run.good, -run.tonnes));
+        assert!(w.player.credits - before > run.cost, "sold at a profit");
+        assert_eq!(w.player.sell_at, None);
+    }
+    assert!(market_starts > 0);
+}

@@ -1249,7 +1249,7 @@ and field by hand, up to 30 minutes of an hour.
 |---|---|
 | Mining, courier (12 t, light laser) | 1 720 · 2 640 · 2 220 · 830 |
 | Freight contracts, courier | 5 640 · 5 150 · 4 530 · 5 430 |
-| Trading, courier | 45 750 · 12 420 · 31 550 · 28 350 |
+| Trading, courier | 45 750 · 22 760 · 32 550 · 20 330 |
 | Mining, gunship refit (180 t, 2 lasers) | 2 210 · 8 540 · 1 670 · 460 |
 | Freight contracts, hauler (360 t) | 11 320 · 16 280 · 19 250 · 16 750 |
 | Trading, hauler | 67 910 · 78 070 · 22 080 · 66 840 |
@@ -1278,6 +1278,52 @@ large ship (a trader, a few), which leaves fleets and capital ships
 (§7.5) the rest of the ~100-hour arc (§2). These hours shrank with the
 bench's travel times (#122); whether the ladder needs stretching again
 goes with #149.
+
+#### 7.8.1 Trade runs (#160)
+
+A new player couldn't tell how to trade: the trade screen showed only
+this market. Decided:
+
+- **TRADE RUNS**, a panel beside the market, works out what a pilot
+  can hear (§7.3: this system and one jump out, today's prices): for
+  each good on sale here, the lot the hold, purse and stock allow, and
+  the port in reach that pays most for it, if it clears 5% of the cost
+  and 20 cr. At most four, one per good, best first by profit per trip
+  (a jump counts as 2.5 trips in-system: the climb, the jump, the
+  crossing). Each card shows the lot's cost here, what it fetches
+  there (for the whole lot, since selling moves a market) and the
+  profit. Prices still move on the way, so a run can come in over or
+  under its estimate.
+- **BUY & GO** buys the lot and heads for where it sells: it targets a
+  port in this system or plots the course to another. The hold
+  remembers where it's bound (`Player::sell_at`, saved), so the
+  first-steps hint, NAVIGATION's CARGO tag and the hub lead there as
+  they do for a contract, and the hint at the port says to sell. It's
+  forgotten once the hold's own goods are sold. With goods aboard, the
+  panel lists where each sells best in reach, with GO.
+- **Planned economies.** One price holds everywhere in planned space,
+  so with nothing but official prices there'd be no run from half the
+  starts. §7.8 already gives a planned faction's delivery premium to
+  whoever carries the goods, and NPC haulers were paid it; now the
+  player is too, on any sale to a settlement below target (the same
+  formula: up to 80% of base price at an empty market, nothing at
+  target, reined in by the faction's debt), paid from the faction's
+  treasury. The market table shows it under SELL as "+N PREMIUM". In
+  turn a planned market **sells only its surplus over target**, as NPC
+  haulers buy (the STOCK column reads FOR SALE there), or a trader could
+  buy below target and sell it straight back for the premium. With
+  both, 10 of 12 starts (seeds 1–12) show a run; from the other two,
+  and anywhere else with none, the panel names the **nearest market
+  space** by jumps (which economy a faction runs is public, unlike its
+  prices) with PLOT COURSE, and says contracts and mining pay anywhere.
+- The career bench's courier trader moved from 45 750 · 12 420 ·
+  35 660 · 28 350 cr/h (seeds 1–4) to 45 750 · 22 760 · 32 550 ·
+  20 330: the premium pays on seed 2's planned start, and buying only
+  surplus costs seeds 3 and 4. About the same on average, so trading's
+  lead over the other careers (#149) is no wider.
+- Prices further out than a jump stay unknown: a remembered price
+  list for ports the player has visited is the natural next step for
+  "a trader still learns the rest by going" (§7.3), not built yet.
 
 ## 8. Art direction & audio
 
@@ -1364,9 +1410,10 @@ player.
   card draw from the same key tables, so they can't disagree.
 - The suggested first run is a freight contract: it pays for sure and
   walks the player through launching, the galaxy map, a jump, fast travel
-  and docking. Mining and trade are offered as the other ways in. On the
-  dispatch board the hint names the nearest job the player can take
-  (#129), the quickest to pay. Delivery says what came back in full: the
+  and docking. Mining and trade are offered as the other ways in (the
+  hub's first hint names all three; trade is led by TRADE RUNS,
+  §7.8.1). On the dispatch board the hint names the nearest job the
+  player can take (#129), the quickest to pay. Delivery says what came back in full: the
   fee and the deposit, so the jump in the purse adds up.
 - **Hints link to what they name** (#165): a place in a hint is an
   amber, underlined link (`{Belt B}` in the hint's text). Clicking a
@@ -1645,6 +1692,14 @@ retrox/
   the player's words, labelled **blocks play** (a new player can't get
   through the loop without outside knowledge, or loses work or money to
   it) or **polish** (playable, but rough to look at or slow to feel).
+  The `info:` readout gives each raider's bearing and the bearing of its
+  lead pip (where the guns must point, as the HUD draws it), and each
+  gang laired in the system with its aim, rest and distance (added in
+  #138, whose fights missed by aiming at the raider, not the pip, and
+  whose lair stood empty for reasons the screen couldn't show). A
+  playtest checks each fixed issue it covers in play, not only the new
+  ground, and a fix that didn't hold is filed afresh, pointing at the
+  old issue, rather than reopened.
 
 ## 10. Milestones (rough)
 

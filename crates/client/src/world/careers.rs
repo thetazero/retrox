@@ -622,14 +622,16 @@ fn trading_hour(seed: u64) {
         let mut best: Option<(f64, Good, SettlementId, f64)> = None;
         let src = &b.w.galaxy.settlements[here].economy;
         for good in Good::ALL {
-            let n = cap.min(src.market.stock[good].floor()).min(
-                (b.w.player.credits
-                    / src
-                        .market
-                        .price_at(good, src.market.stock[good], model(&b.w, here))
-                        .max(1.0))
-                .floor(),
-            );
+            let n = cap
+                .min(crate::trade::for_sale(&src.market, model(&b.w, here), good).floor())
+                .min(
+                    (b.w.player.credits
+                        / src
+                            .market
+                            .price_at(good, src.market.stock[good], model(&b.w, here))
+                            .max(1.0))
+                    .floor(),
+                );
             if n < 1.0 {
                 continue;
             }
@@ -638,12 +640,11 @@ fn trading_hour(seed: u64) {
                 if to == here {
                     continue;
                 }
-                let dst = &b.w.galaxy.settlements[to].economy;
-                let value = crate::trade::sell_value(&dst.market, model(&b.w, to), good, n);
-                // A market that can't pay for the whole lot buys none of it.
-                if value > dst.treasury {
+                // A market that can't pay for the whole lot buys none of
+                // it; a planned one adds its delivery premium.
+                let Some(value) = b.w.sale_value(to, good, n) else {
                     continue;
-                }
+                };
                 let jumps =
                     b.w.route(b.w.galaxy.settlements[to].system)
                         .map_or(9, |r| r.len() - 1);

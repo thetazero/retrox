@@ -261,6 +261,11 @@ pub enum Action {
     Inspect(&'static retrox_sim::ship::Hull),
     /// Buy (positive) or sell (negative) tonnes of a good.
     Trade(Good, f64),
+    /// Buy a trade run's lot and head for where it sells (issue #160).
+    TakeRun(Run),
+    /// Head for a port to sell the hold's goods there: target it, or plot
+    /// a course to its system (issue #160).
+    Head(SettlementId),
     /// Take a contract off the dispatch board (by index into
     /// [`World::board`]).
     AcceptContract(usize),
@@ -313,6 +318,35 @@ pub struct Buyer {
     pub jumps: u32,
     /// Credits per tonne, for the whole lot.
     pub per_t: f64,
+}
+
+/// A trade run from the market the player is docked at (issue #160): a
+/// lot of one good to buy here and the market within one jump that pays
+/// most for it, with what each end comes to for the whole lot.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Run {
+    pub good: Good,
+    /// Whole tonnes: as much as the hold, the purse and the stock allow.
+    pub tonnes: f64,
+    pub to: SettlementId,
+    /// 0 in this system.
+    pub jumps: u32,
+    /// What buying the lot here costs.
+    pub cost: f64,
+    /// What selling it there fetches, at today's prices.
+    pub value: f64,
+}
+
+impl Run {
+    pub fn profit(&self) -> f64 {
+        self.value - self.cost
+    }
+}
+
+/// A run's profit for the time it takes: a trip in-system counts 1, a
+/// jump out 2.5 (the climb, the jump and the crossing).
+fn run_rate(r: &Run) -> f64 {
+    r.profit() / (1.0 + 1.5 * r.jumps as f64)
 }
 
 pub struct World {
@@ -1014,12 +1048,47 @@ impl World {
                 }
             }
             Action::Inspect(hull) => self.inspect = Some(hull),
+            Action::TakeRun(run) => {
+                let before = self.player.cargo[run.good];
+                self.act(Action::Trade(run.good, run.tonnes));
+                if self.player.cargo[run.good] > before {
+                    self.act(Action::Head(run.to));
+                    let text = self.message.as_ref().map(|m| m.0.clone());
+                    if let Some(text) = text {
+                        self.say(format!(
+                            "{text}. It sells best at {}",
+                            self.galaxy.settlements[run.to].name
+                        ));
+                    }
+                }
+            }
+            Action::Head(to) => {
+                let Some(s) = self.galaxy.settlements.get(to) else {
+                    return;
+                };
+                let system = s.system;
+                self.player.sell_at = Some(to);
+                if system == self.system {
+                    if self.view.stations.contains(&to) {
+                        self.act(Action::Target(Place::Station(to)));
+                    } else {
+                        self.act(Action::TargetCity(to));
+                    }
+                } else {
+                    self.act(Action::PlotCourse(Some(system)));
+                }
+            }
             Action::Trade(good, amount) => {
                 let Some(here) = self.docked_at() else {
                     return;
                 };
                 let capacity = self.stats().cargo_t;
                 let before = self.player.credits;
+                let premium = if amount < 0.0 {
+                    self.premium(here, good, -amount.round())
+                } else {
+                    0.0
+                };
                 let settlement = &mut self.galaxy.settlements[here];
                 let model = self.galaxy.factions[settlement.owner].economy;
                 let result = crate::trade::trade(
@@ -1030,7 +1099,26 @@ impl World {
                     good,
                     amount,
                 );
+                // The faction pays its delivery premium on a sale, as it
+                // pays an NPC hauler.
+                let result = match result {
+                    Ok(text) if premium >= 1.0 => {
+                        let owner = self.galaxy.settlements[here].owner;
+                        self.player.credits += premium;
+                        if let Some(f) = self.galaxy.factions.get_mut(owner) {
+                            f.treasury -= premium;
+                        }
+                        Ok(format!(
+                            "{text}, and {} in delivery premium",
+                            crate::hud::credits(premium)
+                        ))
+                    }
+                    r => r,
+                };
                 self.player.progress.earned |= self.player.credits > before;
+                if self.player.cargo.0.iter().all(|&t| t < 0.5) {
+                    self.player.sell_at = None;
+                }
                 match result {
                     Ok(text) | Err(text) => self.say(text),
                 }
@@ -1331,34 +1419,177 @@ impl World {
         }
     }
 
+    /// The markets a pilot hears prices from (DESIGN §7.3): every port
+    /// in this system that NAVIGATION lists, and every port one jump out,
+    /// each with its jumps.
+    pub fn ports_in_reach(&self) -> Vec<(SettlementId, u32)> {
+        let here = self
+            .view
+            .stations
+            .iter()
+            .copied()
+            .chain(self.view.cities.iter().map(|&(c, _)| c))
+            .map(|s| (s, 0));
+        let out = self.lanes().into_iter().flat_map(|l| {
+            self.galaxy
+                .settlements_in(l.to)
+                .filter(|(_, s)| !matches!(s.site, Site::Surface(_)))
+                .map(|(at, _)| (at, 1))
+                .collect::<Vec<_>>()
+        });
+        here.chain(out)
+            .filter(|(s, _)| self.galaxy.settlements.get(*s).is_some())
+            .collect()
+    }
+
+    /// What `tonnes` of `good` fetch at a port, the delivery premium
+    /// included, if it can pay for the lot (a market that can't buys none
+    /// of it).
+    pub fn sale_value(&self, at: SettlementId, good: Good, tonnes: f64) -> Option<f64> {
+        let s = self.galaxy.settlements.get(at)?;
+        let model = self.galaxy.factions.get(s.owner)?.economy;
+        let value = crate::trade::sell_value(&s.economy.market, model, good, tonnes);
+        (value <= s.economy.treasury).then_some(value + self.premium(at, good, tonnes))
+    }
+
+    /// The delivery premium a planned faction pays for `tonnes` of `good`
+    /// sold to one of its settlements short of it (issue #160), as it pays
+    /// an NPC hauler (`retrox_sim::fiscal::contract_premium`): up to 80% of
+    /// the base price at an empty market, nothing at target stock, reined
+    /// in by the faction's debt. DESIGN §7.8: the premium belongs to
+    /// whoever buys the goods and carries them, the player included.
+    pub fn premium(&self, at: SettlementId, good: Good, tonnes: f64) -> f64 {
+        let Some(s) = self.galaxy.settlements.get(at) else {
+            return 0.0;
+        };
+        let planned = self
+            .galaxy
+            .factions
+            .get(s.owner)
+            .is_some_and(|f| f.economy == retrox_sim::EconomyModel::Planned);
+        if !planned || tonnes <= 0.0 {
+            return 0.0;
+        }
+        let market = &s.economy.market;
+        let target = market.target(good);
+        if target <= 0.0 {
+            return 0.0;
+        }
+        let stock = market.stock[good] + tonnes / 2.0;
+        let shortage = (1.0 - stock / target).clamp(0.0, 1.0);
+        retrox_sim::fiscal::max_premium(good)
+            * shortage
+            * retrox_sim::fiscal::thrift(&self.galaxy, s.owner)
+            * tonnes
+    }
+
     /// Where `tonnes` of `good` sell best (issue #122): the markets in this
     /// system and one jump out, best price per tonne first, at most
     /// `max`. Selling a hold moves a market's price, so it's the price for
     /// the whole lot.
     pub fn buyers(&self, good: Good, tonnes: f64, max: usize) -> Vec<Buyer> {
         let tonnes = tonnes.max(1.0);
-        let systems =
-            std::iter::once((self.system, 0)).chain(self.lanes().into_iter().map(|l| (l.to, 1)));
-        let mut out: Vec<Buyer> = systems
-            .flat_map(|(system, jumps)| {
-                self.galaxy
-                    .settlements_in(system)
-                    .filter(|(_, s)| !matches!(s.site, Site::Surface(_)))
-                    .filter_map(move |(at, s)| {
-                        let model = self.galaxy.factions.get(s.owner)?.economy;
-                        let value =
-                            crate::trade::sell_value(&s.economy.market, model, good, tonnes);
-                        Some(Buyer {
-                            at,
-                            jumps,
-                            per_t: value / tonnes,
-                        })
-                    })
+        let mut out: Vec<Buyer> = self
+            .ports_in_reach()
+            .into_iter()
+            .filter_map(|(at, jumps)| {
+                Some(Buyer {
+                    at,
+                    jumps,
+                    per_t: self.sale_value(at, good, tonnes)? / tonnes,
+                })
             })
             .collect();
         out.sort_by(|a, b| b.per_t.total_cmp(&a.per_t).then(a.jumps.cmp(&b.jumps)));
         out.truncate(max);
         out
+    }
+
+    /// The nearest port in market space by jumps, and its jumps (issue
+    /// #160): where a trader in planned space, where one price holds
+    /// everywhere, finds prices that float. Which economy a faction runs
+    /// is public (the hub and the map say it), unlike its prices. The
+    /// most populous port of the nearest system with one; `None` if this
+    /// system has one, or none is in reach.
+    pub fn nearest_market_space(&self) -> Option<(SettlementId, u32)> {
+        let market = |sys: SystemId| {
+            self.galaxy
+                .settlements_in(sys)
+                .filter(|(_, s)| !matches!(s.site, Site::Surface(_)))
+                .filter(|(_, s)| {
+                    self.galaxy
+                        .factions
+                        .get(s.owner)
+                        .is_some_and(|f| f.economy == retrox_sim::EconomyModel::Market)
+                })
+                .max_by(|a, b| a.1.economy.population.total_cmp(&b.1.economy.population))
+                .map(|(id, _)| id)
+        };
+        let mut seen = std::collections::HashSet::from([self.system]);
+        let mut ring = vec![self.system];
+        for jumps in 0..30 {
+            if let Some(at) = ring.iter().find_map(|&s| market(s)) {
+                return (jumps > 0).then_some((at, jumps));
+            }
+            ring = ring
+                .iter()
+                .flat_map(|&s| self.galaxy.systems[s].lanes.iter().map(move |&l| (s, l)))
+                .map(|(s, l)| self.galaxy.lanes[l].other(s))
+                .filter(|&t| seen.insert(t))
+                .collect();
+            if ring.is_empty() {
+                break;
+            }
+        }
+        None
+    }
+
+    /// The trade runs from the market the ship is docked at (issue #160):
+    /// for each good this market sells, the lot the player can buy and the
+    /// port within one jump that pays most for it, if that's worth the
+    /// trip. Best first, by profit for the time a trip takes (a jump
+    /// counts as about two trips in-system), at most `max`.
+    pub fn trade_runs(&self, max: usize) -> Vec<Run> {
+        let Some(here) = self.docked_at() else {
+            return Vec::new();
+        };
+        let Some(s) = self.galaxy.settlements.get(here) else {
+            return Vec::new();
+        };
+        let Some(model) = self.galaxy.factions.get(s.owner).map(|f| f.economy) else {
+            return Vec::new();
+        };
+        let capacity = self.stats().cargo_t;
+        let ports = self.ports_in_reach();
+        let mut runs: Vec<Run> = Good::ALL
+            .into_iter()
+            .filter_map(|good| {
+                let tonnes = crate::trade::max_buy(&self.player, capacity, &s.economy, model, good);
+                if tonnes < 1.0 {
+                    return None;
+                }
+                let cost = crate::trade::buy_cost(&s.economy.market, model, good, tonnes);
+                ports
+                    .iter()
+                    .filter(|&&(to, _)| to != here)
+                    .filter_map(|&(to, jumps)| {
+                        Some(Run {
+                            good,
+                            tonnes,
+                            to,
+                            jumps,
+                            cost,
+                            value: self.sale_value(to, good, tonnes)?,
+                        })
+                    })
+                    // Worth the trip: a few percent and some credits.
+                    .filter(|r| r.profit() > (0.05 * r.cost).max(20.0))
+                    .max_by(|a, b| run_rate(a).total_cmp(&run_rate(b)))
+            })
+            .collect();
+        runs.sort_by(|a, b| run_rate(b).total_cmp(&run_rate(a)));
+        runs.truncate(max);
+        runs
     }
 
     /// Skim the richest gas giant in this system (or the first system with

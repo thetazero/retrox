@@ -633,7 +633,13 @@ fn nav_list(ui: &mut egui::Ui, w: &World, actions: &mut Vec<Action>) {
     let rows = w.nav_entries();
     let depths: Vec<usize> = rows.iter().map(|&r| w.nav_depth(r)).collect();
     let selected_row = w.nav_selected();
-    let bound: Vec<SettlementId> = w.player.contracts.iter().map(|c| c.offer.to).collect();
+    let bound: Vec<SettlementId> = w
+        .player
+        .contracts
+        .iter()
+        .map(|c| c.offer.to)
+        .chain(w.player.sell_at)
+        .collect();
     let mut heading: Option<&str> = None;
     for (i, &(place, city)) in rows.iter().enumerate() {
         let depth = depths[i];

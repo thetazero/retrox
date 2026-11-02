@@ -70,6 +70,11 @@ pub struct Player {
     /// Standing with each faction (DESIGN §7.2.2).
     #[serde(default)]
     pub standing: crate::standing::Standing,
+    /// Where the player is taking their own goods to sell (issue #160):
+    /// set by a trade run or a GO on the trade screen, cleared when the
+    /// hold's own goods are sold.
+    #[serde(default)]
+    pub sell_at: Option<retrox_sim::SettlementId>,
 }
 
 impl Player {
@@ -88,6 +93,7 @@ impl Player {
             bought: 1,
             standing: Default::default(),
             progress: Default::default(),
+            sell_at: None,
         }
     }
 
