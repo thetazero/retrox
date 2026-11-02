@@ -228,7 +228,7 @@ impl World {
         self.update(0.02, super::Controls::default());
         // Look away from the rock we parked by, out into open space.
         self.ship.rot = super::look_rotation(self.ship.rel);
-        self.cam_rot = self.ship.rot;
+        self.reset_camera();
         let me = self.player_craft();
         let n = self.combat.raiders.len();
         for (i, r) in self.combat.raiders.iter_mut().enumerate() {
