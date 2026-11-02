@@ -58,6 +58,10 @@ pub struct GalaxyState {
     #[serde(default)]
     pub pirates: crate::pirates::Pirates,
     pub colony_ships: Pool<crate::colonize::ColonyShipId, crate::colonize::ColonyShip>,
+    /// Which sites are taken and where colonists could go; see
+    /// [`crate::colonize::Sites`].
+    #[serde(skip)]
+    pub(crate) sites: crate::colonize::Sites,
     pub history: History,
 }
 
@@ -112,6 +116,7 @@ impl GalaxyState {
     /// Found a settlement, keeping its system's settlement list in sync.
     pub fn add_settlement(&mut self, settlement: Settlement) -> SettlementId {
         let system = settlement.system;
+        self.sites.settle(settlement.site);
         let id = self.settlements.insert(settlement);
         self.systems[system].settlements.push(id);
         id
