@@ -54,6 +54,12 @@ pub enum Surface {
     /// Bare rock: mottled and bump-mapped (asteroids). `emissive` is the
     /// laser's heat.
     Rock = 9,
+    /// A world's sky on a dome round the camera (city.rs): `color` the
+    /// zenith, `aux` the horizon, `emissive` the sun's angular radius,
+    /// `detail` cloud cover.
+    SkyDome = 10,
+    /// The ground round a city's pad, and its hills (city.rs).
+    Ground = 11,
     /// Glows, drawn additively after everything solid (see `fs_glow`): a
     /// shield bubble lit round a hit (`light.xyz`: the hit's direction in
     /// object space, `light.w`: 0..1 through its life).

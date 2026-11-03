@@ -1752,6 +1752,43 @@ Decided while making a belt look like one (issue #182):
   faint corona with streamers stands round it. A far star stays a point
   that burns through the bloom (§8.6).
 
+### 8.8 Landed at a city
+
+Decided while giving cities a place of their own (#178). Docked at a
+highport the ship stands in a lit hangar; landed at a city it stands
+**on the ground, on an open pad at the city's port**, never over a view
+of the planet from orbit. The view is the same on every screen there
+(trade, the hangar, the shipyard's ships), as the bay is at a station.
+
+- **The camera stands across the pad from the city**, low, at a pilot's
+  height on the apron, and sways slowly either side, so the ship is
+  always seen three-quarters on against the skyline and the sky.
+- **The port**: a concrete apron of slabs, the pad a scorched circle
+  with a red ring and a black-and-yellow band at its edge, the ship on
+  hazard-striped chocks with a soft shadow, floodlights on masts, a
+  red service gantry, a control tower with a glazed cab, fuel spheres
+  in work mustard. It is laid out once, round where the camera stands,
+  and scaled to the ship (the pad's radius is 0.8 of its length), as
+  the hangar bay is.
+- **The skyline is prefab and monumental**: slab blocks of flats with
+  lit windows and a red or sky-blue panel up one end, setback towers
+  with masts and beacons, round towers with red crowns, works halls
+  with striped chimneys, and a broadcast tower with a glazed pod at
+  the city's heart. More and taller the bigger the city (by population),
+  all fixed by the city's seed, so a city looks the same each visit.
+- **Each world has its own sky and ground**: blue sky with fair-weather
+  cloud over grass and field patchwork (terran); a waterfront pad with
+  the sea filling the right of the view (ocean worlds); a dusty
+  butterscotch sky, dunes and mesas (desert); a deep, thin sky over snow
+  and ice peaks, the city under glass domes (ice); no air at all on a
+  barren world or moon: a black sky with the stars and the sun's disc,
+  crater walls, and a moon's planet hanging overhead. Far things fade
+  into the air's colour, so hills stand in layers.
+- **The hour is the city's own**: a fixed sun from low and red to early
+  afternoon, always from the camera's side so the ship and the city's
+  faces are lit, in its star's colour. No night: a city is always shown
+  by day.
+
 ## 9. Technical architecture
 
 Pure Rust, Linux first.
