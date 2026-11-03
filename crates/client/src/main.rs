@@ -481,6 +481,9 @@ struct Running {
     /// `--fire`: the trigger is held down for good.
     fire: bool,
     stick: DVec2,
+    /// The arrow keys' stick: pitch and yaw, each easing from a nudge to
+    /// full as its key is held (see [`key_axis`]).
+    key_stick: DVec2,
     captured: bool,
     /// The controls card (H) is up.
     controls_card: bool,
@@ -596,6 +599,7 @@ impl ApplicationHandler for App {
             trigger: false,
             fire: self.flags.fire,
             stick: DVec2::ZERO,
+            key_stick: DVec2::ZERO,
             captured: false,
             controls_card: false,
             last_frame: Instant::now(),
@@ -1063,8 +1067,15 @@ impl Running {
         } else {
             (KeyCode::ArrowDown, KeyCode::ArrowUp)
         };
-        let keys_pitch = axis(nose_up, nose_down);
-        let keys_yaw = axis(KeyCode::ArrowRight, KeyCode::ArrowLeft);
+        self.key_stick = DVec2::new(
+            key_axis(
+                self.key_stick.x,
+                axis(KeyCode::ArrowRight, KeyCode::ArrowLeft),
+                dt,
+            ),
+            key_axis(self.key_stick.y, axis(nose_up, nose_down), dt),
+        );
+        let (keys_yaw, keys_pitch) = (self.key_stick.x, self.key_stick.y);
         let controls = Controls {
             stick: DVec3::new(
                 (-self.stick.y + keys_pitch).clamp(-1.0, 1.0),
@@ -1444,6 +1455,7 @@ impl Running {
     ///   started is ready);
     /// - `hold:KEY:N` holds a key down for N frames (`hold:w:60`, or
     ///   `hold:r:30` for the trigger), without waiting for it;
+    ///   `release:KEY` lets it go sooner;
     /// - `click:X:Y` clicks the UI at that pixel of the window (as in a
     ///   screenshot), `move:X:Y` just points there;
     /// - `scroll:X:Y:DY` turns the mouse wheel there;
@@ -1492,6 +1504,12 @@ impl Running {
                     self.just_pressed.push(code);
                     self.keys.insert(code);
                     self.holds.push((code, n));
+                }
+            }
+            ["release", key] => {
+                if let Some(code) = key_code(key) {
+                    self.keys.remove(&code);
+                    self.holds.retain(|(k, _)| *k != code);
                 }
             }
             ["click", x, y] => {
@@ -3119,6 +3137,22 @@ fn refit_sections(fit: &mut retrox_sim::ship::Loadout, ids: &str) {
     }
 }
 
+/// One axis of the arrow keys' stick, from `now` toward `held` (one of
+/// -1, 0 and 1) over `dt`: a tap nudges the nose a degree or so, and holding the key
+/// opens it to full over about half a second, so keys can aim as finely as
+/// they can turn (#210). Letting go centres it at once.
+fn key_axis(now: f64, held: f64, dt: f64) -> f64 {
+    const NUDGE: f64 = 0.2;
+    const OPEN_PER_S: f64 = 1.8;
+    if held == 0.0 {
+        0.0
+    } else if now * held <= 0.0 {
+        held * NUDGE
+    } else {
+        held * (now.abs() + OPEN_PER_S * dt).min(1.0)
+    }
+}
+
 /// A key by the name a key script uses for it (see [`Running::run_script`]).
 fn key_code(name: &str) -> Option<KeyCode> {
     use KeyCode::*;
@@ -3171,6 +3205,20 @@ fn remote_info(w: &World) -> String {
     let _ = writeln!(out, "speed {:.0}", w.ship.vel.length());
     let _ = writeln!(out, "hostiles_near {}", w.hostiles_near());
     let _ = writeln!(out, "lost {:?}", w.combat.lost);
+    let _ = writeln!(out, "throttle {:.3}", w.ship.throttle);
+    let _ = writeln!(out, "clock_s {:.2}", w.clock_s);
+    if let Some(a) = w.approach() {
+        let _ = writeln!(
+            out,
+            "approach {} gap_m {:.0} closing_mps {:.0} stops_short_m {} let_go {}",
+            a.station
+                .map_or("rock".into(), |s| w.name(Place::Station(s))),
+            a.gap,
+            a.closing,
+            a.stops_short.map_or("-".into(), |s| format!("{s:.0}")),
+            a.settle_brake.is_some()
+        );
+    }
     if let Some(t) = w.target {
         let to = w.position(t) - ship;
         let local = w.ship.rot.inverse() * to.normalize_or_zero();
