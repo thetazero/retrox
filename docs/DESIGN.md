@@ -717,10 +717,12 @@ rather than space bugs.
 - Supercruise for in-system travel; hyperlane jumps between systems.
 - Interdiction can pull ships out of supercruise (piracy, patrols).
 
-**How flying should feel (the user's direction, 2026-11-02).** The user
-played main and found flying "unfun and hard to do": turning and
-aiming, judging speed and stopping where you mean to, the camera, and
-moving between rocks. Until now each flight problem was fixed by flying
+**How flying should feel (2026-11-02).** The user played main and found
+flying "unfun and hard to do", and confirmed the problems are turning
+and aiming, judging speed and stopping where you mean to, the camera,
+and moving between rocks. The bullets below are the orchestrator's
+vision for fixing that, not the user's words: test them against play,
+and change them when play shows they're wrong. Until now each flight problem was fixed by flying
 less (fast travel to 400 m off a rock, to docking range, [J] out of
 wells). From here on, **flying near things is the skill the game is
 built on**, and every activity in §7.2 and §7.3 leans on it. Where the
@@ -1197,9 +1199,11 @@ somewhere, live somewhere, and fly for real near the player.
 
 ### 7.3 Mining
 
-**How mining should feel (the user's direction, 2026-11-02).** The user
-played main: "I'm just sitting right infront of an asteroid shooting it,
-overheating,waiting, repeat...". Mining has to be a short, hands-on
+**How mining should feel (2026-11-02).** The user played main: "I'm
+just sitting right infront of an asteroid shooting it,
+overheating,waiting, repeat...". The rest of this paragraph and the
+bullets below are the orchestrator's vision for fixing that, not the
+user's words: test them against play. Mining has to be a short, hands-on
 puzzle at each rock, not a hold-the-trigger timer. Where the as-built
 bullets below disagree, this wins.
 
