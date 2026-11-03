@@ -8,6 +8,7 @@
 //! you're aimed at) every frame, so it stays right whatever order you do
 //! things in.
 
+use retrox_sim::economy::{Good, GoodMap};
 use serde::{Deserialize, Serialize};
 
 use crate::world::{Leg, MiningSpot, Mode, Place, Screen, World};
@@ -25,8 +26,12 @@ pub struct Progress {
     pub jumped: bool,
     /// Docked or landed after a flight.
     pub arrived: bool,
-    /// Sold goods or delivered a contract.
+    /// Paid for work: a contract delivered, a bounty, or goods sold that
+    /// were bought or mined, not ones kept from a failed contract (#127).
     pub earned: bool,
+    /// Tonnes of each good in the hold kept from failed contracts. Selling
+    /// these doesn't count as getting paid; they sell first.
+    pub forfeit_t: GoodMap<f64>,
 }
 
 impl Progress {
@@ -59,6 +64,18 @@ impl Progress {
             Mode::Docked(_) | Mode::Landed { .. } => self.arrived |= self.launched,
         }
         self.took_work |= !w.player.contracts.is_empty() || w.player.cargo_t() > 0.0;
+        // Lost from the hold some other way (raiders), it's gone first.
+        for good in Good::ALL {
+            self.forfeit_t[good] = self.forfeit_t[good].min(w.player.cargo[good]);
+        }
+    }
+
+    /// `sold` tonnes of `good` were sold: whether any were the player's own
+    /// work rather than goods kept from a failed contract.
+    pub fn sold(&mut self, good: Good, sold: f64) -> bool {
+        let forfeit = self.forfeit_t[good].min(sold);
+        self.forfeit_t[good] -= forfeit;
+        sold - forfeit > 1e-9
     }
 }
 
@@ -647,6 +664,28 @@ mod tests {
         assert!(w.prompts().well.is_some(), "undocked inside the well");
         let hint = hint(&w).expect("a hint");
         assert!(hint.contains("[F] to dock"), "{hint}");
+    }
+
+    #[test]
+    fn selling_goods_from_an_abandoned_contract_is_not_getting_paid() {
+        // Issue #127: abandon the first job and sell the food it left.
+        let mut w = World::new(1);
+        w.act(crate::world::Action::AcceptContract(0));
+        let good = w.player.contracts[0].offer.good;
+        let amount = w.player.contracts[0].offer.amount;
+        w.act(crate::world::Action::AbandonContract(0));
+        assert_eq!(w.player.cargo[good], amount);
+        let before = w.player.credits;
+        w.act(crate::world::Action::Trade(good, -amount));
+        assert!(w.player.credits > before, "sold");
+        assert_eq!(w.player.cargo[good], 0.0);
+        assert!(!w.player.progress.earned);
+        assert_eq!(w.player.progress.forfeit_t[good], 0.0);
+
+        // Ore mined is the player's own work.
+        w.player.cargo[Good::Ore] = 5.0;
+        w.act(crate::world::Action::Trade(Good::Ore, -5.0));
+        assert!(w.player.progress.earned, "mined ore sold");
     }
 
     #[test]

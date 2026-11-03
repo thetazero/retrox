@@ -29,8 +29,8 @@ impl Contract {
     }
 }
 
-/// What the player already carries, for the board.
-pub fn pending(player: &Player) -> Vec<Pending> {
+/// What the player already carries, for the board at `here` on `today`.
+pub fn pending(player: &Player, here: SettlementId, today: GalaxyTime) -> Vec<Pending> {
     player
         .contracts
         .iter()
@@ -38,8 +38,18 @@ pub fn pending(player: &Player) -> Vec<Pending> {
             to: c.offer.to,
             good: c.offer.good,
             amount: c.offer.amount,
+            taken_today: c.offer.from == here && c.accepted.days() == today.days(),
         })
         .collect()
+}
+
+/// Whether the player already carries `offer`'s good to its consignee:
+/// the offer is a second lot of it (issue #126).
+pub fn another_lot(player: &Player, offer: &Offer) -> bool {
+    player
+        .contracts
+        .iter()
+        .any(|c| c.offer.to == offer.to && c.offer.good == offer.good)
 }
 
 /// Why the player can't take an offer right now, if they can't.
@@ -165,6 +175,7 @@ pub fn abandon(player: &mut Player, galaxy: &mut GalaxyState, index: usize) -> O
         }
     }
     player.cargo[o.good] += o.amount;
+    player.progress.forfeit_t[o.good] += o.amount;
     let failed = format!(
         "Contract failed: forfeit the {} deposit, the {:.0} t of {} are yours",
         crate::hud::credits(o.value),

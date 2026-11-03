@@ -1193,6 +1193,7 @@ impl World {
                 };
                 let capacity = self.stats().cargo_t;
                 let before = self.player.credits;
+                let held = self.player.cargo[good];
                 let premium = if amount < 0.0 {
                     self.premium(here, good, -amount)
                 } else {
@@ -1224,7 +1225,10 @@ impl World {
                     }
                     r => r,
                 };
-                self.player.progress.earned |= self.player.credits > before;
+                let sold = held - self.player.cargo[good];
+                if sold > 0.0 && self.player.progress.sold(good, sold) {
+                    self.player.progress.earned |= self.player.credits > before;
+                }
                 if self.player.cargo.0.iter().all(|&t| t < 0.5) {
                     self.player.sell_at = None;
                 }
@@ -1372,7 +1376,7 @@ impl World {
             return;
         }
         self.board_key = Some(key);
-        let pending = contracts::pending(&self.player);
+        let pending = contracts::pending(&self.player, here, self.galaxy.time);
         self.board = freight::board(&self.galaxy, here, lot, |ly| self.jump_days(ly), &pending);
     }
 
