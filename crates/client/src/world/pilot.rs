@@ -5,7 +5,9 @@ use glam::{DQuat, DVec3};
 use retrox_sim::flight::{self, Goal, Kinematics};
 use retrox_sim::ship::ShipStats;
 
-use super::{Controls, FastTravel, Leg, Mode, Place, REFERENCE, SECONDS_PER_DAY, World};
+use super::{
+    Controls, FastTravel, Leg, Mode, Place, REFERENCE, SECONDS_PER_DAY, SettlementId, World,
+};
 
 /// Top of the fine-control range, m/s (throttle [`DETENT`]).
 pub const COMBAT_SPEED: f64 = 500.0;
@@ -15,7 +17,9 @@ pub const DETENT: f64 = 0.5;
 /// Top speed at full throttle, m/s.
 pub const CRUISE_SPEED: f64 = 150_000.0;
 const BOOST: f64 = 2.0;
-const ACCEL: f64 = 90.0;
+/// A ship's acceleration on its own thrust in fine control, m/s², times
+/// its thrust multiplier (see [`handling`]).
+pub const ACCEL: f64 = 90.0;
 pub const STRAFE_SPEED: f64 = 80.0;
 /// Pitch, yaw, roll rates at full stick, rad/s.
 const TURN_RATES: DVec3 = DVec3::new(1.3, 0.9, 2.2);
@@ -23,6 +27,25 @@ const TURN_RATES: DVec3 = DVec3::new(1.3, 0.9, 2.2);
 const DRIVE_ACCEL: f64 = ACCEL;
 /// How hard the attitude autopilot turns per radian off target, 1/s.
 const ATTITUDE_GAIN: f64 = 2.5;
+/// Up to this speed, twice the detent (boosted fine control), flight
+/// assist pushes with the hull's own thrust and no more, so local speeds
+/// build and bleed off at a rate a pilot can judge (#210). Past it, for
+/// cruise, it pushes harder the faster it's going: [`CRUISE_PUSH`] more
+/// m/s² per m/s, so cruise speeds come and go in seconds.
+const CRUISE_KNEE: f64 = COMBAT_SPEED * BOOST;
+/// See [`CRUISE_KNEE`], 1/s.
+const CRUISE_PUSH: f64 = 0.5;
+/// After letting go of a push of [W] that reached the detent, a fresh
+/// press goes on into cruise until the ship has slowed below this, m/s:
+/// a couple of seconds, time to read the hint that says so and act on it.
+const CRUISE_READY_SPEED: f64 = COMBAT_SPEED * 0.6;
+
+/// How hard flight assist pushes, m/s², for a ship whose own thrust gives
+/// `base` m/s², asked to go (or already going) `speed` m/s: see
+/// [`CRUISE_KNEE`].
+fn assist_accel(base: f64, speed: f64) -> f64 {
+    base + CRUISE_PUSH * (speed - CRUISE_KNEE).max(0.0)
+}
 
 /// Forward speed for a throttle setting: linear up to [`COMBAT_SPEED`] at
 /// 0.5, then exponential up to [`CRUISE_SPEED`] at 1.0.
@@ -47,8 +70,21 @@ pub fn look_rotation(dir: DVec3) -> DQuat {
 /// its spin. The player and every ship flown near them turn this way.
 pub fn steer(rot: &mut DQuat, spin: &mut DVec3, stick: DVec3, turn: f64, dt: f64) {
     let target = stick * TURN_RATES * turn;
-    let k = 1.0 - (-6.0 * dt).exp();
-    *spin += (target - *spin) * k;
+    // A turn eases in, and settles faster than it builds, so letting go
+    // of the stick stops the nose close to where it was let go (#210).
+    let ease = |want: f64, now: f64| {
+        let rate = if want.abs() < now.abs() || want * now < 0.0 {
+            10.0
+        } else {
+            6.0
+        };
+        now + (want - now) * (1.0 - (-rate * dt).exp())
+    };
+    *spin = DVec3::new(
+        ease(target.x, spin.x),
+        ease(target.y, spin.y),
+        ease(target.z, spin.z),
+    );
     let s = *spin;
     // Local axes: x = pitch, y = yaw (negated: + yaw turns right), z = roll.
     let delta = DQuat::from_scaled_axis(DVec3::new(s.x, -s.y, -s.z) * dt);
@@ -76,10 +112,7 @@ pub fn attitude_stick(rot: DQuat, face: DVec3, turn: f64) -> DVec3 {
 pub fn assist(vel: &mut DVec3, rot: DQuat, local: DVec3, boost: bool, thrust: f64, dt: f64) -> f64 {
     let boost = if boost { BOOST } else { 1.0 };
     let desired = rot * (local * DVec3::new(1.0, 1.0, boost));
-    // Acceleration scales with the speed being asked for, so cruise
-    // speeds are reached in a few seconds without making fine control
-    // twitchy.
-    let accel = (ACCEL * boost * thrust).max(desired.length().max(vel.length()) * 0.5);
+    let accel = assist_accel(ACCEL * boost * thrust, desired.length().max(vel.length()));
     let step = (desired - *vel).clamp_length_max(accel * dt);
     *vel += step;
     if dt > 0.0 {
@@ -91,16 +124,27 @@ pub fn assist(vel: &mut DVec3, rot: DQuat, local: DVec3, boost: bool, thrust: f6
 
 /// How far a ship flying at `speed` with flight assist on goes before it
 /// stops once the throttle is cut, m, given its `thrust` (see [`handling`]):
-/// what [`assist`] does with nothing asked for. Above `2 · ACCEL · thrust`
-/// the brakes scale with speed, so speed falls off exponentially.
+/// what [`assist`] does with nothing asked for. Up to [`CRUISE_KNEE`] it
+/// brakes at its own thrust, `v² / 2a`; past it the brakes grow with speed
+/// (see [`assist_accel`]).
 pub fn stopping_distance(speed: f64, thrust: f64) -> f64 {
-    let accel = ACCEL * thrust;
-    let knee = 2.0 * accel;
-    if speed <= knee {
-        speed * speed / (2.0 * accel)
+    let a = ACCEL * thrust;
+    let k = CRUISE_KNEE;
+    let c = CRUISE_PUSH;
+    if speed <= k {
+        speed * speed / (2.0 * a)
     } else {
-        2.0 * (speed - knee) + knee * knee / (2.0 * accel)
+        // ∫ v dv / (a + c (v - k)) from k up to `speed`.
+        let w = speed - k;
+        k * k / (2.0 * a) + w / c + (k - a / c) / c * ((a + c * w) / a).ln()
     }
+}
+
+/// Throttle per second that [W] or [S] moves it by in fine control, for a
+/// ship whose own thrust gives `accel` m/s²: the speed asked for builds as
+/// fast as the ship can follow it.
+fn fine_throttle_rate(accel: f64) -> f64 {
+    accel * DETENT / COMBAT_SPEED
 }
 
 /// The fast-travel drive a ship of `stats` has, m/s²: what the player's
@@ -379,28 +423,59 @@ impl World {
         self.ship.throttle = self.next_throttle(c.throttle_delta, dt);
     }
 
-    /// The throttle after a frame of [W]/[S]. Opening it stops at the
-    /// [`DETENT`] for as long as the push that reached it is held; only a
-    /// fresh push goes on into cruise, so a held [W] can't run a ship from
-    /// a standstill up to 150 km/s and tens of km past where it meant to
-    /// stop (#166). Past the detent it opens a quarter as fast: full cruise
-    /// takes [W] held for five seconds, so cruise speed can be set, and a
-    /// second push held out of habit gives a km/s or two, not 150.
+    /// The throttle after a frame of [W]/[S] (DESIGN §7.1).
+    ///
+    /// In fine control (up to the [`DETENT`]) the throttle is held, not
+    /// set: [W] asks for more speed from however fast the ship is going,
+    /// as fast as its own thrust can build it, and letting go brings the
+    /// ship to rest; [S] likewise backs it astern. A held [W] stops at the
+    /// detent (#166). Let go there, a fresh press goes on into cruise for
+    /// as long as the ship is still faster than [`CRUISE_READY_SPEED`]
+    /// (the flight panel says so for just that long), where the throttle stays where it's
+    /// set: [W] opens it a quarter as fast (full cruise is [W] held five
+    /// seconds), [S] closes it, and once it's back down through the detent
+    /// it's held again.
     fn next_throttle(&mut self, delta: f64, dt: f64) -> f64 {
         let before = self.ship.throttle;
-        let rate = if delta > 0.0 && before >= DETENT {
-            0.1
-        } else {
-            0.4
-        };
-        let mut next = (before + delta * dt * rate).clamp(-0.3, 1.0);
-        if delta <= 0.0 {
-            self.at_detent = false;
-        } else if next > DETENT && before <= DETENT && (before < DETENT || self.at_detent) {
-            next = DETENT;
-            self.at_detent = true;
+        let was_held = self.throttle_held;
+        self.throttle_held = delta.signum() * f64::from(u8::from(delta != 0.0));
+        if self.ship.vel.length() < CRUISE_READY_SPEED || delta < 0.0 {
+            self.cruise_ready = false;
         }
-        next
+        if before > DETENT {
+            self.at_detent = false;
+            let rate = if delta > 0.0 { 0.1 } else { 0.4 };
+            return (before + delta * dt * rate).clamp(-0.3, 1.0);
+        }
+        if delta > 0.0 && self.cruise_ready && was_held <= 0.0 {
+            self.cruise_ready = false;
+            return (DETENT + delta * dt * 0.1).min(1.0);
+        }
+        if delta == 0.0 {
+            if was_held > 0.0 && self.at_detent {
+                self.cruise_ready = true;
+            }
+            self.at_detent = false;
+            // Let go: the ship comes to rest. Nothing held before (the
+            // autopilot or a start left the throttle set): it stays.
+            return if was_held != 0.0 { 0.0 } else { before };
+        }
+        // From however fast the ship is going along its nose, so [W] never
+        // brakes a ship that's coasting faster than the throttle says.
+        let rate = fine_throttle_rate(ACCEL * self.handling().0);
+        let along = self.ship.vel.dot(self.ship.rot * DVec3::NEG_Z);
+        let here = (along / COMBAT_SPEED * DETENT).clamp(-0.3, DETENT);
+        if delta > 0.0 {
+            let next = before.max(here) + delta * dt * rate;
+            if next >= DETENT {
+                self.at_detent = true;
+                return DETENT;
+            }
+            next
+        } else {
+            self.at_detent = false;
+            (before.min(here) + delta * dt * rate).max(-0.3)
+        }
     }
 
     pub(super) fn fly(&mut self, dt: f64, c: Controls) {
@@ -412,13 +487,21 @@ impl World {
         // Boost only helps in the fine-control range.
         let boost = c.boost && self.ship.throttle <= 0.5;
         let local = DVec3::new(c.strafe * STRAFE_SPEED, c.lift * STRAFE_SPEED, -forward);
-        let thrust = self.handling().0;
+        let mut thrust = self.handling().0;
+        // Let go in time, flight assist settles the ship beside what it's
+        // flying at rather than wherever full brakes would leave it.
+        if local == DVec3::ZERO
+            && let Some(a) = self.approach()
+            && let Some(brake) = a.settle_brake
+        {
+            thrust = thrust.min(brake / ACCEL);
+        }
         self.burn = if self.ship.flight_assist {
             assist(&mut self.ship.vel, self.ship.rot, local, boost, thrust, dt)
         } else {
             let boost = if boost { BOOST } else { 1.0 };
             let desired = (local * DVec3::new(1.0, 1.0, boost)).length();
-            let accel = (ACCEL * boost * thrust).max(desired.max(self.ship.vel.length()) * 0.5);
+            let accel = assist_accel(ACCEL * boost * thrust, desired.max(self.ship.vel.length()));
             let push = DVec3::new(c.strafe, c.lift, -c.throttle_delta.max(0.0));
             self.ship.vel += self.ship.rot * push * accel * dt;
             push.length().min(1.0)
@@ -482,4 +565,145 @@ impl World {
 pub fn drive_burn(thrust: DVec3, rot: DQuat, accel: f64) -> f32 {
     let along = thrust.dot(rot * DVec3::NEG_Z);
     (along / accel.max(1e-9)).clamp(0.0, 1.0) as f32
+}
+
+/// How far off a rock may be to be what the pilot is flying at, m.
+const APPROACH_ROCK_RANGE: f64 = 6_000.0;
+/// How far off a station may be, m.
+const APPROACH_STATION_RANGE: f64 = 40_000.0;
+/// How far off the line the ship is going along (or its nose) something
+/// may be, past its own edge, and still be what it's flying at, rad.
+const APPROACH_CONE: f64 = 0.07;
+
+/// What the pilot is flying at, and how the approach to it is going
+/// (DESIGN §7.1): the rock or station nearest the line the ship is moving
+/// along, or, at rest, the one its nose is on.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Approach {
+    /// A station, if it's one; else a rock.
+    pub station: Option<SettlementId>,
+    /// Its centre, in the system frame.
+    pub pos: DVec3,
+    /// From its centre out to the surface facing the ship, m.
+    pub radius: f64,
+    /// From the ship to that surface, m.
+    pub gap: f64,
+    /// How fast the ship closes on it, m/s; negative when drawing away.
+    pub closing: f64,
+    /// Closing on it: how far short of its surface the ship comes to rest
+    /// if the throttle is let go now, m, negative when that's past it.
+    pub stops_short: Option<f64>,
+    /// How far off its surface "beside it" is, m: where flight assist
+    /// settles a ship let go in time (see [`settle_window`]). A ship's
+    /// length off a rock; in docking reach of a station.
+    pub standoff: f64,
+    /// Let go now, full brakes would stop the ship past the standoff but
+    /// within the settle window: the gentler braking, m/s², that stops it
+    /// at the standoff instead.
+    pub settle_brake: Option<f64>,
+}
+
+/// How much further than the standoff full brakes may stop the ship, m,
+/// for flight assist to settle it at the standoff when the throttle is let
+/// go, closing at `closing` m/s: about 0.8 s of reaction, as the stop
+/// point closes on what it's flying at at twice the ship's speed while
+/// [W] is held (#210). Let go sooner and it stops short; later, past.
+pub fn settle_window(closing: f64) -> f64 {
+    (closing * 1.6).max(60.0)
+}
+
+impl World {
+    /// What the pilot is flying at, if anything: see [`Approach`].
+    pub fn approach(&self) -> Option<Approach> {
+        if self.mode != Mode::Normal || self.combat.lost.is_some() {
+            return None;
+        }
+        let me = self.ship_position();
+        let t = self.t_days();
+        let my_vel = self.ship.vel + self.velocity_at(self.ship.frame, t);
+        let nose = self.ship.rot * DVec3::NEG_Z;
+        let thrust = self.handling().0;
+        let length = self.stats().length_m.max(12.0);
+        // (pos, vel, nominal radius, surface toward the ship, standoff,
+        // station)
+        #[allow(clippy::type_complexity)]
+        let mut near: Vec<(DVec3, DVec3, f64, f64, f64, Option<SettlementId>)> = Vec::new();
+        if let Some((field, rocks)) = &self.field_rocks {
+            let place = Place::Field(*field);
+            let centre = self.position(place);
+            let field_vel = self.velocity_at(place, t);
+            let f = &self.galaxy.fields[*field];
+            for r in self.mining.live_rocks(*field, f, rocks, self.clock_s) {
+                let pos = centre + r.pos;
+                if (pos - me).length() - r.radius > APPROACH_ROCK_RANGE {
+                    continue;
+                }
+                let surface = crate::mining::surface_along(r.seed, r.rot, r.radius, me - pos);
+                near.push((pos, field_vel + r.vel, r.radius, surface, length, None));
+            }
+        }
+        for &s in &self.view.stations {
+            let place = Place::Station(s);
+            let pos = self.position(place);
+            let size = self.station_size_m(s);
+            let radius = size * 0.35;
+            if (pos - me).length() - radius > APPROACH_STATION_RANGE {
+                continue;
+            }
+            // Where fast travel stops, in reach of [F] (DESIGN §7.1.2).
+            let standoff = size * 1.2 + 200.0 - radius;
+            near.push((
+                pos,
+                self.velocity_at(place, t),
+                radius,
+                radius,
+                standoff,
+                Some(s),
+            ));
+        }
+        let mut best: Option<(f64, f64, Approach)> = None;
+        for (pos, vel, radius, surface, standoff, station) in near {
+            let rel = my_vel - vel;
+            let to = pos - me;
+            let d = to.length();
+            if d < 1e-6 {
+                continue;
+            }
+            let speed = rel.length();
+            let dir = if speed > 3.0 { rel / speed } else { nose };
+            let along = to.dot(dir);
+            if along <= 0.0 {
+                continue;
+            }
+            let off = (to - dir * along).length();
+            let miss = ((off - radius).max(0.0)).atan2(along);
+            if miss > APPROACH_CONE {
+                continue;
+            }
+            let closing = rel.dot(to / d);
+            let gap = d - surface;
+            // Full brakes along the line it's moving on: only the share
+            // toward the thing counts.
+            let full =
+                (closing > 0.5).then(|| gap - stopping_distance(speed, thrust) * closing / speed);
+            let settles =
+                full.is_some_and(|f| f > standoff && f <= standoff + settle_window(closing));
+            let a = Approach {
+                station,
+                pos,
+                radius: surface,
+                gap,
+                closing,
+                stops_short: if settles { Some(standoff) } else { full },
+                standoff,
+                // Stopping `gap - standoff` further on, along the line.
+                settle_brake: settles.then(|| speed * closing / (2.0 * (gap - standoff).max(1.0))),
+            };
+            // Dead on the line first, nearest first; then the least off it.
+            if best.is_none_or(|(m, g, _)| (miss, gap) < (m, g)) {
+                best = Some((miss, gap, a));
+            }
+        }
+        best.map(|(_, _, a)| a)
+    }
 }

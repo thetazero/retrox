@@ -757,11 +757,12 @@ as-built sections below disagree, this wins.
   a few km away is then just holding [W]; cruise is a choice,
   entered on purpose as the direction above asks.
   The flight panel marks the detent on the throttle bar (the cruise half
-  amber, like the CRUISE lamp), shows *[W] AGAIN FOR CRUISE* while the
-  throttle rests on it, and reads **STOPS IN**: how far the ship goes once
-  the throttle is cut, in red with PAST TARGET when that carries it past
-  the target it's closing on. Coming down, the throttle passes the detent
-  without stopping.
+  amber, like the CRUISE lamp), shows how to go on into cruise while the
+  throttle rests on it (§7.1.4), and reads **STOPS IN**: how far the ship goes once
+  the throttle is cut, in red with PAST IT when that carries it past
+  what it's flying at (§7.1.4), or else the target it's closing on.
+  Coming down, the throttle passes the detent without stopping. Since
+  #210 the fine-control half is held, not set (§7.1.4).
 
 #### 7.1.1 Gravity wells and planet stops (#95)
 
@@ -873,6 +874,62 @@ key in a HYPERLANES panel that started folded shut.
 - Hints and the course panel name the destination system and the next
   key at every step; a system not on the course is a link that plots it
   (§8.3).
+
+#### 7.1.4 Flying by hand (#210)
+
+The user found hand flight unfun and hard: aiming, judging speed and
+stopping, the camera, and moving between rocks. As built:
+
+- **The fine-control throttle is held, not set.** Holding [W] asks for
+  more speed, from however fast the ship already goes along its nose, as
+  fast as the hull's own thrust builds it; **letting go brings the ship
+  to rest**, and [S] backs it off the same way. A held [W] stops at the
+  detent (500 m/s), where the panel reads *LET GO, THEN [W] FOR CRUISE*;
+  let go there and, while the ship is still faster than 300 m/s (about
+  two seconds, braking), the panel reads *[W] NOW FOR CRUISE* and a fresh
+  [W] goes on into cruise. The hint shows exactly while that works, so a
+  pilot who reads it after letting go still has time to act on it. Cruise is set, not held: it stays where it's put until
+  [S] brings it back down through the detent, or [X] cuts it. Anything
+  that sets the throttle without a key (the career bench, a start) leaves
+  it set until a key is let go.
+- **Below cruise a ship moves on its own thrust.** Up to 1,000 m/s
+  (boosted fine control) flight assist accelerates and brakes at the
+  hull's thrust and no more (9 g in the starting ship), so speed builds
+  and bleeds off at a rate a pilot can judge: a 1–2 km hop between rocks
+  is several seconds, peaking at a few hundred m/s. Only above that does
+  it push harder with speed, so cruise speeds still come and go in
+  seconds. The old rule scaled every push with the speed asked for, which
+  put 500 m/s a second away and a stop 800 m off.
+- **The pilot sees what they're flying at** (`World::approach`): the rock
+  or station nearest the line the ship is moving along, or, at rest, the
+  one the nose is on. Corner brackets frame it, and beside them are its
+  distance, the closing speed and where the ship would stop if the throttle
+  were let go now: STOPS *x* SHORT (teal), beside it (amber), or STOPS *x*
+  PAST (red). STOPS IN on the flight panel goes red against it too.
+- **Let go in time and the ship settles beside it.** While [W] is held
+  the stop point closes on the thing at twice the ship's speed, too fast
+  to hit a ship's length by eye. So when full brakes would stop the ship
+  past its **standoff** but no more than about 0.8 s of closing
+  further (`settle_window`: 1.6 × the closing speed in metres, at least
+  60; about 0.8 s, time for a pilot to react to the cue),
+  flight assist brakes just enough to stop at the standoff instead. The
+  bracket turns amber and reads LET GO for that window. The standoff is
+  a ship's length off a rock (at least 12 m), and for a station the point
+  in [F] docking reach where fast travel stops (§7.1.2). Let go sooner and
+  the ship stops short; later, it stops past, as red said. A practised
+  pilot holds [W] to the end of the amber, arriving faster. It is still
+  plain braking, at no more than the hull's own thrust, and anything
+  else asked of the ship (strafe, lift, [S]) overrides it.
+- **Where the ship goes, and where it points.** A heading marker (a ring
+  with wings and a fin, teal) sits on the line the ship is moving along;
+  the crosshair sits on the nose. The chase camera trails a turn, so the
+  crosshair is drawn where the nose actually points, not at the screen's
+  centre. The gap between the two is drift.
+- **Turns ease in and settle.** A ship's turn rate builds at 6/s toward the
+  stick and settles at 10/s when the stick comes back, so letting go stops
+  the nose close to where it was let go. The arrow keys nudge (a fifth of
+  full stick) and open to full over half a second of holding, so a tap
+  aims a degree or so and a hold swings the ship round.
 
 ### 7.2 Combat
 

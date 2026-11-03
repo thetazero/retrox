@@ -62,7 +62,119 @@ fn held_w_stops_at_the_detent_and_a_fresh_press_cruises() {
         };
         world.update(1.0 / 60.0, c);
     }
-    assert!(world.ship.throttle < DETENT - 0.1);
+    assert!(world.ship.throttle < DETENT);
+    run(&mut world, 0.1);
+    assert_eq!(world.ship.throttle, 0.0, "let go below the detent: brakes");
+}
+
+/// Issue #210: in fine control the throttle is held, not set. [W] builds
+/// speed at the hull's own thrust, and letting go brings the ship to rest
+/// in the distance STOPS IN gave when it was let go.
+#[test]
+fn letting_go_of_w_brings_the_ship_to_rest() {
+    let mut world = World::new(1);
+    world.act(Action::Launch);
+    open_space(&mut world);
+    world.ship.vel = DVec3::ZERO;
+    hold_w(&mut world, 2.0);
+    let speed = world.ship.vel.length();
+    let accel = 90.0 * world.handling().0;
+    assert!(
+        (speed - accel * 2.0).abs() < accel * 0.2,
+        "two seconds of [W] at the hull's thrust: {speed:.0} m/s"
+    );
+    let predicted = stopping_distance(speed, world.handling().0);
+    let start = world.ship_position();
+    run(&mut world, 30.0);
+    assert!(world.ship.vel.length() < 0.5, "let go, it stops");
+    let went = (world.ship_position() - start).length();
+    assert!(
+        (went - predicted).abs() < predicted * 0.05 + 3.0,
+        "went {went:.0} m, STOPS IN said {predicted:.0} m"
+    );
+    // A fresh [W] carries on from the speed the ship has, never braking it.
+    hold_w(&mut world, 1.0);
+    let v1 = world.ship.vel.length();
+    world.ship.vel = world.ship.rot * DVec3::NEG_Z * 300.0;
+    hold_w(&mut world, 0.1);
+    assert!(
+        world.ship.vel.length() >= 300.0,
+        "{v1} then {}",
+        world.ship.vel.length()
+    );
+}
+
+/// A pilot who lets go at the detent and only then reads the hint still
+/// gets into cruise: [W] NOW FOR CRUISE shows, and works, until the ship
+/// has slowed to 300 m/s.
+#[test]
+fn reading_the_cruise_hint_after_letting_go_still_cruises() {
+    let mut world = World::new(1);
+    world.act(Action::Launch);
+    open_space(&mut world);
+    world.ship.vel = DVec3::ZERO;
+    hold_w(&mut world, 10.0);
+    assert_eq!(world.ship.throttle, DETENT);
+    run(&mut world, 1.5);
+    assert!(world.cruise_ready, "{} m/s", world.ship.vel.length());
+    hold_w(&mut world, 0.5);
+    assert!(world.ship.throttle > DETENT, "into cruise");
+    // Let go and slowed right down: [W] is fine control again.
+    let mut world = World::new(1);
+    world.act(Action::Launch);
+    open_space(&mut world);
+    world.ship.vel = DVec3::ZERO;
+    hold_w(&mut world, 10.0);
+    run(&mut world, 4.0);
+    assert!(!world.cruise_ready);
+    hold_w(&mut world, 0.5);
+    assert!(world.ship.throttle <= DETENT);
+}
+
+/// Issue #210: let go in time while flying at a rock, and flight assist
+/// settles the ship a ship's length off it, rather than wherever full
+/// brakes would leave it.
+#[test]
+fn let_go_in_time_the_ship_settles_beside_the_rock() {
+    let mut world = World::new(1);
+    assert!(world.start_at_field());
+    let approach = world.approach().expect("parked facing a rock");
+    let rock = approach.pos;
+    let standoff = approach.standoff;
+    // Back off along the line to the rock, and come in at 250 m/s from
+    // where full brakes would stop the ship 120 m short of the standoff's
+    // far edge: inside the settle window.
+    let dir = (rock - world.ship_position()).normalize();
+    let speed = 250.0;
+    let stop = stopping_distance(speed, world.handling().0);
+    let gap = approach.radius + standoff + stop + 120.0;
+    world.ship.rel += (rock - dir * gap) - world.ship_position();
+    world.ship.vel = dir * speed;
+    world.ship.rot = look_rotation(dir);
+    world.ship.throttle = 0.0;
+    let a = world.approach().expect("flying at the rock");
+    assert!(a.settle_brake.is_some(), "{a:?}");
+    run(&mut world, 20.0);
+    let a = world.approach().expect("still facing it");
+    assert!(world.ship.vel.length() < 0.5);
+    assert!(
+        (a.gap - standoff).abs() < 5.0,
+        "settled {:.0} m off it, meant {standoff:.0}",
+        a.gap
+    );
+    // Let go too late, it doesn't: full brakes, and past.
+    let mut world2 = World::new(1);
+    assert!(world2.start_at_field());
+    let gap = approach.radius + stop * 0.8;
+    world2.ship.rel += (rock - dir * gap) - world2.ship_position();
+    world2.ship.vel = dir * speed;
+    world2.ship.rot = look_rotation(dir);
+    world2.ship.throttle = 0.0;
+    let a = world2.approach().expect("flying at the rock");
+    assert!(
+        a.settle_brake.is_none() && a.stops_short.is_some_and(|s| s < 0.0),
+        "{a:?}"
+    );
 }
 
 /// The STOPS IN readout matches what flight assist does once the

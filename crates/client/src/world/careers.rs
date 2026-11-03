@@ -30,9 +30,6 @@ const DT: f64 = 1.0 / 30.0;
 const MENU_S: f64 = 12.0;
 /// Seconds to turn onto a new heading by hand.
 const TURN_S: f64 = 2.0;
-/// Acceleration a pilot uses nudging around a field, m/s²: speeding up
-/// and braking for a hop, capped well below combat speed.
-const FIELD_ACCEL: f64 = 30.0;
 /// One hour of play.
 const HOUR: f64 = 3600.0;
 
@@ -392,6 +389,7 @@ fn mine_hold(b: &mut Bot, until: f64) -> f64 {
         // get there.
         let (_, rocks) = b.w.field_rocks.clone().unwrap();
         let ship = b.w.ship.rel;
+        let accel = super::pilot::ACCEL * b.w.handling().0;
         let best =
             b.w.mining
                 .live_rocks(field, &b.w.galaxy.fields[field], &rocks, b.w.clock_s)
@@ -404,7 +402,7 @@ fn mine_hold(b: &mut Bot, until: f64) -> f64 {
                     let work = crate::mining::integrity(r.radius) * (1.0 - r.damage)
                         / crate::mining::laser_power(&b.w.stats()).max(0.1)
                         / 2.5;
-                    (value / (work + field_hop_s(d)), r)
+                    (value / (work + field_hop_s(d, accel)), r)
                 })
                 .max_by(|a, c| a.0.total_cmp(&c.0))
                 .map(|(_, r)| r);
@@ -416,10 +414,10 @@ fn mine_hold(b: &mut Bot, until: f64) -> f64 {
     b.w.player.cargo_t() - start_t
 }
 
-/// Seconds to hop `d` metres inside a field: turn, then speed up and
-/// brake.
-fn field_hop_s(d: f64) -> f64 {
-    TURN_S + 2.0 * (d / FIELD_ACCEL).sqrt()
+/// Seconds to hop `d` metres inside a field with `accel` m/s² of thrust:
+/// turn, then [W] held halfway and let go, which brakes as hard (#210).
+fn field_hop_s(d: f64, accel: f64) -> f64 {
+    TURN_S + 2.0 * (d / accel).sqrt()
 }
 
 /// Nudge the ship to a spot in the field: moved there, charged the time.
@@ -434,7 +432,8 @@ fn hop_inner(b: &mut Bot, to: DVec3) {
     b.w.ship.rel = to;
     b.w.ship.vel = DVec3::ZERO;
     b.w.ship.throttle = 0.0;
-    b.idle(field_hop_s(d));
+    let accel = super::pilot::ACCEL * b.w.handling().0;
+    b.idle(field_hop_s(d, accel));
 }
 
 /// Hold the laser on a rock, tracking its veins as it spins, until it
