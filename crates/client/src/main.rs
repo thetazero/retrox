@@ -13,7 +13,8 @@
 //! station to go back to), `--rewind` (rewinding to a checkpoint),
 //! `--arrival` (back at the checkpoint), `--harvesters <gas|ice>` (by a
 //! harvester at work), `--skim` (in a giant's clouds), `--cities` (over a
-//! planet with two cities), `--colony` (a city due to be founded on the
+//! planet with two cities), `--land <terran|ocean|desert|ice|barren|moon>`
+//! (landed at a city on that kind of world), `--colony` (a city due to be founded on the
 //! starting planet at the day's turn), `--interdict` (flying past a gang's lair until
 //! it interdicts), `--convoy` (alongside a trader fleet; with
 //! `--hostile-convoy`, its faction hostile),
@@ -25,6 +26,7 @@
 
 mod audio;
 mod bounty_ui;
+mod city;
 mod combat;
 mod contracts;
 mod contracts_ui;
@@ -80,6 +82,8 @@ struct Flags {
     undocked: bool,
     /// In orbit of a planet with two cities, cargo bound for one (#116).
     cities: bool,
+    /// `--land KIND`: start landed at a city on that kind of world.
+    land: Option<String>,
     /// Landed at the start, with colonists due to found a city on the same
     /// planet when the day turns over (#154).
     colony: bool,
@@ -170,6 +174,7 @@ impl Flags {
             seed: value("--seed").and_then(|s| s.parse().ok()),
             undocked: has("--undocked"),
             cities: has("--cities"),
+            land: value("--land"),
             colony: has("--colony"),
             station: has("--station"),
             field: has("--field") || has("--sunward") || has("--quarry"),
@@ -222,6 +227,7 @@ impl Flags {
                 self.seed.is_some()
                     || self.undocked
                     || self.cities
+                    || self.land.is_some()
                     || self.colony
                     || self.station
                     || self.field
@@ -294,6 +300,20 @@ impl Flags {
         }
         if self.colony && world.colony_due_here().is_none() {
             eprintln!("--colony: no free region on the starting planet");
+        }
+        if let Some(kind) = &self.land {
+            let wanted = |k: BodyKind| match kind.as_str() {
+                "terran" => k == BodyKind::Planet(PlanetClass::Terran),
+                "ocean" => k == BodyKind::Planet(PlanetClass::Ocean),
+                "desert" => k == BodyKind::Planet(PlanetClass::Desert),
+                "ice" => k == BodyKind::Planet(PlanetClass::Ice),
+                "barren" => k == BodyKind::Planet(PlanetClass::Barren),
+                "moon" => k == BodyKind::Moon,
+                _ => false,
+            };
+            if !world.start_landed_on(wanted) {
+                eprintln!("--land: no city on a {kind} world anywhere");
+            }
         }
         if self.cities && world.start_by_cities().is_none() {
             eprintln!("--cities: no planet with two cities anywhere");
@@ -389,7 +409,18 @@ struct Meshes {
     /// Every ship mesh built so far, by [`fit_key`]: refits and the
     /// shipyard's ships come back without rebuilding.
     ship_cache: std::collections::HashMap<String, (MeshId, meshes::ShipShape)>,
+    /// The lowest point (y) of each ship mesh, for standing it on a pad.
+    ship_low: std::collections::HashMap<MeshId, f32>,
     hangar_bay: MeshId,
+    /// A flat unit disc: the ground round a city's pad.
+    disc: MeshId,
+    /// The port round a city's pad, in pad radii.
+    port: MeshId,
+    /// The chocks a landed ship stands on, in pad radii.
+    chocks: MeshId,
+    /// Each city landed at, by the pad's radius (the skyline stands back
+    /// from a big ship's pad): where it stands and its meshes.
+    cities: std::collections::HashMap<(SettlementId, u32), (city::Site, city::CityMeshes)>,
     /// Each rock shape at each of [`meshes::ROCK_DETAIL`].
     rocks: Vec<[MeshId; 3]>,
     /// A unit cube: hull plates flung off in explosions.
@@ -522,7 +553,12 @@ impl ApplicationHandler for App {
             ship: MeshId::default(),
             ship_shape: meshes::ShipShape::default(),
             ship_cache: std::collections::HashMap::new(),
+            ship_low: std::collections::HashMap::new(),
             hangar_bay: renderer.add_mesh(&meshes::hangar_bay()),
+            disc: renderer.add_mesh(&city::disc()),
+            port: renderer.add_mesh(&city::port()),
+            chocks: renderer.add_mesh(&city::chocks()),
+            cities: std::collections::HashMap::new(),
             rocks: (0..mining::ROCK_MESHES)
                 .map(|i| {
                     meshes::ROCK_DETAIL
@@ -1097,6 +1133,16 @@ impl Running {
     /// in the hangar and trading, the one being looked at in the shipyard.
     fn bay_fit(world: &World) -> Option<retrox_sim::ship::Loadout> {
         world.docked_at()?;
+        // Landed, the ship stands on its pad whatever the screen.
+        if matches!(world.mode, Mode::Landed { .. }) {
+            return Some(match world.screen {
+                Screen::Shipyard => world
+                    .inspect
+                    .and_then(|h| retrox_content::ships::stock(h.id))
+                    .unwrap_or_else(|| world.player.ship.fit.clone()),
+                _ => world.player.ship.fit.clone(),
+            });
+        }
         match world.screen {
             // Trading happens in the bay too, with your ship being loaded.
             Screen::Hangar | Screen::Trade => Some(world.player.ship.fit.clone()),
@@ -1118,6 +1164,8 @@ impl Running {
         }
         let (mesh, shape) = meshes::ship(fit);
         let built = (self.renderer.add_mesh(&mesh), shape);
+        let low = mesh.vertices.iter().map(|v| v.pos[1]).fold(0.0, f32::min);
+        self.meshes.ship_low.insert(built.0, low);
         self.meshes.ship_cache.insert(key, built.clone());
         built
     }
@@ -1607,6 +1655,42 @@ impl Running {
         }
         let star = star_color(world.star());
         match bay {
+            // Landed at a city: on its pad, under its sky (#178).
+            Some(fit) if matches!(world.mode, Mode::Landed { .. }) => {
+                let Mode::Landed { city, body, .. } = world.mode else {
+                    unreachable!()
+                };
+                let (mesh, _) = self.ship_mesh(&fit);
+                let low = self.meshes.ship_low.get(&mesh).copied().unwrap_or(0.0);
+                let length = fit.stats().length_m as f32;
+                let key = (city, city::pad_radius(length).round() as u32);
+                if !self.meshes.cities.contains_key(&key) {
+                    let world = &self.game.as_ref().expect("playing").world;
+                    let site = city_site(world, city, body, city::pad_radius(length));
+                    let built = city::CityMeshes {
+                        skyline: self
+                            .renderer
+                            .add_mesh(&city::skyline(&site, city::pad_radius(length))),
+                        hills: self.renderer.add_mesh(&city::hills(&site)),
+                    };
+                    self.meshes.cities.insert(key, (site, built));
+                }
+                let (site, built) = &self.meshes.cities[&key];
+                let time = self.start.elapsed().as_secs_f32();
+                let (view, instances) = city::scene(
+                    site,
+                    *built,
+                    self.meshes.sphere,
+                    self.meshes.disc,
+                    self.meshes.port,
+                    self.meshes.chocks,
+                    mesh,
+                    length,
+                    low,
+                    time,
+                );
+                (proj * view, instances, cam_pos, site.light)
+            }
             // In the hangar or shipyard: a ship on the bay floor.
             Some(fit) => {
                 let (mesh, _) = self.ship_mesh(&fit);
@@ -1751,22 +1835,9 @@ fn scene(
     for &b in &world.view.bodies {
         let body = &world.galaxy.bodies[b];
         let pos = world.position(Place::Body(b));
-        let seed = b.index() as u64 * 7919 % 10_000;
-        let (surface, color) = match body.kind {
-            BodyKind::Planet(PlanetClass::Barren) => (Surface::Barren, [0.42, 0.39, 0.36]),
-            BodyKind::Planet(PlanetClass::Desert) => (Surface::Desert, [0.72, 0.52, 0.32]),
-            BodyKind::Planet(PlanetClass::Terran) => (Surface::Ocean, [0.36, 0.42, 0.3]),
-            BodyKind::Planet(PlanetClass::Ocean) => (Surface::Ocean, [0.2, 0.35, 0.5]),
-            BodyKind::Planet(PlanetClass::Ice) => (Surface::Ice, [0.65, 0.75, 0.82]),
-            BodyKind::GasGiant => (Surface::Gas, gas_color(seed)),
-            BodyKind::Moon => (Surface::Barren, [0.4, 0.38, 0.36]),
-            BodyKind::Belt => continue,
-        };
-        // How much of an ocean world is sea.
-        let sea_level = match body.kind {
-            BodyKind::Planet(PlanetClass::Terran) => 0.52,
-            BodyKind::Planet(PlanetClass::Ocean) => 0.6,
-            _ => 0.0,
+        let seed = body_seed(b);
+        let Some((surface, color, sea_level)) = body_look(body.kind, seed) else {
+            continue;
         };
         let spin = Quat::from_rotation_y(
             (t / 86_400.0 * std::f64::consts::TAU % std::f64::consts::TAU) as f32,
@@ -2876,6 +2947,83 @@ fn station_kind(world: &World, s: SettlementId) -> StationKind {
         .iter()
         .max_by(|a, b| a.scale.total_cmp(&b.scale))
         .map_or(StationKind::Outpost, |f| StationKind::Facility(f.kind))
+}
+
+/// The seed a body's surface noise is drawn from.
+fn body_seed(b: retrox_sim::BodyId) -> u64 {
+    b.index() as u64 * 7919 % 10_000
+}
+
+/// How a body looks from space: its surface, colour, and how much of an
+/// ocean world is sea. `None` for a belt.
+fn body_look(kind: BodyKind, seed: u64) -> Option<(Surface, [f32; 3], f32)> {
+    let (surface, color) = match kind {
+        BodyKind::Planet(PlanetClass::Barren) => (Surface::Barren, [0.42, 0.39, 0.36]),
+        BodyKind::Planet(PlanetClass::Desert) => (Surface::Desert, [0.72, 0.52, 0.32]),
+        BodyKind::Planet(PlanetClass::Terran) => (Surface::Ocean, [0.36, 0.42, 0.3]),
+        BodyKind::Planet(PlanetClass::Ocean) => (Surface::Ocean, [0.2, 0.35, 0.5]),
+        BodyKind::Planet(PlanetClass::Ice) => (Surface::Ice, [0.65, 0.75, 0.82]),
+        BodyKind::GasGiant => (Surface::Gas, gas_color(seed)),
+        BodyKind::Moon => (Surface::Barren, [0.4, 0.38, 0.36]),
+        BodyKind::Belt => return None,
+    };
+    let sea_level = match kind {
+        BodyKind::Planet(PlanetClass::Terran) => 0.52,
+        BodyKind::Planet(PlanetClass::Ocean) => 0.6,
+        _ => 0.0,
+    };
+    Some((surface, color, sea_level))
+}
+
+/// Where a city stands, for the scene landed there (#178): its world's
+/// ground and air, its sun as seen from there, a moon's planet overhead.
+fn city_site(world: &World, city: SettlementId, body: retrox_sim::BodyId, pad: f32) -> city::Site {
+    let galaxy = &world.galaxy;
+    let b = &galaxy.bodies[body];
+    let kind = match b.kind {
+        BodyKind::Planet(PlanetClass::Terran) => city::World::Terran,
+        BodyKind::Planet(PlanetClass::Ocean) => city::World::Ocean,
+        BodyKind::Planet(PlanetClass::Desert) => city::World::Desert,
+        BodyKind::Planet(PlanetClass::Ice) => city::World::Ice,
+        _ => city::World::Airless,
+    };
+    let here = world.position(Place::Body(body));
+    let sun_radius = (world.star_radius_m() / here.length().max(1.0)) as f32;
+    let parent = match b.orbit.parent {
+        retrox_sim::bodies::Orbiting::Body(p) => {
+            let pb = &galaxy.bodies[p];
+            let seed = body_seed(p);
+            body_look(pb.kind, seed).map(|(surface, color, sea_level)| {
+                let d = (world.position(Place::Body(p)) - here).length().max(1.0);
+                city::SkyBody {
+                    surface,
+                    color,
+                    seed: seed as f32,
+                    sea_level,
+                    radius: ((pb.radius_km * 1000.0 / d) as f32).clamp(0.03, 0.4),
+                }
+            })
+        }
+        retrox_sim::bodies::Orbiting::Star => None,
+    };
+    let population = galaxy
+        .settlements
+        .get(city)
+        .map_or(0.0, |s| s.economy.population);
+    let star = if world.star() == StarClass::BlackHole {
+        [0.6, 0.6, 0.7]
+    } else {
+        star_color(world.star())
+    };
+    city::Site::new(
+        pad,
+        kind,
+        city.data().as_ffi(),
+        population,
+        star,
+        sun_radius,
+        parent,
+    )
 }
 
 /// Linear RGB for a star's light and disc.
