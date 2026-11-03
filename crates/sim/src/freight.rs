@@ -37,7 +37,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::economy::Good;
 use crate::routes::{self, Visit};
-use crate::settlement::{SettlementId, Site};
+use crate::settlement::SettlementId;
 use crate::{EconomyModel, GalaxyState, GalaxyTime, SystemId};
 
 /// The board lists settlements at most this many jumps away.
@@ -145,8 +145,7 @@ pub fn board(
             continue;
         }
         for (to, dest) in state.settlements_in(system) {
-            // Only places the player can dock or land at.
-            if to == here || matches!(dest.site, Site::Surface(_)) {
+            if to == here {
                 continue;
             }
             let dest_market = &dest.economy.market;

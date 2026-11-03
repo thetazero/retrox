@@ -197,6 +197,37 @@ fn print_bodies(state: &retrox_sim::GalaxyState) {
         100.0 * systems_with_world as f64 / state.systems.len() as f64,
         state.settlements.len()
     );
+    print_sites(state);
+}
+
+/// Where settlements sit, and for the ones on undivided bodies, on what,
+/// with how many of each build ships.
+fn print_sites(state: &retrox_sim::GalaxyState) {
+    use retrox_sim::BodyKind;
+    let mut sites: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    for s in state.settlements.values() {
+        let site = match s.site {
+            retrox_sim::Site::Region(_) => "region city".to_string(),
+            retrox_sim::Site::Space(_) => "station".to_string(),
+            retrox_sim::Site::Surface(b) => match state.bodies[b].kind {
+                BodyKind::Planet(class) => format!("surface: {class:?} planet"),
+                other => format!("surface: {other:?}"),
+            },
+        };
+        let e = sites.entry(site).or_default();
+        e.0 += 1;
+        e.1 += usize::from(
+            s.economy
+                .facilities
+                .iter()
+                .any(|f| f.kind == retrox_sim::economy::FacilityKind::Shipyard),
+        );
+    }
+    let sites: Vec<String> = sites
+        .iter()
+        .map(|(k, (n, y))| format!("{k} {n} ({y} yards)"))
+        .collect();
+    println!("  settlement sites: {}", sites.join(", "));
 }
 
 /// How many settlements a faction holds.
@@ -280,6 +311,7 @@ fn simulate(seed: u64, years: u64, csv: Option<&str>) -> std::io::Result<()> {
     );
     print_lineages(&state);
     print_economy(&state);
+    print_sites(&state);
     health::print(&state);
     Ok(())
 }

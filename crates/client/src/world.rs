@@ -3,7 +3,7 @@
 //!
 //! The sim is the source of truth for what's in a system: bodies and their
 //! orbits, asteroid fields, and settlements. Space settlements are stations
-//! you dock at; settlements on a planet's regions are cities you land at.
+//! you dock at; settlements on a planet or moon are cities you land at.
 //!
 //! **Three ways to move:**
 //! 1. *Normal flight*, in real time. The throttle's lower half is fine
@@ -112,7 +112,7 @@ pub struct SystemView {
     pub bodies: Vec<BodyId>,
     pub fields: Vec<FieldId>,
     pub stations: Vec<SettlementId>,
-    /// Settlements on planet regions, with the body they're on.
+    /// Settlements on planets and moons, with the body they're on.
     pub cities: Vec<(SettlementId, BodyId)>,
 }
 
@@ -136,9 +136,12 @@ impl SystemView {
             match s.site {
                 Site::Space(_) => stations.push(id),
                 Site::Region(r) => cities.push((id, galaxy.regions[r].body)),
-                // Surface settlements on undivided bodies: neither docked nor
-                // landed at, for now.
-                Site::Surface(_) => {}
+                // A whole undivided body's settlement (issue #169): a city
+                // on a moon or small planet, landed at like any other; a
+                // camp in a belt, which has no ground to land on, is
+                // docked at where the sim puts it, like a station.
+                Site::Surface(b) if galaxy.bodies[b].kind == BodyKind::Belt => stations.push(id),
+                Site::Surface(b) => cities.push((id, b)),
             }
         }
         Self {
@@ -597,6 +600,8 @@ impl World {
                 Some(Site::Space(orbit)) => {
                     to_metres(self.galaxy.orbit_position(self.system, &orbit, t))
                 }
+                // A belt camp (issue #169): where the sim has it.
+                Some(Site::Surface(b)) => to_metres(self.galaxy.body_position(b, t)),
                 _ => DVec3::ZERO,
             },
             Place::Convoy(fleet) => {
@@ -1549,7 +1554,6 @@ impl World {
         let out = self.lanes().into_iter().flat_map(|l| {
             self.galaxy
                 .settlements_in(l.to)
-                .filter(|(_, s)| !matches!(s.site, Site::Surface(_)))
                 .map(|(at, _)| (at, 1))
                 .collect::<Vec<_>>()
         });
@@ -1631,7 +1635,6 @@ impl World {
         let market = |sys: SystemId| {
             self.galaxy
                 .settlements_in(sys)
-                .filter(|(_, s)| !matches!(s.site, Site::Surface(_)))
                 .filter(|(_, s)| {
                     self.galaxy
                         .factions

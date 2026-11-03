@@ -1157,11 +1157,9 @@ round:
 - **A station with no yard says where the nearest is** on its menu
   ("none here · nearest Maeala, 4 jumps"), as one with no outfitter does
   for refits. Every shipyard refits, so the chart lists only yards.
-- **Only places the player can dock or land count.** Settlements on
-  undivided bodies (§5.1, `Site::Surface`) can't be visited yet, so a
-  yard there is never listed or tagged; nor is one whose faction counts
-  the player hostile, since it won't clear the ship in. The search goes
-  out 12 jumps.
+- **Every settlement can be docked or landed at** (§7.6, #169), so every
+  yard counts, except one whose faction counts the player hostile, since
+  it won't clear the ship in. The search goes out 12 jumps.
 
 ### 7.5 Fleet & automation
 
@@ -1225,6 +1223,22 @@ from a random generator (pillar 5).
   reach, the prompts say so and point at NAVIGATION. Hints name a city with
   its planet ("Kiolgristio, on Mufath Prime III") so the player knows
   where to fly.
+- **Every settlement in the galaxy is a place you can go** (#169). A
+  settlement the sim keeps but the player can't visit would be a market,
+  a yard and a dispatch board shown or implied and out of reach, so none
+  exists. About half of all settlements, and half the shipyards, are the
+  one settlement of a whole undivided world (`Site::Surface`: a camp on a
+  barren or desert planet, a moon base). Each is a **city like any other**:
+  a row under its planet or moon in NAVIGATION, fast travel stops low over
+  it, [L] lands, and its menu offers whatever it has (market, contracts,
+  bounties, hangar, shipyard). Freight contracts go to them too. Such a
+  world has no highport; the hop is straight down. **It has a name of its
+  own**, an invented place name like a region's, fixed per world and
+  galaxy seed, so it reads "Hiosothoru, on Selareth Deep II" and is never
+  confused with the world it's on. A camp in an asteroid belt (rare: a
+  colony on a rich belt) has no ground to land on, so it is **docked at
+  like a station**, where the sim has it on the belt's orbit, and listed
+  with the stations round the star.
 - **What the sim founds while you're there is there at once** (#154).
   The system's index (its NAVIGATION rows, [T]'s cycle, [L]'s cities,
   the station models) is rebuilt after every sim day that passes in it,

@@ -292,7 +292,7 @@ pub fn search_free_site(state: &GalaxyState, origin: SystemId) -> Option<(System
 fn site_name(state: &GalaxyState, site: Site) -> String {
     match site {
         Site::Region(r) => state.regions[r].name.clone(),
-        Site::Surface(b) => state.bodies[b].name.clone(),
+        Site::Surface(b) => crate::names::surface_settlement(state.seed, b),
         Site::Space(_) => String::new(),
     }
 }

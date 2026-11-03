@@ -4,7 +4,7 @@
 //! public knowledge, not something the player has to discover by docking.
 
 use retrox_sim::routes::{self, Visit};
-use retrox_sim::{SettlementId, Site, SystemId};
+use retrox_sim::{SettlementId, SystemId};
 
 use super::{World, routing::jump_days};
 use crate::hangar;
@@ -32,14 +32,10 @@ pub struct Nearby {
 const MAX_JUMPS: u32 = 12;
 
 impl World {
-    /// Whether the player can dock or land at settlement `s` and have
-    /// `service` there. Settlements on undivided bodies (`Site::Surface`)
-    /// can't be reached yet, so they never count.
+    /// Whether settlement `s` has `service`. Every settlement can be
+    /// docked or landed at (issue #169).
     pub fn offers(&self, s: SettlementId, service: Service) -> bool {
         self.galaxy.settlements.get(s).is_some_and(|st| {
-            if matches!(st.site, Site::Surface(_)) {
-                return false;
-            }
             let offers = hangar::services(&st.economy);
             match service {
                 Service::Shipyard => offers.shipyard,

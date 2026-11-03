@@ -79,3 +79,18 @@ pub fn faction_name(rng: &mut Rng, stem: &str, economy: EconomyModel) -> String 
     };
     rng.pick(templates).replace("{}", stem)
 }
+
+/// The name of the one settlement a whole undivided body can hold (a moon
+/// base, a camp on a barren world, `Site::Surface`): a place name of its
+/// own, like a region's, so it reads "Kiolgristio, on Mufath III" and is
+/// never mistaken for the body it's on. Fixed per body and galaxy seed, so
+/// whoever settles the body later founds a place of the same name.
+pub fn surface_settlement(seed: u64, body: crate::BodyId) -> String {
+    let mut rng = Rng::derive(seed, "surface-names").fork(body.index() as u64);
+    loop {
+        let name = word(&mut rng);
+        if (4..=11).contains(&name.len()) {
+            return name;
+        }
+    }
+}
