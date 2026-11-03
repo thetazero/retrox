@@ -717,6 +717,38 @@ rather than space bugs.
 - Supercruise for in-system travel; hyperlane jumps between systems.
 - Interdiction can pull ships out of supercruise (piracy, patrols).
 
+**How flying should feel (the user's direction, 2026-11-02).** The user
+played main and found flying "unfun and hard to do": turning and
+aiming, judging speed and stopping where you mean to, the camera, and
+moving between rocks. Until now each flight problem was fixed by flying
+less (fast travel to 400 m off a rock, to docking range, [J] out of
+wells). From here on, **flying near things is the skill the game is
+built on**, and every activity in §7.2 and §7.3 leans on it. Where the
+as-built sections below disagree, this wins.
+
+- **Local flight and cruise are two kinds of flying.** Local flight
+  covers rocks, stations, chunks and fights. Its speeds are ones a pilot
+  can judge, up to a few hundred m/s, its control is fine, and the ship
+  does what the stick says. Cruise is for crossing a system: you enter
+  and leave it on purpose. Leaving it eases you back into local flight,
+  with the world arriving gradually.
+- **You can stop where you mean to.** The pilot always sees their speed
+  relative to what they're flying at, and where they'd come to rest.
+  Matching a target's speed is one key, and letting go of the throttle
+  brings the ship to rest.
+- **Steering feels good.** Turns ease in and settle without wobble. The
+  pilot sees where the nose points and where the ship is actually going;
+  the gap between the two is drift, and reading it is part of the skill.
+- **The camera serves the pilot.** The chase view trails a turn a little,
+  so the ship's motion reads, but it never fights the pilot or hides what
+  they're flying at.
+- **Motion reads at a glance.** Near the ship, the space streams past at
+  your speed, and nearby things grow and slide by as you close.
+  Nothing pops in.
+- **The fun test:** threading between rocks, braking beside one and
+  swinging round to a tumbling chunk is enjoyable for its own sake, and a
+  practised pilot does it faster and closer than a new one.
+
 #### 7.1.1 Gravity wells and planet stops (#95)
 
 A planet city stop used to cost about five real minutes of plain flying:
@@ -1019,6 +1051,32 @@ somewhere, live somewhere, and fly for real near the player.
   standing); a convoy's frame is saved as the star's.
 
 ### 7.3 Mining
+
+**How mining should feel (the user's direction, 2026-11-02).** The user
+played main: "I'm just sitting right infront of an asteroid shooting it,
+overheating,waiting, repeat...". Mining has to be a short, hands-on
+puzzle at each rock, not a hold-the-trigger timer. Where the as-built
+bullets below disagree, this wins.
+
+- **Each rock is a small job** lasting a minute or less. It ends in a
+  clear result: a clean break, a botched one, or a jackpot.
+- **The laser is the operation, not a timer.** Pushing it harder works
+  faster and yields more, but past a point that differs from rock to
+  rock it ruins the vein or hurts the ship. Reading that point is the
+  skill. Heat is a risk you manage, never a pause you wait out with
+  nothing to do.
+- **Aim still matters.** Rocks spin and veins turn away; staying on the
+  vein is part of the job.
+- **Discovery.** Most rocks are ordinary. A few are rich, and they are
+  found by flying through a field and scanning, not read off a list.
+- **Collecting is flying.** Freed chunks tumble away with real motion,
+  and you go and get them with the ship (§7.1's local flight).
+- **Pressure.** The richest finds are in riskier places, and a full hold
+  draws attention. Staying for one more rock is a gamble, and so is
+  heading home.
+- **The fun test:** a new player mining for ten minutes is busy and
+  deciding things the whole time, has at least one moment of "got it!"
+  or "oh no", and wants one more rock.
 
 - An **activity**, not a timer: fracture asteroids, cut into them, collect
   chunks, manage heat/hold.
