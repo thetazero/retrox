@@ -1,0 +1,23 @@
+# A PR must not silently undo recent work on main (issue #218: #151's squash
+# merge reverted all of #150). See .github/revert-check.py.
+name: Revert check
+
+on:
+  pull_request:
+    # `edited`: naming the undone PR in the description re-runs the check.
+    types: [opened, synchronize, reopened, edited]
+
+jobs:
+  revert-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # The checkout is the PR merged into main: HEAD^1 is main, HEAD is what
+      # a squash merge would land.
+      - name: Check
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+        run: python3 .github/revert-check.py HEAD^1 HEAD --body "$TITLE $BODY"
