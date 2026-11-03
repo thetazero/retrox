@@ -2371,3 +2371,70 @@ fn intercept_catches_a_gang_lying_low() {
     assert_eq!(world.mode, Mode::Normal);
     assert!(world.hostiles_near() > 0);
 }
+
+/// #220: the pilot moves the aim and lets go; the nose turns onto it and
+/// settles there, without swinging past, and stays.
+#[test]
+fn the_nose_settles_on_the_aim_and_stays() {
+    let mut world = World::new(1);
+    assert!(world.start_at_field());
+    world.update(1.0 / 60.0, Controls::default());
+    let start = world.ship.rot * DVec3::NEG_Z;
+    // 5° right and 3° up, in one frame of mouse.
+    let by = DVec2::new(5f64.to_radians(), 3f64.to_radians());
+    world.update(
+        1.0 / 60.0,
+        Controls {
+            aim: by,
+            ..Controls::default()
+        },
+    );
+    let aim = world.aim.expect("aiming");
+    assert!((start.angle_between(aim).to_degrees() - 34f64.sqrt()).abs() < 0.2);
+    let mut past = 0.0_f64;
+    let off = |w: &World| (w.ship.rot * DVec3::NEG_Z).angle_between(aim).to_degrees();
+    for _ in 0..60 * 3 {
+        world.update(1.0 / 60.0, Controls::default());
+        // How far the nose has gone beyond the aim, along the turn.
+        let nose = world.ship.rot * DVec3::NEG_Z;
+        let along = (nose - start).dot((aim - start).normalize()) - (aim - start).length();
+        past = past.max(along.to_degrees());
+    }
+    assert!(off(&world) < 0.05, "nose {:.2}° off the aim", off(&world));
+    assert!(past < 0.1, "swung {past:.2}° past the aim");
+    for _ in 0..60 * 5 {
+        world.update(1.0 / 60.0, Controls::default());
+    }
+    assert!(off(&world) < 0.05, "drifted {:.2}° off the aim", off(&world));
+}
+
+/// #220: the aim never leads the nose by more than it can swing the ship
+/// round at full rate, so it stays in view, and a big turn is still made.
+#[test]
+fn a_big_turn_follows_an_aim_kept_in_view() {
+    let mut world = World::new(1);
+    assert!(world.start_at_field());
+    world.update(1.0 / 60.0, Controls::default());
+    let start = world.ship.rot * DVec3::NEG_Z;
+    let mut most_lead = 0.0_f64;
+    // Mouse dragged right steadily for two seconds: about 120°.
+    for _ in 0..120 {
+        world.update(
+            1.0 / 60.0,
+            Controls {
+                aim: DVec2::new(1f64.to_radians(), 0.0),
+                ..Controls::default()
+            },
+        );
+        let nose = world.ship.rot * DVec3::NEG_Z;
+        most_lead = most_lead.max(nose.angle_between(world.aim.expect("aiming")));
+    }
+    assert!(most_lead <= super::pilot::AIM_LEAD + 1e-6);
+    for _ in 0..60 * 4 {
+        world.update(1.0 / 60.0, Controls::default());
+    }
+    let turned = start.angle_between(world.ship.rot * DVec3::NEG_Z).to_degrees();
+    assert!(turned > 60.0, "turned only {turned:.0}°");
+    // Aiming never rolls the ship; that's left to the pilot.
+    assert!(world.ship.spin.z.abs() < 1e-9, "rolling at {}", world.ship.spin.z);
+}

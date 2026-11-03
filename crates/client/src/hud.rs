@@ -139,7 +139,6 @@ pub struct HudInput<'a> {
     pub world: &'a World,
     pub view_proj: Mat4,
     pub camera: DVec3,
-    pub stick: glam::DVec2,
     pub captured: bool,
     /// The controls card is up (H).
     pub controls_card: bool,
@@ -283,7 +282,7 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
         }
 
         // Crosshair on the nose (the chase view trails a turn, so that's
-        // off the screen's centre mid-turn), and stick position.
+        // off the screen's centre mid-turn), and the pilot's aim.
         let nose = w.ship_position() - h.camera + w.ship.rot * glam::DVec3::NEG_Z * 1e5;
         let c = project(h.view_proj, nose.as_vec3(), screen).unwrap_or(screen.center());
         let ring = CREAM_DIM.gamma_multiply(0.7);
@@ -291,8 +290,7 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
         for dir in [Vec2::X, -Vec2::X, Vec2::Y, -Vec2::Y] {
             painter.line_segment([c + dir * 18.0, c + dir * 26.0], Stroke::new(1.0, ring));
         }
-        let s = Vec2::new(h.stick.x as f32, h.stick.y as f32) * 60.0;
-        painter.circle_filled(c + s, 2.5, AMBER);
+        aim_marker(&painter, &h, screen, c);
     }
 
     // Over a gas giant the scoop's panel takes the mining panel's place.
@@ -1472,6 +1470,40 @@ fn approach_marker(painter: &egui::Painter, h: &HudInput, screen: Rect) {
 /// Where the ship is actually going: a small ring with wings and a fin
 /// on the line it's moving along. The gap between it and the crosshair
 /// (the nose) is drift (DESIGN §7.1).
+/// Where the pilot aims (DESIGN §7.1.5): an amber diamond the nose turns
+/// onto. While the nose is still swinging round to it, a faint line from
+/// the crosshair at `nose` shows the way it's going.
+fn aim_marker(painter: &egui::Painter, h: &HudInput, screen: Rect, nose: Pos2) {
+    let w = h.world;
+    let aim = match w.aim {
+        Some(aim) if w.mode == Mode::Normal => aim,
+        _ => w.ship.rot * glam::DVec3::NEG_Z,
+    };
+    let at = w.ship_position() - h.camera + aim * 1e5;
+    let Some(p) = project(h.view_proj, at.as_vec3(), screen) else {
+        return;
+    };
+    let ink = Stroke::new(1.5, AMBER);
+    let r = 5.0;
+    let corners = [
+        p + Vec2::new(0.0, -r),
+        p + Vec2::new(r, 0.0),
+        p + Vec2::new(0.0, r),
+        p + Vec2::new(-r, 0.0),
+    ];
+    for i in 0..4 {
+        painter.line_segment([corners[i], corners[(i + 1) % 4]], ink);
+    }
+    let gap = p - nose;
+    if gap.length() > 24.0 {
+        let dir = gap.normalized();
+        painter.line_segment(
+            [nose + dir * 16.0, p - dir * (r + 3.0)],
+            Stroke::new(1.0, AMBER.gamma_multiply(0.4)),
+        );
+    }
+}
+
 fn heading_marker(painter: &egui::Painter, h: &HudInput, screen: Rect) {
     let vel = h.world.ship.vel;
     if vel.length() < 3.0 {

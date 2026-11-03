@@ -480,10 +480,12 @@ struct Running {
     trigger: bool,
     /// `--fire`: the trigger is held down for good.
     fire: bool,
-    stick: DVec2,
-    /// The arrow keys' stick: pitch and yaw, each easing from a nudge to
-    /// full as its key is held (see [`key_axis`]).
-    key_stick: DVec2,
+    /// How far the mouse has moved the aim since the last frame, radians
+    /// (right, up).
+    mouse_aim: DVec2,
+    /// How long each arrow key axis has been held, seconds, signed by
+    /// direction (right, up): see [`key_aim_rate`].
+    key_held: DVec2,
     captured: bool,
     /// The controls card (H) is up.
     controls_card: bool,
@@ -598,8 +600,8 @@ impl ApplicationHandler for App {
             just_pressed: Vec::new(),
             trigger: false,
             fire: self.flags.fire,
-            stick: DVec2::ZERO,
-            key_stick: DVec2::ZERO,
+            mouse_aim: DVec2::ZERO,
+            key_held: DVec2::ZERO,
             captured: false,
             controls_card: false,
             last_frame: Instant::now(),
@@ -777,17 +779,8 @@ impl ApplicationHandler for App {
         let Some(r) = self.running.as_mut() else {
             return;
         };
-        if let DeviceEvent::MouseMotion { delta } = event
-            && r.captured
-        {
-            let k = 0.004 * r.settings.mouse_sensitivity;
-            let pitch = if r.settings.invert_pitch {
-                -delta.1
-            } else {
-                delta.1
-            };
-            r.stick += DVec2::new(delta.0, pitch) * k;
-            r.stick = r.stick.clamp_length_max(1.0);
+        if let DeviceEvent::MouseMotion { delta } = event {
+            r.mouse_moved(delta);
         }
     }
 
@@ -799,6 +792,22 @@ impl ApplicationHandler for App {
 }
 
 impl Running {
+    /// The mouse moved by `delta` counts: while it's flying the ship, that
+    /// moves the aim.
+    fn mouse_moved(&mut self, delta: (f64, f64)) {
+        if !self.captured {
+            return;
+        }
+        // About 30° an inch on an 800 dpi mouse, at sensitivity 1.
+        let k = 0.0006 * self.settings.mouse_sensitivity;
+        let up = if self.settings.invert_pitch {
+            delta.1
+        } else {
+            -delta.1
+        };
+        self.mouse_aim += DVec2::new(delta.0, up) * k;
+    }
+
     /// In free flight, unpaused: where clicking the view takes the mouse.
     fn flying(&self) -> bool {
         !self.paused
@@ -823,7 +832,7 @@ impl Running {
         }
         self.captured = captured;
         self.trigger = false;
-        self.stick = DVec2::ZERO;
+        self.mouse_aim = DVec2::ZERO;
     }
 
     /// Back to the title screen, with its backdrop.
@@ -1058,8 +1067,6 @@ impl Running {
         let down = |k| !typing && self.keys.contains(&k);
         let axis = |pos, neg| f64::from(u8::from(down(pos))) - f64::from(u8::from(down(neg)));
 
-        // The virtual stick springs back toward centre.
-        self.stick *= (-2.2 * dt).exp();
         // Like a stick: ↓ pulls the nose up, unless pitch is inverted, which
         // flips the keys as well as the mouse (issue #128).
         let (nose_up, nose_down) = if self.settings.invert_pitch {
@@ -1067,21 +1074,43 @@ impl Running {
         } else {
             (KeyCode::ArrowDown, KeyCode::ArrowUp)
         };
-        self.key_stick = DVec2::new(
-            key_axis(
-                self.key_stick.x,
-                axis(KeyCode::ArrowRight, KeyCode::ArrowLeft),
-                dt,
-            ),
-            key_axis(self.key_stick.y, axis(nose_up, nose_down), dt),
+        // The arrow keys move the aim: slowly at first, for fine aiming,
+        // then faster the longer they're held (DESIGN §7.1.5).
+        let held = DVec2::new(
+            axis(KeyCode::ArrowRight, KeyCode::ArrowLeft),
+            axis(nose_up, nose_down),
         );
-        let (keys_yaw, keys_pitch) = (self.key_stick.x, self.key_stick.y);
+        // Over a rock or station, held keys creep (see `KEY_ON_RATE`).
+        let friction = self
+            .game
+            .as_ref()
+            .is_some_and(|g| g.world.aim_on_something());
+        let mut keys_aim = DVec2::ZERO;
+        for i in 0..2 {
+            let (was, now) = (self.key_held[i], held[i]);
+            let t = if now == 0.0 || was * now < 0.0 {
+                0.0
+            } else if friction {
+                // Sliding off the far edge picks up again from fine.
+                was.abs().min(KEY_FINE_S)
+            } else {
+                was.abs()
+            };
+            if now != 0.0 {
+                keys_aim[i] = now
+                    * if friction {
+                        KEY_ON_RATE * dt
+                    } else {
+                        key_aim_angle(t, t + dt)
+                    };
+                self.key_held[i] = now * (t + dt);
+            } else {
+                self.key_held[i] = 0.0;
+            }
+        }
         let controls = Controls {
-            stick: DVec3::new(
-                (-self.stick.y + keys_pitch).clamp(-1.0, 1.0),
-                (self.stick.x + keys_yaw).clamp(-1.0, 1.0),
-                axis(KeyCode::KeyE, KeyCode::KeyQ),
-            ),
+            stick: DVec3::new(0.0, 0.0, axis(KeyCode::KeyE, KeyCode::KeyQ)),
+            aim: std::mem::take(&mut self.mouse_aim) + keys_aim,
             throttle_delta: axis(KeyCode::KeyW, KeyCode::KeyS),
             strafe: axis(KeyCode::KeyD, KeyCode::KeyA),
             lift: axis(KeyCode::Space, KeyCode::ControlLeft),
@@ -1309,7 +1338,6 @@ impl Running {
                             world: &game.world,
                             view_proj,
                             camera: cam_pos,
-                            stick: self.stick,
                             captured: self.captured,
                             controls_card: self.controls_card,
                             notes: self.settings.first_steps,
@@ -1459,6 +1487,8 @@ impl Running {
     /// - `click:X:Y` clicks the UI at that pixel of the window (as in a
     ///   screenshot), `move:X:Y` just points there;
     /// - `scroll:X:Y:DY` turns the mouse wheel there;
+    /// - `mouse:DX:DY` moves the mouse by that many counts, as flying with
+    ///   it does (once the view has the mouse: click it, or [TAB]);
     /// - `shot:PATH` saves this frame as a PNG (a `.ppm` path becomes
     ///   `.png`), about a megabyte at most;
     /// - `info:PATH` writes where things stand, as text;
@@ -1528,6 +1558,11 @@ impl Running {
             ["move", x, y] => {
                 if let Some(pos) = points(x, y) {
                     self.pointer.push_back(vec![egui::Event::PointerMoved(pos)]);
+                }
+            }
+            ["mouse", dx, dy] => {
+                if let (Ok(dx), Ok(dy)) = (dx.parse(), dy.parse()) {
+                    self.mouse_moved((dx, dy));
                 }
             }
             ["shot", path @ ..] => self.renderer.capture = Some(PathBuf::from(path.join(":"))),
@@ -3137,20 +3172,31 @@ fn refit_sections(fit: &mut retrox_sim::ship::Loadout, ids: &str) {
     }
 }
 
-/// One axis of the arrow keys' stick, from `now` toward `held` (one of
-/// -1, 0 and 1) over `dt`: a tap nudges the nose a degree or so, and holding the key
-/// opens it to full over about half a second, so keys can aim as finely as
-/// they can turn (#210). Letting go centres it at once.
-fn key_axis(now: f64, held: f64, dt: f64) -> f64 {
-    const NUDGE: f64 = 0.2;
-    const OPEN_PER_S: f64 = 1.8;
-    if held == 0.0 {
-        0.0
-    } else if now * held <= 0.0 {
-        held * NUDGE
-    } else {
-        held * (now.abs() + OPEN_PER_S * dt).min(1.0)
-    }
+/// How far an arrow key held from `t0` to `t1` seconds into its press
+/// moves the aim, radians. The first [`KEY_FINE_S`] creep at
+/// [`KEY_FINE_RATE`], so a tap moves it a fraction of a degree, onto a
+/// rock a couple of km off; after that it speeds up to [`KEY_FAST_RATE`]
+/// over [`KEY_RAMP_S`], and a held key swings the ship round.
+fn key_aim_angle(t0: f64, t1: f64) -> f64 {
+    key_aim_total(t1) - key_aim_total(t0)
+}
+
+const KEY_FINE_RATE: f64 = 4.0 * std::f64::consts::PI / 180.0;
+/// While the aim is on a rock or station, a held key creeps at this rate,
+/// so the aim stays on a small rock long enough to let go there.
+const KEY_ON_RATE: f64 = 2.0 * std::f64::consts::PI / 180.0;
+const KEY_FAST_RATE: f64 = 80.0 * std::f64::consts::PI / 180.0;
+const KEY_FINE_S: f64 = 0.3;
+const KEY_RAMP_S: f64 = 0.8;
+
+/// How far an arrow key held for `t` seconds has moved the aim, radians:
+/// the integral of its rate, which rises linearly through the ramp.
+fn key_aim_total(t: f64) -> f64 {
+    let fine = KEY_FINE_RATE * t;
+    let r = (t - KEY_FINE_S).max(0.0);
+    let ramp = r.min(KEY_RAMP_S);
+    let extra = KEY_FAST_RATE - KEY_FINE_RATE;
+    fine + extra * ramp * ramp / (2.0 * KEY_RAMP_S) + extra * (r - ramp)
 }
 
 /// A key by the name a key script uses for it (see [`Running::run_script`]).
@@ -3217,6 +3263,15 @@ fn remote_info(w: &World) -> String {
             a.closing,
             a.stops_short.map_or("-".into(), |s| format!("{s:.0}")),
             a.settle_brake.is_some()
+        );
+    }
+    if let Some(aim) = w.aim {
+        let local = w.ship.rot.inverse() * aim;
+        let _ = writeln!(
+            out,
+            "aim yaw {:.1} pitch {:.1} (deg off the nose)",
+            local.x.atan2(-local.z).to_degrees(),
+            local.y.asin().to_degrees()
         );
     }
     if let Some(t) = w.target {
@@ -3338,6 +3393,24 @@ mod tests {
     use super::step_case;
     use crate::render::png_path;
     use std::path::Path;
+
+    /// #220: a tap of an arrow key moves the aim a fraction of a degree,
+    /// onto a small rock a couple of km off; held, it swings the ship round.
+    #[test]
+    fn arrow_keys_aim_finely_then_swing() {
+        let deg = |t: f64| super::key_aim_total(t).to_degrees();
+        assert!(deg(0.1) < 0.5, "a tap moves the aim {:.2}°", deg(0.1));
+        assert!(deg(0.1) > 0.2, "a tap moves the aim {:.2}°", deg(0.1));
+        assert!(deg(1.0) > 20.0, "a second's hold moves it {:.0}°", deg(1.0));
+        assert!(deg(2.0) > 90.0, "two seconds' hold moves it {:.0}°", deg(2.0));
+        // Never jumps: the rate only rises, steadily.
+        let mut last = 0.0;
+        for i in 1..300 {
+            let rate = super::key_aim_angle(f64::from(i - 1) / 100.0, f64::from(i) / 100.0);
+            assert!(rate >= last - 1e-12 && rate - last < 0.002);
+            last = rate;
+        }
+    }
 
     #[test]
     fn shot_and_info_paths_keep_their_case() {

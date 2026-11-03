@@ -44,7 +44,7 @@ mod yards;
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
-use glam::{DQuat, DVec3};
+use glam::{DQuat, DVec2, DVec3};
 use retrox_sim::ship::ShipStats;
 use serde::{Deserialize, Serialize};
 
@@ -236,7 +236,12 @@ pub struct Ship {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Controls {
     /// Virtual stick: pitch (+ nose up), yaw (+ right), roll (+ right), each -1..1.
+    /// The pilot rolls with it; pitch and yaw are for scripted flight (the
+    /// career bench, the title), which turns the ship by rates.
     pub stick: DVec3,
+    /// How far the pilot moved the aim this frame, radians: right and up
+    /// as the ship sees them (DESIGN §7.1.5). The ship turns to follow it.
+    pub aim: DVec2,
     pub throttle_delta: f64,
     pub strafe: f64,
     pub lift: f64,
@@ -437,6 +442,13 @@ pub struct World {
     /// After fast travel, the attitude autopilot turning the ship to face
     /// where that leg went, until it's there or the pilot takes the stick.
     pub turn_over: Option<Leg>,
+    /// Where the pilot is aiming, a direction in the system frame: the
+    /// ship's attitude hold turns the nose onto it and holds it there
+    /// (DESIGN §7.1.5). `None` outside hand flight; it starts on the nose.
+    pub aim: Option<DVec3>,
+    /// The ship's attitude when steering last left it: if something else
+    /// turns the ship (a start, a test), the aim starts again on its nose.
+    aim_rot: DQuat,
     /// The push of [W] that opened the throttle to its detent is still
     /// held, so it stays there (see `next_throttle`).
     pub at_detent: bool,
@@ -570,6 +582,8 @@ impl World {
             combat: Combat::new(player.ship.fit.clone(), player.ship.damage.clone()),
             burn: 0.0,
             turn_over: None,
+            aim: None,
+            aim_rot: DQuat::IDENTITY,
             at_detent: false,
             cruise_ready: false,
             throttle_held: 0.0,
@@ -1437,8 +1451,9 @@ impl World {
             }
         }
 
-        if self.mode != Mode::Normal {
+        if self.mode != Mode::Normal || self.combat.lost.is_some() {
             self.turn_over = None;
+            self.aim = None;
         }
         match self.mode {
             Mode::Normal if self.combat.lost.is_some() => {
@@ -2213,12 +2228,32 @@ impl World {
     /// nose, or eased toward where a fast-travel trip is going.
     pub fn view_rot(&self) -> DQuat {
         if self.travel_view < 1e-4 {
-            return self.ship.rot;
+            return self.aim_view();
         }
         // Smoothstepped, so the swing starts and ends without a jolt.
         let w = self.travel_view;
         let w = w * w * (3.0 - 2.0 * w);
         self.ship.rot.slerp(self.travel_rot, w).normalize()
+    }
+
+    /// Flying by hand, the chase view leans from the nose toward the
+    /// pilot's aim (DESIGN §7.1.5): what the ship is swinging round to
+    /// comes into view first, and the ship turns within the frame. The
+    /// cockpit looks down the nose.
+    fn aim_view(&self) -> DQuat {
+        const LEAN: f64 = 0.5;
+        let nose = self.ship.rot * DVec3::NEG_Z;
+        match self.aim {
+            Some(aim) if !self.cockpit => {
+                let axis = nose.cross(aim);
+                let Some(axis) = axis.try_normalize() else {
+                    return self.ship.rot;
+                };
+                let lean = DQuat::from_axis_angle(axis, nose.angle_between(aim) * LEAN);
+                (lean * self.ship.rot).normalize()
+            }
+            _ => self.ship.rot,
+        }
     }
 
     /// Put the camera straight on the ship's nose, for a cut.

@@ -203,10 +203,11 @@ impl Audio {
                 0.0
             },
         );
-        let rcs = c
-            .stick
-            .abs()
-            .max_element()
+        // Thrusters hiss while the ship turns, whether the pilot's aim or
+        // the stick is turning it.
+        let turning = world.ship.spin.abs().max_element() / 0.9;
+        let rcs = turning
+            .min(1.0)
             .max(c.strafe.abs())
             .max(c.lift.abs());
         set(Param::Rcs, if flying { rcs as f32 } else { 0.0 });
