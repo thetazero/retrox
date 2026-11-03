@@ -147,6 +147,57 @@ fn fine_throttle_rate(accel: f64) -> f64 {
     accel * DETENT / COMBAT_SPEED
 }
 
+/// How fast fast travel's sped-up time eases out of a departure and into
+/// an arrival, real seconds (#207). Time runs at `(s / τ)^1.5` galaxy
+/// seconds per real second, where `s` is the galaxy time flown so far
+/// (with τ = [`EASE_IN_S`]) or left until the ship stops (with
+/// τ = [`EASE_OUT_S`]), never below 1. So each end of a trip takes about
+/// 3τ: τ at real speed, right by the place, and 2τ in which time winds up
+/// to (or down from) its full rate. The power over 1 makes that winding
+/// finish in a fixed real time however long the trip is; under 2 it keeps
+/// it gentle: as time slows into an arrival, the distance left shrinks by
+/// at most about a sixth a frame once a rock is more than a speck, so the
+/// place grows into view instead of cutting in.
+pub const EASE_OUT_S: f64 = 1.0;
+/// Leaving, there's less to watch than arriving, so time winds up faster.
+pub const EASE_IN_S: f64 = 0.6;
+
+/// Galaxy seconds to fly in a frame of `dt` real seconds of fast travel:
+/// `flown` galaxy seconds into the trip, `to_go` from stopping, at most
+/// `warp` times real time. The ease ([`EASE_OUT_S`]) is integrated
+/// exactly over the frame, so a slow frame can't jump.
+pub fn eased_seconds(dt: f64, flown: f64, to_go: f64, warp: f64) -> f64 {
+    // With ds/dt = (s/τ)^1.5, 1/sqrt(s) changes by k per real second.
+    let k = |tau: f64| 0.5 / tau.powf(1.5);
+    let q = |s: f64| 1.0 / s.max(1e-12).sqrt();
+    // Winding up: real time until τ is flown, then 1/sqrt(s) falls.
+    let wind_up = {
+        let tau = EASE_IN_S;
+        let real = (tau - flown).clamp(0.0, dt);
+        let s = flown + real;
+        let left = q(s) - (dt - real) * k(tau);
+        if left <= 0.0 {
+            f64::INFINITY
+        } else {
+            1.0 / (left * left) - flown
+        }
+    };
+    // Winding down: the same backwards, until τ is left, then real time.
+    let tau = EASE_OUT_S;
+    let wind_down = if to_go <= tau {
+        dt
+    } else {
+        let to_tau = (q(tau) - q(to_go)) / k(tau);
+        if dt >= to_tau {
+            (to_go - tau) + (dt - to_tau)
+        } else {
+            let after = q(to_go) + dt * k(tau);
+            to_go - 1.0 / (after * after)
+        }
+    };
+    (warp * dt).min(wind_up).min(wind_down).max(dt)
+}
+
 /// The fast-travel drive a ship of `stats` has, m/s²: what the player's
 /// own autopilot and a pirate's stalk both fly on.
 pub fn drive_accel_of(stats: &ShipStats) -> f64 {
@@ -290,7 +341,9 @@ impl World {
             self.fast_travel_goal(leg, DVec3::from_array(k.pos), t + s / SECONDS_PER_DAY)
         })
         .unwrap_or_else(|| flight::trip_seconds(distance, accel));
-        let real = (2.0 + (distance / 1e7).max(1.0).log10() * 1.2).min(7.0);
+        // The ends of the trip take their own few seconds as time eases in
+        // and out (`eased_seconds`); this is the stretch between.
+        let real = (0.3 + (distance / 1e7).max(1.0).log10() * 0.8).min(2.5);
         self.ship.spin = DVec3::ZERO;
         self.ship.throttle = 0.0;
         self.turn_over = None;
@@ -299,9 +352,27 @@ impl World {
             ship,
             depart_s: self.clock_s,
             warp: estimate / real,
+            rate: 1.0,
             elapsed: 0.0,
             burn: 0.0,
         });
+    }
+
+    /// The space the ship flies through, for its drifting dust (#211):
+    /// where the frame that dust rests in is, and how fast the camera
+    /// moves through it, m per real second. That's the frame of whatever
+    /// the ship is flying by (on a trip, the place it's going to, so the
+    /// dust doesn't jump on arrival), and in fast travel the motion is
+    /// sped up with time.
+    pub fn dust_frame(&self) -> (DVec3, DVec3) {
+        match self.mode {
+            Mode::FastTravel(trip) => {
+                let frame = trip.leg.frame();
+                let vel = DVec3::from_array(trip.ship.vel) - self.velocity_at(frame, self.t_days());
+                (self.position(frame), vel * trip.rate)
+            }
+            _ => (self.position(self.ship.frame), self.ship.vel),
+        }
     }
 
     /// One frame of fast travel: fly `dt` real seconds of sped-up flight.
@@ -310,12 +381,21 @@ impl World {
         let t0 = self.t_days();
         let leg = trip.leg;
         let accel = self.drive_accel();
-        let arrived = flight::fly(&mut trip.ship, accel, dt * trip.warp, |t, ship| {
+        // Time eases up out of the departure and back down into the
+        // arrival (#207): how long until the ship stops, on the brake
+        // curve the autopilot flies.
+        let goal = self.fast_travel_goal(leg, DVec3::from_array(trip.ship.pos), t0);
+        let gap = flight::length(flight::sub(goal.pos, trip.ship.pos));
+        let to_go = (2.0 * gap / (accel * flight::BRAKE_SHARE)).sqrt();
+        let flown = self.clock_s - trip.depart_s;
+        let span = eased_seconds(dt, flown, to_go, trip.warp);
+        trip.rate = if dt > 0.0 { span / dt } else { 1.0 };
+        let arrived = flight::fly(&mut trip.ship, accel, span, |t, ship| {
             let pos = DVec3::from_array(ship.pos);
             self.fast_travel_goal(leg, pos, t0 + t / SECONDS_PER_DAY)
         });
         // Galaxy time passes by exactly as long as the ship flew.
-        self.advance_clock(arrived.unwrap_or(dt * trip.warp));
+        self.advance_clock(arrived.unwrap_or(span));
         let pos = DVec3::from_array(trip.ship.pos);
         let vel = DVec3::from_array(trip.ship.vel);
         // Face the way the drive is pushing: out along the route, then

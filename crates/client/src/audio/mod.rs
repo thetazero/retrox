@@ -222,7 +222,7 @@ impl Audio {
                 set(Param::Warp, 1.0);
                 set(
                     Param::WarpRate,
-                    (trip.warp.max(1.0).log10() / 5.0).clamp(0.0, 1.0) as f32,
+                    (trip.rate.max(1.0).log10() / 5.0).clamp(0.0, 1.0) as f32,
                 );
             }
             _ => set(Param::Warp, 0.0),
