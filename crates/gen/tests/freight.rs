@@ -75,6 +75,7 @@ fn what_the_player_carries_is_not_asked_for_twice() {
         to: first.to,
         good: first.good,
         amount: 1e9,
+        taken_today: false,
     }];
     let again = freight::board(&state, here, LOT, lane_days, &pending);
     assert!(
@@ -82,6 +83,40 @@ fn what_the_player_carries_is_not_asked_for_twice() {
             .iter()
             .any(|o| o.to == first.to && o.good == first.good)
     );
+}
+
+#[test]
+fn a_lot_taken_today_is_not_posted_again_until_tomorrow() {
+    let state = galaxy();
+    let (here, board) = state
+        .settlements
+        .keys()
+        .map(|s| (s, freight::board(&state, s, LOT, lane_days, &[])))
+        .find(|(_, b)| !b.is_empty())
+        .expect("some board has work");
+    let first = &board[0];
+    // Nothing that covers the shortage: only when it was taken counts.
+    let carried = |taken_today| Pending {
+        to: first.to,
+        good: first.good,
+        amount: 0.0,
+        taken_today,
+    };
+    let same = |b: &[freight::Offer]| b.iter().any(|o| o.to == first.to && o.good == first.good);
+    assert!(same(&freight::board(
+        &state,
+        here,
+        LOT,
+        lane_days,
+        &[carried(false)]
+    )));
+    assert!(!same(&freight::board(
+        &state,
+        here,
+        LOT,
+        lane_days,
+        &[carried(true)]
+    )));
 }
 
 #[test]
