@@ -54,6 +54,12 @@ pub enum Surface {
     /// Bare rock: mottled and bump-mapped (asteroids). `emissive` is the
     /// laser's heat.
     Rock = 9,
+    /// A world's sky on a dome round the camera (city.rs): `color` the
+    /// zenith, `aux` the horizon, `emissive` the sun's angular radius,
+    /// `detail` cloud cover.
+    SkyDome = 10,
+    /// The ground round a city's pad, and its hills (city.rs).
+    Ground = 11,
     /// Glows, drawn additively after everything solid (see `fs_glow`): a
     /// shield bubble lit round a hit (`light.xyz`: the hit's direction in
     /// object space, `light.w`: 0..1 through its life).
@@ -231,7 +237,7 @@ pub struct Renderer {
     sky_buffer: Option<(wgpu::Buffer, u32)>,
 
     pub egui: egui_wgpu::Renderer,
-    /// Save the next frame here (as a binary PPM), then clear.
+    /// Save the next frame here (as a PNG), then clear.
     pub capture: Option<std::path::PathBuf>,
 }
 
@@ -944,22 +950,97 @@ impl Renderer {
             self.config.format,
             wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
         );
-        let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();
+        let mut rgb = Vec::with_capacity((w * h * 3) as usize);
         for y in 0..h {
             let line = &data[(y * row) as usize..(y * row + w * 4) as usize];
             for px in line.as_chunks::<4>().0 {
                 if bgra {
-                    out.extend([px[2], px[1], px[0]]);
+                    rgb.extend([px[2], px[1], px[0]]);
                 } else {
-                    out.extend(&px[..3]);
+                    rgb.extend(&px[..3]);
                 }
             }
         }
-        match std::fs::write(path, out) {
+        drop(data);
+        buffer.unmap();
+        let k = self.shot_scale();
+        let (rgb, w, h) = shrink(&rgb, w, h, k);
+        let path = png_path(path);
+        match write_png(&path, &rgb, w, h) {
             Ok(()) => eprintln!("screenshot: saved {}", path.display()),
-            Err(e) => eprintln!("screenshot: {e}"),
+            Err(e) => eprintln!("screenshot: {}: {e}", path.display()),
         }
     }
+}
+
+/// Screenshots are at most this wide; a wider window is shrunk by a whole
+/// factor. That keeps one under about a megabyte, and it is about as much
+/// as an image viewer for a playtest shows anyway.
+const SHOT_MAX_WIDTH: u32 = 1600;
+
+impl Renderer {
+    /// How many window pixels make one screenshot pixel, each way (1 on a
+    /// small window, 2 on a 2880 px one). Remote clicks are in screenshot
+    /// pixels, so they scale by this too.
+    pub fn shot_scale(&self) -> u32 {
+        self.config.width.div_ceil(SHOT_MAX_WIDTH).max(1)
+    }
+}
+
+/// Shrink an RGB frame by `k` each way, averaging each k×k block.
+fn shrink(rgb: &[u8], w: u32, h: u32, k: u32) -> (Vec<u8>, u32, u32) {
+    if k <= 1 {
+        return (rgb.to_vec(), w, h);
+    }
+    let (sw, sh) = (w / k, h / k);
+    let (w, k) = (w as usize, k as usize);
+    let mut out = Vec::with_capacity(sw as usize * sh as usize * 3);
+    for y in 0..sh as usize {
+        for x in 0..sw as usize {
+            let mut sum = [0u32; 3];
+            for dy in 0..k {
+                let row = (y * k + dy) * w;
+                for dx in 0..k {
+                    let i = (row + x * k + dx) * 3;
+                    for c in 0..3 {
+                        sum[c] += u32::from(rgb[i + c]);
+                    }
+                }
+            }
+            let n = (k * k) as u32;
+            out.extend(sum.map(|v| ((v + n / 2) / n) as u8));
+        }
+    }
+    (out, sw, sh)
+}
+
+/// Where a screenshot goes: always a `.png`. A path asked for with another
+/// extension (old playtest scripts say `shot:x.ppm`) gets `.png` instead, so
+/// the file's name says what it holds.
+pub fn png_path(path: &std::path::Path) -> std::path::PathBuf {
+    if path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("png"))
+    {
+        path.to_path_buf()
+    } else {
+        path.with_extension("png")
+    }
+}
+
+/// Save an RGB frame as a compressed PNG. Screenshots land in tmpfs
+/// scratchpads (RAM), so they must be small: a raw 2880 px frame is 13 MB,
+/// the PNG of a game frame (mostly black space) well under one.
+fn write_png(path: &std::path::Path, rgb: &[u8], w: u32, h: u32) -> Result<(), String> {
+    let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
+    let mut enc = png::Encoder::new(std::io::BufWriter::new(file), w, h);
+    enc.set_color(png::ColorType::Rgb);
+    enc.set_depth(png::BitDepth::Eight);
+    enc.set_compression(png::Compression::High);
+    enc.set_filter(png::Filter::Adaptive);
+    let mut writer = enc.write_header().map_err(|e| e.to_string())?;
+    writer.write_image_data(rgb).map_err(|e| e.to_string())?;
+    writer.finish().map_err(|e| e.to_string())
 }
 
 fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
@@ -1136,5 +1217,13 @@ mod tests {
     #[test]
     fn nothing_opens_for_a_target_behind_the_camera() {
         assert!(reveal_window(lens(), Vec3::new(0.0, 0.0, 50.0), 8.0, 1920, 1080).is_none());
+    }
+
+    #[test]
+    fn shrink_averages_blocks() {
+        // 2×2 → 1×1: the average of four pixels.
+        let rgb = [0, 10, 200, 2, 10, 200, 4, 10, 200, 6, 11, 201];
+        assert_eq!(super::shrink(&rgb, 2, 2, 2), (vec![3, 10, 200], 1, 1));
+        assert_eq!(super::shrink(&rgb, 2, 2, 1).0, rgb.to_vec());
     }
 }

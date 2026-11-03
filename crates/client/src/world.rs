@@ -1808,6 +1808,52 @@ impl World {
         Some(body)
     }
 
+    /// Landed at the nearest city on a world of the wanted kind (this
+    /// system's or the nearest system's), for `--land`. False if there's
+    /// none anywhere.
+    pub fn start_landed_on(&mut self, wanted: impl Fn(BodyKind) -> bool) -> bool {
+        let city_on = |w: &Self, id: SystemId| {
+            let view = SystemView::new(&w.galaxy, id);
+            view.cities
+                .iter()
+                .copied()
+                .find(|&(_, b)| wanted(w.galaxy.bodies[b].kind))
+        };
+        if city_on(self, self.system).is_none() {
+            let here = self.galaxy.systems[self.system].position;
+            let Some(system) = self
+                .galaxy
+                .systems
+                .iter()
+                .filter(|&(id, _)| city_on(self, id).is_some())
+                .min_by(|a, b| {
+                    here.distance(a.1.position)
+                        .total_cmp(&here.distance(b.1.position))
+                })
+                .map(|(id, _)| id)
+            else {
+                return false;
+            };
+            self.arrive_jump(system);
+        }
+        let Some((city, body)) = city_on(self, self.system) else {
+            return false;
+        };
+        self.ship.frame = Place::Body(body);
+        self.ship.rel = DVec3::ZERO;
+        self.ship.vel = DVec3::ZERO;
+        self.mode = Mode::Landed {
+            city,
+            body,
+            timer: 0.0,
+        };
+        self.screen = Screen::Hub;
+        self.target = None;
+        self.message = None;
+        self.refresh_board();
+        true
+    }
+
     /// In orbit of the first planet with two cities or more (this system's
     /// or the nearest system's), with a contract for 12 t of food to the
     /// last of them and nothing targeted: the case of issue #116 (for

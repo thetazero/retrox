@@ -44,6 +44,7 @@ and `--menu pause|quit` opens over a fresh game.
 | `--traffic` | start in space alongside a trader fleet |
 | `--skim` | start skimming a gas giant |
 | `--cities` | start in orbit of a planet with two cities, cargo bound for one |
+| `--land KIND` | start landed at the nearest city on a `terran`, `ocean`, `desert`, `ice`, `barren` or `moon` world |
 | `--colony` | start landed, with colonists due to found a city on the same planet as the day turns over |
 | `--interdict` | fly past a pirate gang's lair until it interdicts the ship |
 | `--convoy` | start alongside a trader fleet, in its frame |
@@ -63,11 +64,20 @@ and `--menu pause|quit` opens over a fresh game.
 | `--screen NAME` | start docked on `trade`, `hangar`, `shipyard`, `contracts` or `bounties` |
 | `--size WxH` | open the window this size (logical pixels) rather than fitted to the screen |
 | `--ship-view DEG` | look at your ship from that angle, close up (0 = from behind) |
-| `--screenshot PATH.ppm` | save the 90th frame and quit |
+| `--screenshot PATH.png` | save the 90th frame as a PNG and quit (see below) |
 | `--menu PAGE` | open a menu page: `title`, `new`, `load`, `settings`, or `pause` / `quit` over a fresh game |
 | `--keys K1,K2,…` | press these keys, one a frame (`waitN` waits N frames), then quit (`--screenshot` stops it early) |
 | `--mute` / `--sound` | silence any run / give sound to a screenshot or `--keys` run, which are silent by default |
-| `--remote PATH` | play turn by turn from steps appended to PATH: keys, `hold:KEY:N`, `click:X:Y`, `scroll:X:Y:DY`, `shot:PATH.ppm`, `info:PATH` (bearings, rocks, raiders and their lead pips, gangs), `type:TEXT` (into the text field with the keyboard); the world waits between steps (for playtests) |
+| `--remote PATH` | play turn by turn from steps appended to PATH: keys, `hold:KEY:N`, `click:X:Y`, `scroll:X:Y:DY`, `shot:PATH.png`, `info:PATH` (bearings, rocks, raiders and their lead pips, gangs), `type:TEXT` (into the text field with the keyboard); the world waits between steps (for playtests); steps are lowercased except the paths of `shot:` and `info:`, and `click:`/`move:`/`scroll:` take pixels of the screenshot |
+
+Screenshots (`--screenshot` and `shot:`) are compressed PNGs, at most
+1600 px wide: a wider window is shrunk by a whole factor (a 2880 px
+window gives 1440 px), so one costs well under a megabyte (0.4–0.9 MB
+in testing). That matters because playtests keep them in a tmpfs
+scratchpad, which is RAM. A path that ends in anything but `.png`
+(such as an old `shot:x.ppm`) is saved with `.png` instead, and the
+game prints `screenshot: saved PATH` to stderr. Remote clicks are in
+the screenshot's pixels, so you can click at a point read off it.
 
 ### Tools
 

@@ -21,6 +21,7 @@ glam = { workspace = true, features = ["serde"] }
 serde.workspace = true
 serde_json.workspace = true
 flate2 = "1.1"
+png = "0.18"
 wgpu = "30"
 winit = "0.30"
 egui = { version = "0.37", features = ["default_fonts"] }
