@@ -94,7 +94,10 @@ pub fn flight_keys(invert_pitch: bool) -> &'static [KeyRow] {
 }
 
 pub const FLIGHT_KEYS: &[KeyRow] = &[
-    (&["MOUSE"], "aim the amber diamond; the nose follows (click the view)"),
+    (
+        &["MOUSE"],
+        "aim the amber diamond; the nose follows (click the view)",
+    ),
     (&["↑", "↓"], "aim: ↓ nose up · ↑ nose down"),
     (&["←", "→"], "aim left / right · tap to aim finely"),
     (&["W"], "hold to fly ahead, let go to stop"),
@@ -109,7 +112,10 @@ pub const FLIGHT_KEYS: &[KeyRow] = &[
 ];
 
 const FLIGHT_KEYS_INVERTED: &[KeyRow] = &[
-    (&["MOUSE"], "aim the amber diamond; the nose follows (click the view)"),
+    (
+        &["MOUSE"],
+        "aim the amber diamond; the nose follows (click the view)",
+    ),
     (&["↑", "↓"], "aim: ↑ nose up · ↓ nose down"),
     (&["←", "→"], "aim left / right · tap to aim finely"),
     (&["W"], "hold to fly ahead, let go to stop"),

@@ -3542,7 +3542,11 @@ mod tests {
         assert!(deg(0.1) < 0.5, "a tap moves the aim {:.2}°", deg(0.1));
         assert!(deg(0.1) > 0.2, "a tap moves the aim {:.2}°", deg(0.1));
         assert!(deg(1.0) > 20.0, "a second's hold moves it {:.0}°", deg(1.0));
-        assert!(deg(2.0) > 90.0, "two seconds' hold moves it {:.0}°", deg(2.0));
+        assert!(
+            deg(2.0) > 90.0,
+            "two seconds' hold moves it {:.0}°",
+            deg(2.0)
+        );
         // Never jumps: the rate only rises, steadily.
         let mut last = 0.0;
         for i in 1..300 {

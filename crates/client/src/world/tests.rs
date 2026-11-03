@@ -2502,7 +2502,11 @@ fn the_nose_settles_on_the_aim_and_stays() {
     for _ in 0..60 * 5 {
         world.update(1.0 / 60.0, Controls::default());
     }
-    assert!(off(&world) < 0.05, "drifted {:.2}° off the aim", off(&world));
+    assert!(
+        off(&world) < 0.05,
+        "drifted {:.2}° off the aim",
+        off(&world)
+    );
 }
 
 /// #220: the aim never leads the nose by more than it can swing the ship
@@ -2530,8 +2534,14 @@ fn a_big_turn_follows_an_aim_kept_in_view() {
     for _ in 0..60 * 4 {
         world.update(1.0 / 60.0, Controls::default());
     }
-    let turned = start.angle_between(world.ship.rot * DVec3::NEG_Z).to_degrees();
+    let turned = start
+        .angle_between(world.ship.rot * DVec3::NEG_Z)
+        .to_degrees();
     assert!(turned > 60.0, "turned only {turned:.0}°");
     // Aiming never rolls the ship; that's left to the pilot.
-    assert!(world.ship.spin.z.abs() < 1e-9, "rolling at {}", world.ship.spin.z);
+    assert!(
+        world.ship.spin.z.abs() < 1e-9,
+        "rolling at {}",
+        world.ship.spin.z
+    );
 }

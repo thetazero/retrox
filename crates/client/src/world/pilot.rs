@@ -142,7 +142,11 @@ pub fn aim_stick(rot: DQuat, aim: DVec3, turn: f64) -> DVec2 {
     let off = (-local.z).clamp(-1.0, 1.0).acos();
     let Some(dir) = side.try_normalize() else {
         // On the nose, or dead behind it (go over the top).
-        return if local.z > 0.0 { DVec2::new(1.0, 0.0) } else { DVec2::ZERO };
+        return if local.z > 0.0 {
+            DVec2::new(1.0, 0.0)
+        } else {
+            DVec2::ZERO
+        };
     };
     let rates = dir * off * AIM_GAIN;
     let stick = rates / (DVec2::new(TURN_RATES.x, TURN_RATES.y) * turn);
