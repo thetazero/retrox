@@ -19,7 +19,9 @@ pub(crate) mod skim;
 
 pub(crate) use map::drum;
 
-use crate::world::{AU, Action, COMBAT_SPEED, Leg, Mode, Place, SECONDS_PER_DAY, World};
+use crate::world::{
+    AU, Action, COMBAT_SPEED, DETENT, Leg, Mode, Place, SECONDS_PER_DAY, World, stopping_distance,
+};
 
 /// Enamel cream: body text and rules.
 pub(crate) const CREAM: Color32 = Color32::from_rgb(234, 222, 196);
@@ -347,10 +349,13 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
     }
 
     // Bottom: flight instruments.
+    // The prompts sit just above it, however tall it is.
+    let mut prompts_up: f32 = 190.0;
     if w.mode == Mode::Normal && w.combat.lost.is_none() {
-        egui::Area::new(egui::Id::unique("flight"))
+        let flight = egui::Area::new(egui::Id::unique("flight"))
             .anchor(Align2::CENTER_BOTTOM, [0.0, -18.0])
             .show(ctx, |ui| flight_panel(ui, w));
+        prompts_up = prompts_up.max(screen.bottom() - flight.response.rect.top() + 8.0);
     }
 
     // Prompts.
@@ -416,7 +421,7 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
     }
     if !lines.is_empty() {
         egui::Area::new(egui::Id::unique("prompts"))
-            .anchor(Align2::CENTER_BOTTOM, [0.0, -190.0])
+            .anchor(Align2::CENTER_BOTTOM, [0.0, -prompts_up])
             .show(ctx, |ui| {
                 egui::Frame::new()
                     .fill(PANEL)
@@ -587,6 +592,13 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
                         .find(|c| c.key == fleet)
                         .map_or(0.0, |c| (c.pos - w.ship_position()).length());
                     ("Intercept", format!("{company} · {}", distance(d)))
+                }
+                Leg::Gang(gang) => {
+                    let (name, d) = w.traffic.pirate(gang).map_or_else(
+                        || ("the gang".to_owned(), 0.0),
+                        |c| (c.name.clone(), (c.pos - w.ship_position()).length()),
+                    );
+                    ("Intercept", format!("{name} · {}", distance(d)))
                 }
                 Leg::Climb { well, .. } => {
                     let out = (w.well_radius(well) - w.distance_to(well)).max(0.0) / 1000.0;
@@ -1047,13 +1059,8 @@ fn flight_panel(ui: &mut egui::Ui, w: &World) {
                 });
             });
             ui.add_space(4.0);
-            let throttle = w.ship.throttle as f32;
-            segment_bar(
-                ui,
-                throttle,
-                width,
-                if throttle < 0.0 { AMBER } else { VFD },
-            );
+            throttle_bar(ui, w.ship.throttle as f32, width);
+            speed_line(ui, w, speed);
             combat::gauges(ui, w, width);
             ui.add_space(6.0);
             if let Some(well) = w.current_well() {
@@ -1329,6 +1336,84 @@ pub(crate) fn segment_bar(ui: &mut egui::Ui, value: f32, width: f32, color: Colo
             Stroke::new(1.0, RULE),
         );
     }
+}
+
+/// The throttle as a segmented bar with its detent marked (#166): the
+/// fine-control half lit teal, the cruise half amber like the CRUISE lamp,
+/// split by a tall cream tick at the detent. Astern, the lit segments are
+/// amber.
+fn throttle_bar(ui: &mut egui::Ui, value: f32, width: f32) {
+    let height = 12.0;
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height + 6.0), Sense::hover());
+    let painter = ui.painter();
+    let n = 40;
+    let gap = 2.0;
+    let seg = (width - gap * (n - 1) as f32) / n as f32;
+    let lit = (value.abs() * n as f32).round() as usize;
+    let detent = (DETENT as f32 * n as f32).round() as usize;
+    for i in 0..n {
+        let x = rect.left() + i as f32 * (seg + gap);
+        let r = Rect::from_min_size(Pos2::new(x, rect.top()), Vec2::new(seg, height));
+        let color = if value < 0.0 || i >= detent {
+            AMBER
+        } else {
+            VFD
+        };
+        if i < lit {
+            painter.rect_filled(r.expand(1.0), 0.0, color.gamma_multiply(0.18));
+            painter.rect_filled(r, 0.0, color);
+        } else if i >= detent {
+            painter.rect_filled(r, 0.0, AMBER.gamma_multiply(0.16));
+        } else {
+            painter.rect_filled(r, 0.0, VFD_DIM);
+        }
+    }
+    for q in 0..=4 {
+        let x = rect.left() + width * q as f32 / 4.0;
+        let x = x.clamp(rect.left() + 0.5, rect.right() - 0.5);
+        painter.line_segment(
+            [
+                Pos2::new(x, rect.top() + height + 1.0),
+                Pos2::new(x, rect.bottom()),
+            ],
+            Stroke::new(1.0, RULE),
+        );
+    }
+    let x = rect.left() + detent as f32 * (seg + gap) - gap / 2.0;
+    painter.line_segment(
+        [Pos2::new(x, rect.top() - 3.0), Pos2::new(x, rect.bottom())],
+        Stroke::new(2.0, CREAM),
+    );
+}
+
+/// Under the throttle: how it behaves from here. At the detent, the key
+/// that goes on into cruise; moving, how far the ship goes once the
+/// throttle is cut, red when that carries it past the target it's closing
+/// on.
+fn speed_line(ui: &mut egui::Ui, w: &World, speed: f64) {
+    let at_detent = (w.ship.throttle - DETENT).abs() < 1e-6;
+    let stop = (speed > 1.0).then(|| stopping_distance(speed, w.handling().0));
+    // Always there, empty at rest, so the panel doesn't jump.
+    ui.horizontal(|ui| {
+        ui.set_min_height(22.0);
+        if at_detent {
+            keycap(ui, "W");
+            ui.label(RichText::new("AGAIN FOR CRUISE").color(AMBER));
+        }
+        let Some(stop) = stop else { return };
+        let past = w.target.is_some_and(|t| {
+            let to = w.position(t) - w.ship_position();
+            w.ship.vel.dot(to) > 0.0 && stop > to.length()
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if past {
+                ui.label(RichText::new(format!("{} · PAST TARGET", distance(stop))).color(ALARM));
+            } else {
+                ui.label(RichText::new(distance(stop)).color(VFD));
+            }
+            ui.label(RichText::new("STOPS IN").color(CREAM_DIM));
+        });
+    });
 }
 
 /// The moment a gang pulls the ship out of fast travel: the view tears

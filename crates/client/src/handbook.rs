@@ -130,7 +130,9 @@ fn first_steps(ui: &mut egui::Ui) {
         2,
         "Launch",
         "Press LAUNCH. Click the view or press [TAB] to steer with the mouse; [W] and [S] set \
-         the throttle, [X] cuts it.",
+         the throttle, [X] cuts it. Holding [W] stops at the detent, 500 m/s; press it again \
+         and hold it for CRUISE, up to 150 km a second. STOPS IN says how far you'll go \
+         once you cut it.",
     );
     step(
         ui,

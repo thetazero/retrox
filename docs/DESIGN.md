@@ -717,6 +717,52 @@ rather than space bugs.
 - Supercruise for in-system travel; hyperlane jumps between systems.
 - Interdiction can pull ships out of supercruise (piracy, patrols).
 
+**How flying should feel (the user's direction, 2026-11-02).** The user
+played main and found flying "unfun and hard to do": turning and
+aiming, judging speed and stopping where you mean to, the camera, and
+moving between rocks. Until now each flight problem was fixed by flying
+less (fast travel to 400 m off a rock, to docking range, [J] out of
+wells). From here on, **flying near things is the skill the game is
+built on**, and every activity in §7.2 and §7.3 leans on it. Where the
+as-built sections below disagree, this wins.
+
+- **Local flight and cruise are two kinds of flying.** Local flight
+  covers rocks, stations, chunks and fights. Its speeds are ones a pilot
+  can judge, up to a few hundred m/s, its control is fine, and the ship
+  does what the stick says. Cruise is for crossing a system: you enter
+  and leave it on purpose. Leaving it eases you back into local flight,
+  with the world arriving gradually.
+- **You can stop where you mean to.** The pilot always sees their speed
+  relative to what they're flying at, and where they'd come to rest.
+  Matching a target's speed is one key, and letting go of the throttle
+  brings the ship to rest.
+- **Steering feels good.** Turns ease in and settle without wobble. The
+  pilot sees where the nose points and where the ship is actually going;
+  the gap between the two is drift, and reading it is part of the skill.
+- **The camera serves the pilot.** The chase view trails a turn a little,
+  so the ship's motion reads, but it never fights the pilot or hides what
+  they're flying at.
+- **Motion reads at a glance.** Near the ship, the space streams past at
+  your speed, and nearby things grow and slide by as you close.
+  Nothing pops in.
+- **The fun test:** threading between rocks, braking beside one and
+  swinging round to a tumbling chunk is enjoyable for its own sake, and a
+  practised pilot does it faster and closer than a new one.
+- **The throttle has a detent** (#166) between fine control (up to
+  500 m/s, where boost works) and cruise (up to 150 km/s): a held [W]
+  stops at it, and only a fresh press goes on into cruise. Past the detent
+  the throttle opens a quarter as fast (full cruise is [W] held for five
+  seconds), so cruise speed can be set, and a second press held out of
+  habit gives a km/s or two rather than 150. Flying by hand to something
+  a few km away is then just holding [W]; cruise is a choice,
+  entered on purpose as the direction above asks.
+  The flight panel marks the detent on the throttle bar (the cruise half
+  amber, like the CRUISE lamp), shows *[W] AGAIN FOR CRUISE* while the
+  throttle rests on it, and reads **STOPS IN**: how far the ship goes once
+  the throttle is cut, in red with PAST TARGET when that carries it past
+  the target it's closing on. Coming down, the throttle passes the detent
+  without stopping.
+
 #### 7.1.1 Gravity wells and planet stops (#95)
 
 A planet city stop used to cost about five real minutes of plain flying:
@@ -961,15 +1007,27 @@ somewhere, live somewhere, and fly for real near the player.
 - **Hunting the player.** A gang not resting from a fight with the
   player, within 0.4 AU of the player's ship in space, goes after it.
   The client flies that stalk (only it knows where the player is between
-  ticks): full burn on an intercept course that matches the ship's
-  velocity across the line of sight while closing along it, on the
-  fast-travel drive the gang's slowest ship has (the same formula as the
-  player's). A stalking gang that comes within 4,000 km of a ship in fast
-  travel **interdicts** it: the ship drops out with its speed dragged down
-  to 250 m/s, an INTERDICTED band slams across the view, and the gang's
-  ships come in from where it was. At 1:1 a gang closes in for real and
-  its ships come out at 30 km. A gang at home meets a ship that comes to
-  its field.
+  ticks) under the shared autopilot, coming to the ship and matching its
+  velocity, on the fast-travel drive the gang's slowest ship has (the
+  same formula as the player's). A stalking gang that comes within
+  4,000 km of a ship in fast travel **interdicts** it: the ship drops out
+  with its speed dragged down to 250 m/s, an INTERDICTED band slams
+  across the view, and the gang's ships come in from where it was. At
+  1:1 a gang closes in for real and its ships come out at 30 km, in the
+  field if the ship is in one.
+- **Meeting a gang at its lair (#171).** A gang at home (lurking, or
+  flying within 30 km of its field, and not resting) comes out at a
+  ship in its field, whether the ship arrives or was already waiting
+  when the gang got home. A gang at home doesn't fly out to stalk a ship
+  fast travelling into its own field: it waits there. A gang out flying
+  spots a ship in its field like anywhere else. Time runs 1:1 in space
+  and waiting is docked-only, so a player at a lair whose gang is away
+  is told where it is, and **[I] goes after a gang**: the red diamond
+  nearest the crosshair, or, with nothing in the sights, the gang whose
+  lair the ship is in. That is a fast-travel leg to 10 km short of the
+  gang; a gang not resting turns to meet it and interdicts, and one lying
+  low after a fight is caught where it is (its ships come out on
+  arrival). Resting only stops a gang coming after the player.
 - **After a fight** the client tells the sim which ships died; the rest fly
   home and keep away from the player for three days.
 - **Bounties.** When a gang forms, the faction whose settlement the crews
@@ -1019,6 +1077,32 @@ somewhere, live somewhere, and fly for real near the player.
   standing); a convoy's frame is saved as the star's.
 
 ### 7.3 Mining
+
+**How mining should feel (the user's direction, 2026-11-02).** The user
+played main: "I'm just sitting right infront of an asteroid shooting it,
+overheating,waiting, repeat...". Mining has to be a short, hands-on
+puzzle at each rock, not a hold-the-trigger timer. Where the as-built
+bullets below disagree, this wins.
+
+- **Each rock is a small job** lasting a minute or less. It ends in a
+  clear result: a clean break, a botched one, or a jackpot.
+- **The laser is the operation, not a timer.** Pushing it harder works
+  faster and yields more, but past a point that differs from rock to
+  rock it ruins the vein or hurts the ship. Reading that point is the
+  skill. Heat is a risk you manage, never a pause you wait out with
+  nothing to do.
+- **Aim still matters.** Rocks spin and veins turn away; staying on the
+  vein is part of the job.
+- **Discovery.** Most rocks are ordinary. A few are rich, and they are
+  found by flying through a field and scanning, not read off a list.
+- **Collecting is flying.** Freed chunks tumble away with real motion,
+  and you go and get them with the ship (§7.1's local flight).
+- **Pressure.** The richest finds are in riskier places, and a full hold
+  draws attention. Staying for one more rock is a gamble, and so is
+  heading home.
+- **The fun test:** a new player mining for ten minutes is busy and
+  deciding things the whole time, has at least one moment of "got it!"
+  or "oh no", and wants one more rock.
 
 - An **activity**, not a timer: fracture asteroids, cut into them, collect
   chunks, manage heat/hold.
@@ -1770,6 +1854,43 @@ Decided while making a belt look like one (issue #182):
   granulation and the odd spot show rather than a flat white disc, and a
   faint corona with streamers stands round it. A far star stays a point
   that burns through the bloom (§8.6).
+
+### 8.8 Landed at a city
+
+Decided while giving cities a place of their own (#178). Docked at a
+highport the ship stands in a lit hangar; landed at a city it stands
+**on the ground, on an open pad at the city's port**, never over a view
+of the planet from orbit. The view is the same on every screen there
+(trade, the hangar, the shipyard's ships), as the bay is at a station.
+
+- **The camera stands across the pad from the city**, low, at a pilot's
+  height on the apron, and sways slowly either side, so the ship is
+  always seen three-quarters on against the skyline and the sky.
+- **The port**: a concrete apron of slabs, the pad a scorched circle
+  with a red ring and a black-and-yellow band at its edge, the ship on
+  hazard-striped chocks with a soft shadow, floodlights on masts, a
+  red service gantry, a control tower with a glazed cab, fuel spheres
+  in work mustard. It is laid out once, round where the camera stands,
+  and scaled to the ship (the pad's radius is 0.8 of its length), as
+  the hangar bay is.
+- **The skyline is prefab and monumental**: slab blocks of flats with
+  lit windows and a red or sky-blue panel up one end, setback towers
+  with masts and beacons, round towers with red crowns, works halls
+  with striped chimneys, and a broadcast tower with a glazed pod at
+  the city's heart. More and taller the bigger the city (by population),
+  all fixed by the city's seed, so a city looks the same each visit.
+- **Each world has its own sky and ground**: blue sky with fair-weather
+  cloud over grass and field patchwork (terran); a waterfront pad with
+  the sea filling the right of the view (ocean worlds); a dusty
+  butterscotch sky, dunes and mesas (desert); a deep, thin sky over snow
+  and ice peaks, the city under glass domes (ice); no air at all on a
+  barren world or moon: a black sky with the stars and the sun's disc,
+  crater walls, and a moon's planet hanging overhead. Far things fade
+  into the air's colour, so hills stand in layers.
+- **The hour is the city's own**: a fixed sun from low and red to early
+  afternoon, always from the camera's side so the ship and the city's
+  faces are lit, in its star's colour. No night: a city is always shown
+  by day.
 
 ## 9. Technical architecture
 

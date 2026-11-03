@@ -8,7 +8,9 @@
 //! **Three ways to move:**
 //! 1. *Normal flight*, in real time. The throttle's lower half is fine
 //!    control up to [`COMBAT_SPEED`]; the upper half ramps up to
-//!    [`CRUISE_SPEED`] for crossing gravity wells. One flight model.
+//!    [`CRUISE_SPEED`] for crossing gravity wells. A held [W] stops at the
+//!    detent between them; pressing it again goes on into cruise. One
+//!    flight model.
 //! 2. *Fast travel*: the sim's [`flight`] autopilot flies the ship to a
 //!    nav target while time runs faster. Same physics as every other ship,
 //!    so the trip takes as long as the flight does. You arrive at the edge
@@ -73,7 +75,9 @@ pub const LANDING_RADII: f64 = 2.0;
 /// low enough to land straight away.
 pub const APPROACH_RADII: f64 = 1.6;
 pub use field::MiningSpot;
-pub use pilot::{COMBAT_SPEED, STRAFE_SPEED, assist, handling, look_rotation, steer};
+pub use pilot::{
+    COMBAT_SPEED, DETENT, STRAFE_SPEED, assist, handling, look_rotation, steer, stopping_distance,
+};
 pub use yards::{Nearby, Service};
 
 /// Real seconds the hyperlane sequence plays for.
@@ -180,6 +184,9 @@ pub enum Leg {
     Climb { well: Place, toward: Option<Place> },
     /// Alongside a trader fleet, matching its course (DESIGN §7.2.2).
     Intercept(retrox_sim::bubble::FleetKey),
+    /// After a pirate gang, to bring it to a fight (DESIGN §7.2.2): it
+    /// ends at the gang's ships, out in space.
+    Gang(retrox_sim::pirates::GangId),
 }
 
 impl Leg {
@@ -188,6 +195,7 @@ impl Leg {
         match self {
             Leg::To(place) | Leg::Climb { well: place, .. } => place,
             Leg::Intercept(fleet) => Place::Convoy(fleet),
+            Leg::Gang(_) => Place::Star,
         }
     }
 }
@@ -429,6 +437,9 @@ pub struct World {
     /// After fast travel, the attitude autopilot turning the ship to face
     /// where that leg went, until it's there or the pilot takes the stick.
     pub turn_over: Option<Leg>,
+    /// The push of [W] that opened the throttle to its detent is still
+    /// held, so it stays there (see `next_throttle`).
+    pub at_detent: bool,
     /// Seconds since a gang pulled us out of fast travel, and which,
     /// while that's news.
     pub interdicted: Option<(f64, String)>,
@@ -553,6 +564,7 @@ impl World {
             combat: Combat::new(player.ship.fit.clone(), player.ship.damage.clone()),
             burn: 0.0,
             turn_over: None,
+            at_detent: false,
             interdicted: None,
             travel_view: 0.0,
             travel_rot: DQuat::IDENTITY,
@@ -1801,6 +1813,52 @@ impl World {
         };
         self.galaxy.colony_ships.insert(ship);
         Some(body)
+    }
+
+    /// Landed at the nearest city on a world of the wanted kind (this
+    /// system's or the nearest system's), for `--land`. False if there's
+    /// none anywhere.
+    pub fn start_landed_on(&mut self, wanted: impl Fn(BodyKind) -> bool) -> bool {
+        let city_on = |w: &Self, id: SystemId| {
+            let view = SystemView::new(&w.galaxy, id);
+            view.cities
+                .iter()
+                .copied()
+                .find(|&(_, b)| wanted(w.galaxy.bodies[b].kind))
+        };
+        if city_on(self, self.system).is_none() {
+            let here = self.galaxy.systems[self.system].position;
+            let Some(system) = self
+                .galaxy
+                .systems
+                .iter()
+                .filter(|&(id, _)| city_on(self, id).is_some())
+                .min_by(|a, b| {
+                    here.distance(a.1.position)
+                        .total_cmp(&here.distance(b.1.position))
+                })
+                .map(|(id, _)| id)
+            else {
+                return false;
+            };
+            self.arrive_jump(system);
+        }
+        let Some((city, body)) = city_on(self, self.system) else {
+            return false;
+        };
+        self.ship.frame = Place::Body(body);
+        self.ship.rel = DVec3::ZERO;
+        self.ship.vel = DVec3::ZERO;
+        self.mode = Mode::Landed {
+            city,
+            body,
+            timer: 0.0,
+        };
+        self.screen = Screen::Hub;
+        self.target = None;
+        self.message = None;
+        self.refresh_board();
+        true
     }
 
     /// In orbit of the first planet with two cities or more (this system's

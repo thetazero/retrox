@@ -7,8 +7,11 @@ use retrox_sim::ship::ShipStats;
 
 use super::{Controls, FastTravel, Leg, Mode, Place, REFERENCE, SECONDS_PER_DAY, World};
 
-/// Top of the fine-control range, m/s (throttle 0.5).
+/// Top of the fine-control range, m/s (throttle [`DETENT`]).
 pub const COMBAT_SPEED: f64 = 500.0;
+/// The throttle's detent between the fine-control range and cruise: a held
+/// [W] stops here, and a fresh press goes on past it (#166).
+pub const DETENT: f64 = 0.5;
 /// Top speed at full throttle, m/s.
 pub const CRUISE_SPEED: f64 = 150_000.0;
 const BOOST: f64 = 2.0;
@@ -86,6 +89,20 @@ pub fn assist(vel: &mut DVec3, rot: DQuat, local: DVec3, boost: bool, thrust: f6
     }
 }
 
+/// How far a ship flying at `speed` with flight assist on goes before it
+/// stops once the throttle is cut, m, given its `thrust` (see [`handling`]):
+/// what [`assist`] does with nothing asked for. Above `2 · ACCEL · thrust`
+/// the brakes scale with speed, so speed falls off exponentially.
+pub fn stopping_distance(speed: f64, thrust: f64) -> f64 {
+    let accel = ACCEL * thrust;
+    let knee = 2.0 * accel;
+    if speed <= knee {
+        speed * speed / (2.0 * accel)
+    } else {
+        2.0 * (speed - knee) + knee * knee / (2.0 * accel)
+    }
+}
+
 /// The fast-travel drive a ship of `stats` has, m/s²: what the player's
 /// own autopilot and a pirate's stalk both fly on.
 pub fn drive_accel_of(stats: &ShipStats) -> f64 {
@@ -109,8 +126,10 @@ impl World {
     /// of it. Climbing: just past the well's edge, facing where the ship is
     /// headed next (or straight up from where it is).
     pub(super) fn fast_travel_goal(&self, leg: Leg, ship: DVec3, t: f64) -> Goal {
-        if let Leg::Intercept(fleet) = leg {
-            return self.intercept_goal(fleet, ship, t);
+        match leg {
+            Leg::Intercept(fleet) => return self.intercept_goal(fleet, ship, t),
+            Leg::Gang(gang) => return self.gang_goal(gang, ship, t),
+            _ => {}
         }
         let place = leg.frame();
         let centre = self.position_at(place, t);
@@ -127,7 +146,9 @@ impl World {
         // The side of the place the goal is on, and how fast that side
         // turns, in 1/s.
         let (side, turn, distance) = match leg {
-            Leg::To(_) | Leg::Intercept(_) => (up, DVec3::ZERO, self.arrival_distance(place)),
+            Leg::To(_) | Leg::Intercept(_) | Leg::Gang(_) => {
+                (up, DVec3::ZERO, self.arrival_distance(place))
+            }
             Leg::Climb { well, toward } => {
                 let distance = self.well_radius(well) * 1.05;
                 let to_next = toward.map(|next| {
@@ -162,6 +183,9 @@ impl World {
         match leg {
             Leg::To(place) => self.position_at(place, t) - ship,
             Leg::Intercept(fleet) => self.position_at(Place::Convoy(fleet), t) - ship,
+            Leg::Gang(gang) => self
+                .gang_at_day(gang, t)
+                .map_or(DVec3::NEG_Z, |(p, _)| p - ship),
             Leg::Climb { .. } => {
                 let goal = self.fast_travel_goal(leg, ship, t);
                 DVec3::from_array(goal.pos) - self.position_at(leg.frame(), t)
@@ -316,6 +340,10 @@ impl World {
         // exactly there.
         self.enter_frame(leg.frame());
         self.mode = Mode::Normal;
+        if let Leg::Gang(gang) = leg {
+            self.catch_gang(gang);
+            return;
+        }
         let name = self.name(leg.frame());
         self.say(match leg {
             Leg::To(_) => format!("Arrived at {name}"),
@@ -328,6 +356,8 @@ impl World {
                     .map_or("the convoy", |c| c.name.as_str());
                 format!("Alongside {company}")
             }
+            // Caught up: see `World::catch_gang`.
+            Leg::Gang(_) => return,
         });
     }
 
@@ -346,7 +376,31 @@ impl World {
             }
         }
         steer(&mut self.ship.rot, &mut self.ship.spin, c.stick, turn, dt);
-        self.ship.throttle = (self.ship.throttle + c.throttle_delta * dt * 0.4).clamp(-0.3, 1.0);
+        self.ship.throttle = self.next_throttle(c.throttle_delta, dt);
+    }
+
+    /// The throttle after a frame of [W]/[S]. Opening it stops at the
+    /// [`DETENT`] for as long as the push that reached it is held; only a
+    /// fresh push goes on into cruise, so a held [W] can't run a ship from
+    /// a standstill up to 150 km/s and tens of km past where it meant to
+    /// stop (#166). Past the detent it opens a quarter as fast: full cruise
+    /// takes [W] held for five seconds, so cruise speed can be set, and a
+    /// second push held out of habit gives a km/s or two, not 150.
+    fn next_throttle(&mut self, delta: f64, dt: f64) -> f64 {
+        let before = self.ship.throttle;
+        let rate = if delta > 0.0 && before >= DETENT {
+            0.1
+        } else {
+            0.4
+        };
+        let mut next = (before + delta * dt * rate).clamp(-0.3, 1.0);
+        if delta <= 0.0 {
+            self.at_detent = false;
+        } else if next > DETENT && before <= DETENT && (before < DETENT || self.at_detent) {
+            next = DETENT;
+            self.at_detent = true;
+        }
+        next
     }
 
     pub(super) fn fly(&mut self, dt: f64, c: Controls) {

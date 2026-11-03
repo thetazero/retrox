@@ -120,6 +120,9 @@ const LAVA: u32 = 6u;
 const DESERT: u32 = 7u;
 const BARREN: u32 = 8u;
 const ROCK: u32 = 9u;
+// Landed at a city (city.rs): the sky of its world, and its ground.
+const SKYDOME: u32 = 10u;
+const GROUND: u32 = 11u;
 // Glows (fs_glow, additive).
 const SHIELD: u32 = 20u;
 const FIRE: u32 = 21u;
@@ -147,6 +150,189 @@ const SKY: u32 = 13u;
 // Sovietwave ambient: a cool teal sky above, a dusky violet below.
 fn ambient_light(n: vec3<f32>) -> vec3<f32> {
     return mix(vec3<f32>(0.05, 0.025, 0.075), vec3<f32>(0.03, 0.065, 0.085), n.y * 0.5 + 0.5);
+}
+
+// Under an open sky (city.rs: `aux` is the air's colour and how thick
+// it is per metre; zero in space): the light the sky itself sheds, most
+// on what faces up.
+fn sky_fill(aux: vec4<f32>, n: vec3<f32>) -> vec3<f32> {
+    if (aux.w <= 0.0) { return vec3<f32>(0.0); }
+    return aux.rgb * (0.3 + 0.2 * n.y);
+}
+
+// Far things fade into the air's colour.
+fn hazed(c: vec3<f32>, aux: vec4<f32>, wpos: vec3<f32>) -> vec3<f32> {
+    if (aux.w <= 0.0) { return c; }
+    return mix(c, aux.rgb, 1.0 - exp(-length(wpos) * aux.w));
+}
+
+// The sky of a world, on a dome round the camera. color: the zenith, aux:
+// the horizon, light: the sun, params.y: the sun's angular radius,
+// params.w: cloud cover 0..1, params.z: seed.
+fn sky_dome(i: VOut, dwx: vec3<f32>, dwy: vec3<f32>) -> vec3<f32> {
+    let d = normalize(i.wpos);
+    let sun = i.light.xyz;
+    let up = max(d.y, 0.0);
+    let horizon = i.aux.rgb;
+    var c = mix(horizon, i.color.rgb, pow(up, 0.45));
+    // A bright band low down, and below the horizon (only seen past the
+    // hills' gaps) the haze darkening.
+    c = c * (1.0 + 0.18 * exp(-up * 14.0));
+    if (d.y < 0.0) { c = horizon * (1.0 + d.y * 1.5); }
+    let mu = dot(d, sun);
+    let light_color = g.star_color.rgb;
+    // Forward scattering round the sun, warm, strongest near the horizon.
+    let glow = pow(max(mu, 0.0), 8.0) * 0.45 + pow(max(mu, 0.0), 90.0) * 1.2;
+    c = c + light_color * glow * mix(0.6, 1.0, exp(-up * 4.0));
+    // Clouds: a flat deck seen in perspective, fading out toward the
+    // horizon where they'd alias.
+    var cover = 0.0;
+    if (i.params.w > 0.0 && d.y > 0.0) {
+        let s = i.params.z;
+        // A deck of fair-weather cloud, streaked along the wind.
+        let uv = d.xz / (d.y + 0.04);
+        let q = vec3<f32>(uv.x * 1.6 + s % 37.0, uv.y * 4.0 + s % 53.0, g.misc.x * 0.004);
+        let n = fbm(q) * 0.75 + fbm(q * 3.1) * 0.25;
+        let lo = 0.6 - i.params.w * 0.22;
+        cover = smoothstep(lo, lo + 0.12, n)
+            * smoothstep(0.0, 0.18, d.y);
+        // Lit from the sun's side, grey-violet underneath.
+        let lit = 0.55 + 0.45 * max(mu, 0.0);
+        let cloud = mix(horizon * vec3<f32>(0.62, 0.6, 0.7), light_color * 1.25, lit * (0.4 + 0.6 * n));
+        c = mix(c, cloud, cover * 0.9);
+    }
+    // The sun's disc, burning through the bloom; dimmed behind cloud.
+    let r = i.params.y;
+    // How far mu changes across a pixel at the disc's edge.
+    let px = max(length(dwx), length(dwy)) / max(length(i.wpos), 1.0);
+    let edge = max(px * sin(r), max(px * px * 0.5, 1e-7));
+    let disc = smoothstep(cos(r) - edge, cos(r) + edge, mu);
+    c = c + light_color * disc * 24.0 * (1.0 - cover * 0.85);
+    return c;
+}
+
+// The ground round the pad, out to the hills (city.rs). params.w: the
+// kind of ground (1 grass, 2 sand, 3 snow, 4 regolith, 5 shore); color.a:
+// the pad's radius (m); color.rgb: the sea's direction (x, z) and how far
+// the coast is (m), for a shore; aux: the air. Positions are metres from
+// the pad's centre (object units times the model's scale).
+fn ground(i: VOut, n: vec3<f32>, dwx: vec3<f32>, dwy: vec3<f32>) -> vec3<f32> {
+    let kind = u32(round(i.params.w));
+    let p = i.obj * i.scale;
+    let w = max(length(dwx), length(dwy));
+    let s = i.params.z;
+    let q = p + vec3<f32>(s % 97.0, 0.0, (s * 0.37) % 83.0) * 50.0;
+    let big = fbm_aa(q / 900.0, w / 900.0);
+    let mid = fbm_aa(q / 70.0, w / 70.0);
+    let fine = fbm_aa(q / 6.0, w / 6.0);
+    var base = vec3<f32>(0.3);
+    var water = 0.0;
+    var sea_n = n;
+    if (kind == 1u || kind == 5u) {
+        // Grass and scrub, in the patchwork of fields round a city.
+        let cell = vec3<i32>(i32(floor(q.x / 260.0)), 0, i32(floor(q.z / 180.0)));
+        let field = hash3(cell);
+        let green = vec3<f32>(0.075, 0.12, 0.04);
+        let dry = vec3<f32>(0.2, 0.17, 0.08);
+        base = mix(green, dry, clamp(field * 0.7 + big * 0.5 - 0.15, 0.0, 1.0));
+        base = base * (0.8 + 0.35 * mid) * (0.9 + 0.2 * fine);
+    } else if (kind == 2u) {
+        // Sand: long dunes, ripples close up.
+        let warp = fbm(q / 400.0) * 6.0;
+        let dunes = sin(q.x / 55.0 + q.z / 140.0 + warp);
+        let fade = 1.0 - smoothstep(0.3, 0.8, w / 2.0);
+        let ripple = sin(q.x * 2.1 + q.z * 0.7 + mid * 9.0) * fade;
+        base = vec3<f32>(0.5, 0.33, 0.18) * (0.85 + 0.12 * dunes + 0.05 * ripple) * (0.85 + 0.3 * big);
+    } else if (kind == 3u) {
+        // Snow and blue ice, wind-scoured.
+        let scour = smoothstep(0.55, 0.7, mid + big * 0.3);
+        base = mix(vec3<f32>(0.74, 0.78, 0.82), vec3<f32>(0.35, 0.5, 0.62), scour * 0.6);
+        base = base * (0.92 + 0.12 * fine);
+    } else {
+        // Regolith: grey dust, darker and lighter splashes, small craters.
+        base = vec3<f32>(0.3, 0.285, 0.27) * (0.7 + 0.45 * big) * (0.85 + 0.25 * mid);
+        let cr = q.xz / 120.0;
+        let ci = floor(cr);
+        let cf = fract(cr) - 0.5;
+        let h = hash3(vec3<i32>(i32(ci.x), 7, i32(ci.y)));
+        let rr = length(cf) / (0.12 + 0.3 * h);
+        let rim = smoothstep(0.8, 1.0, rr) * (1.0 - smoothstep(1.0, 1.3, rr));
+        let bowl = 1.0 - smoothstep(0.0, 1.0, rr);
+        let crater = step(0.55, h) * (1.0 - smoothstep(0.3, 1.0, w / 60.0));
+        base = base * (1.0 + crater * (0.35 * rim - 0.25 * bowl));
+        base = base * (0.9 + 0.2 * fine);
+    }
+    // Steep hillsides are bare rock.
+    let steep = 1.0 - smoothstep(0.55, 0.85, n.y);
+    base = mix(base, vec3<f32>(0.2, 0.19, 0.18) * (0.8 + 0.4 * mid), steep * 0.85);
+
+    // A shore: a beach, then the sea.
+    if (kind == 5u) {
+        let along = dot(p.xz, i.color.xy);
+        let coast = i.color.z + (big - 0.5) * 80.0;
+        let beach = smoothstep(coast - 30.0, coast - 10.0, along);
+        base = mix(base, vec3<f32>(0.46, 0.4, 0.3) * (0.9 + 0.2 * fine), beach);
+        water = smoothstep(coast - 2.0, coast + 2.0, along);
+    }
+
+    // The port's concrete apron, the pad, and the ship's shadow on it.
+    let pad = i.color.a;
+    if (pad > 0.0) {
+        let apron = 3.2 * pad;
+        let edge = max(abs(p.x), abs(p.z)) + (mid - 0.5) * pad * 0.15;
+        let on = 1.0 - smoothstep(apron - w, apron + w, edge);
+        let slab = floor(p.xz / 6.0);
+        let tone = hash3(vec3<i32>(i32(slab.x), 3, i32(slab.y)));
+        let joint_q = abs(fract(p.xz / 6.0) - 0.5);
+        let joint_fade = 1.0 - smoothstep(0.02, 0.08, w / 6.0);
+        let joint = max(1.0 - smoothstep(0.0, 0.012 + w / 6.0, 0.5 - joint_q.x),
+                        1.0 - smoothstep(0.0, 0.012 + w / 6.0, 0.5 - joint_q.y)) * joint_fade;
+        var concrete = vec3<f32>(0.36, 0.35, 0.33) * (0.9 + 0.12 * tone) * (0.85 + 0.25 * mid);
+        concrete = concrete * (1.0 - 0.35 * joint);
+        let r = length(p.xz);
+        // Scorched toward the middle by take-offs.
+        let soot = (1.0 - smoothstep(0.0, pad * 0.8, r)) * (0.5 + 0.5 * fine);
+        concrete = mix(concrete, vec3<f32>(0.06, 0.055, 0.05), soot * 0.6);
+        // A red circle and a black-and-yellow band round the pad's edge.
+        let aa = w * 1.5;
+        let ring = smoothstep(pad * 0.84 - aa, pad * 0.84, r) * (1.0 - smoothstep(pad * 0.88, pad * 0.88 + aa, r));
+        concrete = mix(concrete, vec3<f32>(0.5, 0.06, 0.04), ring * 0.9);
+        let band = smoothstep(pad * 0.95 - aa, pad * 0.95, r) * (1.0 - smoothstep(pad * 1.02, pad * 1.02 + aa, r));
+        let ang = atan2(p.z, p.x);
+        let stripe = smoothstep(0.45, 0.55, abs(fract(ang * pad / 4.0) - 0.5) * 2.0);
+        let stripe_fade = 1.0 - smoothstep(0.1, 0.4, w * 1.0);
+        let hazard = mix(vec3<f32>(0.03, 0.03, 0.03), vec3<f32>(0.62, 0.45, 0.06), mix(0.45, stripe, stripe_fade));
+        concrete = mix(concrete, hazard, band * 0.9);
+        base = mix(base, concrete, on);
+        water = water * (1.0 - on);
+        // The ship's shadow: soft, cast away from the sun.
+        let sun = i.light.xyz;
+        let off = -sun.xz / max(sun.y, 0.25) * pad * 0.25;
+        let sd = (p.xz - off) / (pad * vec2<f32>(0.55, 0.55));
+        let shadow = exp(-dot(sd, sd) * 2.2);
+        base = base * (1.0 - 0.6 * shadow);
+    }
+
+    let light_color = g.star_color.rgb;
+    let ndl = max(dot(n, i.light.xyz), 0.0);
+    var fill = vec3<f32>(0.025);
+    if (i.aux.w > 0.0) { fill = i.aux.rgb * (0.28 + 0.12 * n.y); }
+    var c = base * (ndl * i.light.w * light_color + fill);
+    if (water > 0.0) {
+        // The sea: dark, mirroring the sky's horizon at a glance, with a
+        // glitter path under the sun.
+        let v = i.view_dir;
+        let rip = vec3<f32>(fine - 0.5, 0.0, mid - 0.5) * 0.08 * (1.0 - smoothstep(0.5, 3.0, w));
+        let wn = normalize(vec3<f32>(0.0, 1.0, 0.0) + rip);
+        let fres = 0.04 + 0.96 * pow(1.0 - max(dot(wn, v), 0.0), 5.0);
+        let deep = vec3<f32>(0.01, 0.04, 0.06) * (ndl * i.light.w + 0.3);
+        let h = normalize(i.light.xyz + v);
+        let glint = pow(max(dot(wn, h), 0.0), 400.0) * 30.0 * i.light.w;
+        let sky = i.aux.rgb * vec3<f32>(0.78, 0.9, 1.0);
+        let sea = mix(deep, sky, fres * 0.9) + light_color * glint;
+        c = mix(c, sea, water);
+    }
+    return hazed(c, i.aux, i.wpos);
 }
 
 // Faint panel seams on a grid in object space, faded out before they alias.
@@ -271,8 +457,8 @@ fn built(i: VOut, n: vec3<f32>, mu: f32, fw: vec3<f32>) -> vec3<f32> {
         emissive = emissive + vec3<f32>(1.0, 0.32, 0.06) * crack * burnt * hot * flicker * 3.0;
     }
 
-    var color = base * (lit * light_color + ambient_light(n) * 2.0 + vec3<f32>(0.04 * mu))
-        + highlight * light_color + rim + emissive;
+    var color = base * (lit * light_color + ambient_light(n) * 2.0 + vec3<f32>(0.04 * mu)
+        + sky_fill(i.aux, n)) + highlight * light_color + rim + emissive;
     color = color + i.color.rgb * i.params.y;
     return color;
 }
@@ -695,14 +881,22 @@ fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     }
     // Spheres are wound consistently: only their front faces count. (Kit
     // meshes stay two-sided.)
-    if (mode != PLAIN && !front) { discard; }
+    if (mode != PLAIN && mode != SKYDOME && mode != GROUND && !front) { discard; }
     var n = normalize(i.normal);
     // Two-sided lighting for meshes seen from "inside".
     if (dot(n, i.view_dir) < 0.0 && mode == PLAIN) { n = -n; }
     let mu = max(dot(n, i.view_dir), 0.0);
 
     if (mode == PLAIN) {
-        return vec4<f32>(built(i, n, mu, fw), 1.0);
+        return vec4<f32>(hazed(built(i, n, mu, fw), i.aux, i.wpos), 1.0);
+    }
+    if (mode == SKYDOME) {
+        return vec4<f32>(sky_dome(i, dwx, dwy), 1.0);
+    }
+    if (mode == GROUND) {
+        var gn = normalize(i.normal);
+        if (gn.y < 0.0) { gn = -gn; }
+        return vec4<f32>(ground(i, gn, dwx, dwy), 1.0);
     }
     if (mode == ROCK) {
         return vec4<f32>(rock(i, n, dox, doy, dwx, dwy), 1.0);
