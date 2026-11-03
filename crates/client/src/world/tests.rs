@@ -1785,8 +1785,8 @@ fn navigation_puts_stations_up_top_and_shortens_field_names() {
     );
 }
 
-/// Issue #161: the nearest shipyards are places the player can reach (a
-/// station or a city, never a surface camp), quickest first, and each
+/// Issue #161: the nearest shipyards are places the player can reach
+/// (listed in NAVIGATION on arrival, issue #169), quickest first, and each
 /// sells ships; a city with none names one.
 #[test]
 fn nearest_shipyards_are_reachable_and_ordered() {
@@ -1799,9 +1799,10 @@ fn nearest_shipyards_are_reachable_and_ordered() {
         }
         for y in &yards {
             let st = &world.galaxy.settlements[y.at];
+            let view = SystemView::new(&world.galaxy, y.system);
             assert!(
-                !matches!(st.site, Site::Surface(_)),
-                "seed {seed}: {}",
+                view.stations.contains(&y.at) || view.cities.iter().any(|&(c, _)| c == y.at),
+                "seed {seed}: {} isn't listed",
                 st.name
             );
             assert!(crate::hangar::services(&st.economy).shipyard);
@@ -1972,6 +1973,90 @@ fn a_city_founded_while_here_can_be_targeted_and_landed_at() {
         "landed at the new city: {:?}",
         world.mode
     );
+}
+
+/// Issue #169: every settlement in a system is a place the player can go:
+/// a station to dock at, or a city on its planet or moon to land at. Half
+/// of them sit on undivided worlds (`Site::Surface`), with half the yards.
+#[test]
+fn every_settlement_is_listed_in_navigation() {
+    for seed in 1..=3 {
+        let world = World::new(seed);
+        for (id, _) in world.galaxy.systems.iter() {
+            let view = SystemView::new(&world.galaxy, id);
+            for (s, st) in world.galaxy.settlements_in(id) {
+                let listed = view.stations.contains(&s)
+                    || view
+                        .cities
+                        .iter()
+                        .any(|&(c, b)| c == s && view.bodies.contains(&b));
+                assert!(
+                    listed,
+                    "seed {seed}: {} ({:?}) not listed",
+                    st.name, st.site
+                );
+            }
+        }
+    }
+}
+
+/// Issue #169: a city on an undivided world is landed at like any other,
+/// from its NAVIGATION row: [J] stops low over it, [L] puts down, and its
+/// shipyard sells ships. Its name is its own, not the world's.
+#[test]
+fn a_city_on_an_undivided_world_can_be_landed_at() {
+    let mut world = World::new(1);
+    let surface_yard = |w: &World, sys: SystemId| {
+        w.galaxy
+            .settlements_in(sys)
+            .find_map(|(id, s)| match s.site {
+                Site::Surface(b) if w.galaxy.bodies[b].kind != BodyKind::Belt => {
+                    crate::hangar::services(&s.economy)
+                        .shipyard
+                        .then_some((id, b))
+                }
+                _ => None,
+            })
+    };
+    let near = world.nearest(Service::Shipyard, 40);
+    let system = near
+        .iter()
+        .map(|y| y.system)
+        .find(|&sys| surface_yard(&world, sys).is_some())
+        .expect("a yard on an undivided world in reach");
+    for hop in world.route(system).expect("a route").into_iter().skip(1) {
+        world.arrive_jump(hop);
+    }
+    let (city, body) = surface_yard(&world, system).unwrap();
+    assert_ne!(
+        world.galaxy.settlements[city].name,
+        world.galaxy.bodies[body].name
+    );
+    assert!(
+        world
+            .nav_entries()
+            .contains(&(Place::Body(body), Some(city)))
+    );
+
+    world.act(Action::TargetCity(city));
+    assert_eq!(world.target, Some(Place::Body(body)));
+    // [J] until it stops low over the planet (a climb first if need be).
+    for _ in 0..4 {
+        if world.prompts().land.is_some() {
+            break;
+        }
+        world.act(Action::FastTravel);
+        real_seconds_until(&mut world, 120.0, |w| {
+            !matches!(w.mode, Mode::FastTravel(_))
+        });
+    }
+    assert_eq!(world.prompts().land, Some((city, body)));
+    world.act(Action::Land);
+    while matches!(world.mode, Mode::Landed { timer, .. } if timer > 0.0) {
+        world.update(1.0 / 60.0, Controls::default());
+    }
+    assert_eq!(world.docked_at(), Some(city));
+    assert!(world.offers(city, Service::Shipyard));
 }
 
 /// Parked in the nearest gang's lair, with the gang set to `aim`, its

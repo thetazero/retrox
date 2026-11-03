@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use retrox_gen::{GalaxyConfig, generate};
 use retrox_sim::freight::{self, BOARD_SIZE, MAX_JUMPS, Pending};
-use retrox_sim::{GalaxyState, GalaxyTime, Site, tick};
+use retrox_sim::{GalaxyState, GalaxyTime, tick};
 
 fn galaxy() -> GalaxyState {
     let mut state = generate(
@@ -33,10 +33,7 @@ const LOT: f64 = 40.0;
 fn boards_follow_the_rules() {
     let state = galaxy();
     let mut offers = 0;
-    for (here, s) in state.settlements.iter() {
-        if matches!(s.site, Site::Surface(_)) {
-            continue;
-        }
+    for (here, _) in state.settlements.iter() {
         let board = freight::board(&state, here, LOT, lane_days, &[]);
         assert!(board.len() <= BOARD_SIZE);
         // The same state draws the same board.
@@ -51,7 +48,6 @@ fn boards_follow_the_rules() {
             assert!(o.shortage >= 0.25, "consignee only {} short", o.shortage);
             assert!(o.deadline > state.time);
             assert!(o.fee > 0.0 && o.value > 0.0);
-            assert!(!matches!(state.settlements[o.to].site, Site::Surface(_)));
         }
         assert!(per_destination.values().all(|&n| n <= 2));
         // Best pay per day first, to the cent; the shorter run first

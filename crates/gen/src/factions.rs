@@ -192,7 +192,10 @@ fn main_site(r: &mut Rng, state: &GalaxyState, system: SystemId) -> (Site, Strin
     if let Some(body) = best_body
         && state.bodies[body].habitability > 0.02
     {
-        return (Site::Surface(body), state.bodies[body].name.clone());
+        return (
+            Site::Surface(body),
+            retrox_sim::names::surface_settlement(state.seed, body),
+        );
     }
     let richest = bodies.iter().copied().max_by(|&a, &b| {
         let worth = |x: retrox_sim::BodyId| {

@@ -153,7 +153,7 @@ fn first_steps(ui: &mut egui::Ui) {
         ui,
         5,
         "Arrive and get paid",
-        "Pick the station or city in NAVIGATION (or [T]): cities and stations are listed under the planet they belong to. \
+        "Pick the station or city in NAVIGATION (or [T]): cities and stations are listed under the planet or moon they belong to. \
          [J] to fast travel there, then [F] to dock or [L] to land. Contracts pay on arrival: \
          your deposit back, plus the fee.",
     );

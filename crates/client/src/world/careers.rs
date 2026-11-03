@@ -81,7 +81,10 @@ impl Bot {
         match self.w.galaxy.settlements[s].site {
             Site::Space(_) => Some(Place::Station(s)),
             Site::Region(r) => Some(Place::Body(self.w.galaxy.regions[r].body)),
-            Site::Surface(_) => None,
+            Site::Surface(b) if self.w.galaxy.bodies[b].kind == retrox_sim::BodyKind::Belt => {
+                Some(Place::Station(s))
+            }
+            Site::Surface(b) => Some(Place::Body(b)),
         }
     }
 
@@ -583,12 +586,11 @@ fn elsewhere(w: &World, here: SettlementId, visited: &[SettlementId]) -> Settlem
         .expect("somewhere to go")
 }
 
-/// Settlements within `jumps` of a system, that a ship can dock at.
+/// Settlements within `jumps` of a system.
 fn ports_near(w: &World, jumps: usize) -> Vec<SettlementId> {
     w.galaxy
         .settlements
         .iter()
-        .filter(|(_, s)| !matches!(s.site, Site::Surface(_)))
         .filter(|(_, s)| {
             s.system == w.system || w.route(s.system).is_some_and(|r| r.len() <= jumps + 1)
         })
@@ -607,7 +609,7 @@ fn listed(w: &World, id: SettlementId) -> bool {
         || match s.site {
             Site::Space(_) => w.view.stations.contains(&id),
             Site::Region(_) => w.city_body(id).is_some(),
-            Site::Surface(_) => false,
+            Site::Surface(_) => w.view.stations.contains(&id) || w.city_body(id).is_some(),
         }
 }
 
@@ -696,9 +698,8 @@ fn trading_hour(seed: u64) {
                     b.w.galaxy
                         .settlements
                         .iter()
-                        .filter(|(id, s)| {
-                            !matches!(s.site, Site::Surface(_))
-                                && *id != here
+                        .filter(|(id, _)| {
+                            *id != here
                                 && !visited.contains(id)
                                 && model(&b.w, *id) == retrox_sim::EconomyModel::Market
                                 && listed(&b.w, *id)
