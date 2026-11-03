@@ -445,21 +445,29 @@ fn mine_a_rock_and_sell_the_ore() {
     assert!(world.start_at_field());
     world.act(Action::Scan);
     let (field, _) = world.field_rocks.clone().expect("in a field");
-    let mine = Controls {
-        fire: true,
-        ..Default::default()
-    };
     let dt = 1.0 / 60.0;
-    // Fire until something fractures, letting the laser vent.
+    // Fire until something fractures, feathering on the rock's stress
+    // needle as the readout says (#212).
     let mut frames = 0;
-    while world
-        .mining
-        .field(field)
-        .is_none_or(|s| s.nuggets.is_empty())
-    {
+    let loose = |w: &World| {
+        w.mining
+            .field(field)
+            .map_or(0.0, |s| s.nuggets.iter().map(|n| n.tonnes).sum::<f64>())
+    };
+    while loose(&world) < 0.5 {
         frames += 1;
         assert!(frames < 60 * 180, "nothing fractured in three minutes");
-        world.update(dt, mine);
+        let fire = world
+            .mining
+            .cut
+            .is_none_or(|c| c.pocket.is_none() && c.stress < c.temper.hi - 0.06);
+        world.update(
+            dt,
+            Controls {
+                fire,
+                ..Default::default()
+            },
+        );
     }
     // Sweep up: park by each loose chunk in turn and let the tractor
     // pull it in.

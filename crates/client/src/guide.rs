@@ -416,8 +416,11 @@ pub fn hint(w: &World) -> Option<String> {
     }
     if w.field_rocks.is_some() {
         return Some(
-            "Mining: [G] to prospect, then hold [LMB] or [R] on a glowing vein until the rock \
-             breaks. Fly close to scoop the ore; sell it at a station."
+            "Mining: [G] reads the rocks. Fire [LMB] or [R] on a glowing vein and keep the \
+             rock's stress needle in its teal band: let off as it climbs, and before a POCKET \
+             goes. In the red it cracks faster but scars the vein; at the end it shatters. \
+             Break it clean on a vein and its core may come out whole. Fly close to scoop \
+             the ore."
                 .into(),
         );
     }
