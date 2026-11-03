@@ -135,6 +135,11 @@ def main(argv):
         print(__doc__)
         return 2
     base, head = argv[0], argv[1]
+    if subprocess.run(["git", "merge-base", "--is-ancestor", base, head]).returncode:
+        # base..head would show everything main gained since the branch
+        # left it as undone. CI checks the PR merged into main instead.
+        print(f"{head} isn't on top of {base}: merge or rebase on it first.")
+        return 2
     body = argv[argv.index("--body") + 1] if "--body" in argv else ""
     named = set(re.findall(r"#(\d+)", body))
     if check(base, head, named, "this change"):
