@@ -181,6 +181,9 @@ pub enum Leg {
     Climb { well: Place, toward: Option<Place> },
     /// Alongside a trader fleet, matching its course (DESIGN §7.2.2).
     Intercept(retrox_sim::bubble::FleetKey),
+    /// After a pirate gang, to bring it to a fight (DESIGN §7.2.2): it
+    /// ends at the gang's ships, out in space.
+    Gang(retrox_sim::pirates::GangId),
 }
 
 impl Leg {
@@ -189,6 +192,7 @@ impl Leg {
         match self {
             Leg::To(place) | Leg::Climb { well: place, .. } => place,
             Leg::Intercept(fleet) => Place::Convoy(fleet),
+            Leg::Gang(_) => Place::Star,
         }
     }
 }

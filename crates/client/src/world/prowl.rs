@@ -17,7 +17,7 @@
 //!   home and keep away for a few days.
 
 use glam::DVec3;
-use retrox_sim::flight::Kinematics;
+use retrox_sim::flight::{self, Goal, Kinematics};
 use retrox_sim::pirates::{self, Aim, GangId};
 use retrox_sim::{FactionId, FieldId};
 
@@ -30,10 +30,10 @@ use crate::traffic::{to_client, to_sim};
 pub const INTERDICT_M: f64 = 4e6;
 /// At 1:1, a stalking gang's ships come out this close.
 pub const ENGAGE_M: f64 = 30e3;
+/// Going after a gang, the ship comes to rest this far short of it.
+const GANG_STANDOFF_M: f64 = 10e3;
 /// Speed a ship is left with after an interdiction, m/s.
 const INTERDICTED_SPEED: f64 = 250.0;
-/// Slices a frame of stalking is flown in.
-const STALK_SLICES: usize = 24;
 
 impl World {
     /// Where the player is, for the sim's gangs: in space in this system,
@@ -89,9 +89,31 @@ impl World {
                     if today < prowl.rest_until || self.combat.gang.is_some() {
                         continue;
                     }
-                    // Coming to their own field, we meet them there.
+                    // A gang at home in the field we're in comes out there
+                    // (see `World::fight`); one out flying spots us in its
+                    // field as anywhere else (#171).
                     let field = self.galaxy.pirates.gangs[id].field;
-                    if self.field_rocks.as_ref().is_some_and(|(f, _)| *f == field) {
+                    // In the field by where we are, as `update_field` will
+                    // find later this frame: on the frame we arrive,
+                    // `field_rocks` doesn't have it yet.
+                    let centre = self.position(Place::Field(field));
+                    let in_field = (centre - self.ship_position()).length()
+                        < self.place_radius(Place::Field(field)) + 50e3;
+                    if self.mode == Mode::Normal && in_field && self.gang_home(id, field) {
+                        continue;
+                    }
+                    // Nor does a gang at home fly out to meet a ship bound
+                    // for its field: it waits, and the ship arrives among
+                    // it. Flying out, it matched the ship's speed and was
+                    // left millions of km off when the ship stopped (#171).
+                    let bound_here = matches!(
+                        self.mode,
+                        Mode::FastTravel(super::FastTravel {
+                            leg: super::Leg::To(Place::Field(f)),
+                            ..
+                        }) if f == field
+                    );
+                    if bound_here && prowl.aim == Aim::Lurk {
                         continue;
                     }
                     let Some(at) = self.traffic.pirate(id) else {
@@ -121,6 +143,12 @@ impl World {
     /// Fly a stalking gang through this frame's `elapsed` galaxy seconds,
     /// toward the ship that went from `from` to where it is now; pull it
     /// out of fast travel, or bring the gang's ships out, if they get close.
+    ///
+    /// The gang flies the shared autopilot (DESIGN §7.2.2), coming to the
+    /// ship and matching its velocity: a frame of fast travel is hours of
+    /// galaxy time, and a stalk that only closed, never braking, flew past
+    /// by hundreds of thousands of km and was left far off and receding
+    /// when the ship stopped (issue #171).
     fn stalk(&mut self, id: GangId, from: DVec3, elapsed: f64) {
         if self.combat.gang.is_some() {
             return;
@@ -132,43 +160,46 @@ impl World {
         let to = self.ship_position();
         let vel = (to - from) / elapsed.max(1e-9);
         let mut ship = self.galaxy.pirates.prowls[&id].ship;
-        let mut pos = to_client(ship.pos);
-        let mut v = to_client(ship.vel);
-        let mut closest = (pos - from).length();
+        let mut closest = (to_client(ship.pos) - from).length();
         if elapsed > 0.0 {
-            let dt = elapsed / STALK_SLICES as f64;
-            for k in 0..STALK_SLICES {
-                let u0 = k as f64 / STALK_SLICES as f64;
-                let u = (k + 1) as f64 / STALK_SLICES as f64;
-                let target = from + (to - from) * u;
-                // Close along the line of sight while matching the ship's
-                // velocity across it, so the line doesn't swing: no
-                // braking, since meeting it is the point.
-                let rel = target - pos;
-                let los = rel.normalize_or(DVec3::X);
-                let want = vel + los * (2.0 * accel * rel.length()).sqrt();
-                let dir = (want - v).normalize_or(los);
-                let p0 = pos;
-                v += dir * accel * dt;
-                pos += v * dt;
-                // How close the two came over the slice, both moving
-                // straight: at warp a slice is thousands of km.
-                let r0 = from + (to - from) * u0 - p0;
-                let r1 = target - pos;
-                closest = closest.min(segment_to_origin(r0, r1));
+            // The ship's track over the frame, straight from `from` to `to`.
+            let prey = |t: f64| from + vel * t;
+            let mut last = (0.0, to_client(ship.pos));
+            let arrived = flight::fly(&mut ship, accel, elapsed, |t, k| {
+                // How close the two came over the step just flown, both
+                // moving straight: at warp a step can be thousands of km.
+                let (t0, p0) = last;
+                let p = to_client(k.pos);
+                closest = closest.min(segment_to_origin(prey(t0) - p0, prey(t) - p));
+                last = (t, p);
+                Goal {
+                    pos: to_sim(prey(t)),
+                    vel: to_sim(vel),
+                }
+            });
+            if arrived.is_some() {
+                // On the ship: it rides along for the rest of the frame.
+                ship = Kinematics {
+                    pos: to_sim(to),
+                    vel: to_sim(vel),
+                };
+                closest = 0.0;
             }
         }
-        ship.pos = to_sim(pos);
-        ship.vel = to_sim(v);
+        let pos = to_client(ship.pos);
         if let Some(p) = self.galaxy.pirates.prowls.get_mut(&id) {
             p.ship = ship;
         }
         match self.mode {
             Mode::FastTravel(_) if closest < INTERDICT_M => self.interdict(id, pos),
             Mode::Normal if closest < ENGAGE_M => {
+                // Into the field we're in, if we're in one: a fight
+                // brought out with no field there was ended the next frame,
+                // the gang sent home resting as if it had fought (#171).
                 let anchor = self.combat_origin();
                 let craft = self.player_craft();
-                self.engage(id, None, pos - anchor, craft.pos);
+                let field = self.combat.field;
+                self.engage(id, field, pos - anchor, craft.pos);
             }
             _ => {}
         }
@@ -196,6 +227,64 @@ impl World {
         self.engage(id, None, from - anchor, craft.pos);
         // The card says it; the comms line keeps "Raiders!".
         self.interdicted = Some((0.0, name));
+    }
+
+    /// Where gang `id` is at galaxy day `t`, and how it's moving, as far
+    /// as anyone can predict it from here: straight on from where it is.
+    pub(super) fn gang_at_day(&self, id: GangId, t: f64) -> Option<(DVec3, DVec3)> {
+        let c = self.traffic.pirate(id)?;
+        let ahead = (t - self.t_days()) * super::SECONDS_PER_DAY;
+        Some((c.pos + c.vel * ahead, c.vel))
+    }
+
+    /// Where going after gang `id` comes to rest at galaxy day `t`:
+    /// [`GANG_STANDOFF_M`] short of its ships, on our side, matching them.
+    pub(super) fn gang_goal(&self, id: GangId, ship: DVec3, t: f64) -> Goal {
+        let Some((pos, vel)) = self.gang_at_day(id, t) else {
+            // Lost it (it's in a fight, or broken up): stop where we are.
+            return Goal {
+                pos: to_sim(ship),
+                vel: to_sim(self.ship.vel + self.velocity_at(self.ship.frame, t)),
+            };
+        };
+        let back = (ship - pos).normalize_or(DVec3::Z);
+        Goal {
+            pos: to_sim(pos + back * GANG_STANDOFF_M),
+            vel: to_sim(vel),
+        }
+    }
+
+    /// Go after the gang `id` ([I] with its red diamond in the sights, or
+    /// in its lair): fast travel to it, or, within [`ENGAGE_M`], bring its
+    /// ships out at once. A gang not resting comes for us on the way and
+    /// pulls us out of fast travel; one lying low after a fight is caught
+    /// where it is (DESIGN §7.2.2, #171).
+    pub(super) fn go_after_gang(&mut self, id: GangId) {
+        let Some(c) = self.traffic.pirate(id) else {
+            return;
+        };
+        let name = c.name.clone();
+        if (c.pos - self.ship_position()).length() < ENGAGE_M {
+            self.catch_gang(id);
+            return;
+        }
+        self.say(format!("Going after the {name}"));
+        self.start_fast_travel(super::Leg::Gang(id));
+    }
+
+    /// We've come up on gang `id`: its ships come out.
+    pub(super) fn catch_gang(&mut self, id: GangId) {
+        if self.combat.gang.is_some() {
+            return;
+        }
+        let Some(at) = self.traffic.pirate(id).map(|c| c.pos) else {
+            self.say("The gang is gone");
+            return;
+        };
+        let anchor = self.combat_origin();
+        let craft = self.player_craft();
+        let field = self.combat.field;
+        self.engage(id, field, at - anchor, craft.pos);
     }
 
     /// The fast-travel drive a gang's slowest ship has.

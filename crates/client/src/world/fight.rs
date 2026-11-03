@@ -5,7 +5,8 @@
 
 use glam::DVec3;
 
-use retrox_sim::pirates::{self, Aim};
+use retrox_sim::FieldId;
+use retrox_sim::pirates::{self, Aim, GangId};
 
 use super::{Mode, Place, World, rock_offset};
 use crate::combat::{Craft, HOSTILE_RANGE, Pilot, REPAIR_PER_POINT};
@@ -62,6 +63,22 @@ impl World {
         pirates::gang_at(&self.galaxy, field).is_some()
     }
 
+    /// Whether gang `g`, which lairs at `field`, is at home there and ready
+    /// to come out at a ship in it: lurking, or flying close by, and not
+    /// in a fight or resting after one with us.
+    pub(super) fn gang_home(&self, g: GangId, field: FieldId) -> bool {
+        let today = self.galaxy.time;
+        let centre = self.position(Place::Field(field));
+        let reach = self.place_radius(Place::Field(field)) + 30e3;
+        let near = self
+            .traffic
+            .pirate(g)
+            .is_some_and(|c| (c.pos - centre).length() < reach);
+        self.galaxy.pirates.prowls.get(&g).is_some_and(|p| {
+            p.aim != Aim::Engaged && today >= p.rest_until && (p.aim == Aim::Lurk || near)
+        })
+    }
+
     /// The ship as the fight sees it.
     pub fn player_craft(&self) -> Craft {
         let anchor = self.combat_anchor();
@@ -91,39 +108,39 @@ impl World {
             self.combat.lost = lost;
         }
 
-        // A gang at home in its field comes out when we arrive; the fight
-        // stays behind when we go.
+        // A gang at home in its field comes out at a ship there: one that
+        // arrives, or one already waiting when the gang gets home (#171).
+        // The fight stays behind when we go.
         let field = match self.mode {
             Mode::Normal => self.field_rocks.as_ref().map(|f| f.0),
             _ => None,
         };
         if field != self.combat.field {
-            self.end_fight();
-            self.combat.leave();
-            if let Some(f) = field {
-                // Fight in the field's frame, as the gang does.
-                self.enter_frame(Place::Field(f));
-                self.combat.field = Some(f);
-                // A gang is at home if it's lurking there, or flying close
-                // by, and not resting after a fight with us.
-                let today = self.galaxy.time;
-                let centre = self.position(Place::Field(f));
-                let reach = self.place_radius(Place::Field(f)) + 30e3;
-                let home = pirates::gang_at(&self.galaxy, f).filter(|g| {
-                    let near = self
-                        .traffic
-                        .pirate(*g)
-                        .is_some_and(|c| (c.pos - centre).length() < reach);
-                    self.galaxy.pirates.prowls.get(g).is_some_and(|p| {
-                        p.aim != Aim::Engaged
-                            && today >= p.rest_until
-                            && (p.aim == Aim::Lurk || near)
-                    })
-                });
-                if let Some(g) = home {
-                    self.engage(g, Some(f), DVec3::ZERO, DVec3::ZERO);
+            match field {
+                // A fight out in space that has come into a field (a gang
+                // that caught us on the way in, or that we went after):
+                // it carries on there, in the field's frame.
+                Some(f) if self.combat.gang.is_some() && self.combat.field.is_none() => {
+                    self.enter_frame(Place::Field(f));
+                    self.combat.field = Some(f);
+                }
+                _ => {
+                    self.end_fight();
+                    self.combat.leave();
+                    if let Some(f) = field {
+                        // Fight in the field's frame, as the gang does.
+                        self.enter_frame(Place::Field(f));
+                        self.combat.field = Some(f);
+                    }
                 }
             }
+        }
+        if let Some(f) = field
+            && self.combat.gang.is_none()
+            && let Some(g) = pirates::gang_at(&self.galaxy, f)
+            && self.gang_home(g, f)
+        {
+            self.engage(g, Some(f), DVec3::ZERO, DVec3::ZERO);
         }
         // Everyone dead, fled or gone home: the fight is over.
         if self.fight_left_behind() || (self.mode != Mode::Normal && self.combat.gang.is_some()) {

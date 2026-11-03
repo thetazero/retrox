@@ -235,15 +235,36 @@ impl World {
         }
         let me = self.ship_position();
         let ahead = self.cam_rot * DVec3::NEG_Z;
-        let pick = |c: &&Contact| {
-            let to = c.pos - me;
-            ahead.angle_between(to.normalize_or(ahead))
-        };
+        let off = |pos: DVec3| ahead.angle_between((pos - me).normalize_or(ahead));
+        let pick = |c: &&Contact| off(c.pos);
         let contacts = &self.traffic.contacts;
         let aimed = contacts
             .iter()
             .filter(|c| pick(c) < 0.3)
             .min_by(|a, b| pick(a).total_cmp(&pick(b)));
+        // A pirate gang in the sights, nearer the crosshair than any
+        // trader, is the one to go after; so is the gang whose lair we're
+        // in, with nothing in the sights (#171).
+        let gang = self
+            .traffic
+            .pirates
+            .iter()
+            .map(|g| (g.gang, off(g.pos)))
+            .filter(|(_, a)| *a < 0.3)
+            .min_by(|a, b| a.1.total_cmp(&b.1));
+        match (gang, aimed) {
+            (Some((g, a)), Some(c)) if a < pick(&c) => return self.go_after_gang(g),
+            (Some((g, _)), None) => return self.go_after_gang(g),
+            (None, None) => {
+                if let Some((field, _)) = &self.field_rocks
+                    && let Some(g) = retrox_sim::pirates::gang_at(&self.galaxy, *field)
+                    && self.traffic.pirate(g).is_some()
+                {
+                    return self.go_after_gang(g);
+                }
+            }
+            _ => {}
+        }
         let nearest = || {
             contacts
                 .iter()

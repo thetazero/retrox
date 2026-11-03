@@ -126,8 +126,10 @@ impl World {
     /// of it. Climbing: just past the well's edge, facing where the ship is
     /// headed next (or straight up from where it is).
     pub(super) fn fast_travel_goal(&self, leg: Leg, ship: DVec3, t: f64) -> Goal {
-        if let Leg::Intercept(fleet) = leg {
-            return self.intercept_goal(fleet, ship, t);
+        match leg {
+            Leg::Intercept(fleet) => return self.intercept_goal(fleet, ship, t),
+            Leg::Gang(gang) => return self.gang_goal(gang, ship, t),
+            _ => {}
         }
         let place = leg.frame();
         let centre = self.position_at(place, t);
@@ -144,7 +146,9 @@ impl World {
         // The side of the place the goal is on, and how fast that side
         // turns, in 1/s.
         let (side, turn, distance) = match leg {
-            Leg::To(_) | Leg::Intercept(_) => (up, DVec3::ZERO, self.arrival_distance(place)),
+            Leg::To(_) | Leg::Intercept(_) | Leg::Gang(_) => {
+                (up, DVec3::ZERO, self.arrival_distance(place))
+            }
             Leg::Climb { well, toward } => {
                 let distance = self.well_radius(well) * 1.05;
                 let to_next = toward.map(|next| {
@@ -179,6 +183,9 @@ impl World {
         match leg {
             Leg::To(place) => self.position_at(place, t) - ship,
             Leg::Intercept(fleet) => self.position_at(Place::Convoy(fleet), t) - ship,
+            Leg::Gang(gang) => self
+                .gang_at_day(gang, t)
+                .map_or(DVec3::NEG_Z, |(p, _)| p - ship),
             Leg::Climb { .. } => {
                 let goal = self.fast_travel_goal(leg, ship, t);
                 DVec3::from_array(goal.pos) - self.position_at(leg.frame(), t)
@@ -333,6 +340,10 @@ impl World {
         // exactly there.
         self.enter_frame(leg.frame());
         self.mode = Mode::Normal;
+        if let Leg::Gang(gang) = leg {
+            self.catch_gang(gang);
+            return;
+        }
         let name = self.name(leg.frame());
         self.say(match leg {
             Leg::To(_) => format!("Arrived at {name}"),
@@ -345,6 +356,8 @@ impl World {
                     .map_or("the convoy", |c| c.name.as_str());
                 format!("Alongside {company}")
             }
+            // Caught up: see `World::catch_gang`.
+            Leg::Gang(_) => return,
         });
     }
 

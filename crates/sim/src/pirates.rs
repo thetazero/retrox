@@ -49,7 +49,9 @@ new_key_type! {
     pub struct GangId;
 }
 
-const METRES_PER_AU: f64 = 1.496e11;
+// The bubble's AU, which every flight and the client share: a rounder one
+// put a gang at home some 900 km off its own field (#171).
+use crate::bubble::METRES_PER_AU;
 const SECONDS_PER_DAY: f64 = 86_400.0;
 
 /// Most ships a gang runs.

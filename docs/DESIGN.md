@@ -1007,15 +1007,27 @@ somewhere, live somewhere, and fly for real near the player.
 - **Hunting the player.** A gang not resting from a fight with the
   player, within 0.4 AU of the player's ship in space, goes after it.
   The client flies that stalk (only it knows where the player is between
-  ticks): full burn on an intercept course that matches the ship's
-  velocity across the line of sight while closing along it, on the
-  fast-travel drive the gang's slowest ship has (the same formula as the
-  player's). A stalking gang that comes within 4,000 km of a ship in fast
-  travel **interdicts** it: the ship drops out with its speed dragged down
-  to 250 m/s, an INTERDICTED band slams across the view, and the gang's
-  ships come in from where it was. At 1:1 a gang closes in for real and
-  its ships come out at 30 km. A gang at home meets a ship that comes to
-  its field.
+  ticks) under the shared autopilot, coming to the ship and matching its
+  velocity, on the fast-travel drive the gang's slowest ship has (the
+  same formula as the player's). A stalking gang that comes within
+  4,000 km of a ship in fast travel **interdicts** it: the ship drops out
+  with its speed dragged down to 250 m/s, an INTERDICTED band slams
+  across the view, and the gang's ships come in from where it was. At
+  1:1 a gang closes in for real and its ships come out at 30 km, in the
+  field if the ship is in one.
+- **Meeting a gang at its lair (#171).** A gang at home (lurking, or
+  flying within 30 km of its field, and not resting) comes out at a
+  ship in its field, whether the ship arrives or was already waiting
+  when the gang got home. A gang at home doesn't fly out to stalk a ship
+  fast travelling into its own field: it waits there. A gang out flying
+  spots a ship in its field like anywhere else. Time runs 1:1 in space
+  and waiting is docked-only, so a player at a lair whose gang is away
+  is told where it is, and **[I] goes after a gang**: the red diamond
+  nearest the crosshair, or, with nothing in the sights, the gang whose
+  lair the ship is in. That is a fast-travel leg to 10 km short of the
+  gang; a gang not resting turns to meet it and interdicts, and one lying
+  low after a fight is caught where it is (its ships come out on
+  arrival). Resting only stops a gang coming after the player.
 - **After a fight** the client tells the sim which ships died; the rest fly
   home and keep away from the player for three days.
 - **Bounties.** When a gang forms, the faction whose settlement the crews

@@ -118,7 +118,7 @@ pub const WORK_KEYS: &[KeyRow] = &[
     (&["LMB", "R"], "mining laser · gas scoop · guns when hot"),
     (&["B"], "arm the guns / back on safe"),
     (&["Y"], "next hostile target"),
-    (&["I"], "intercept the trader in your sights"),
+    (&["I"], "intercept the trader or gang in your sights"),
     (&["V"], "cockpit / chase camera"),
     (&["TAB"], "take or free the mouse"),
     (&["H"], "controls card"),
@@ -348,6 +348,10 @@ pub fn hint(w: &World) -> Option<String> {
                                       convoy. [B] arms the guns; shooting it makes its \
                                       faction hostile."
                     .into(),
+                Leg::Gang(_) => "Going after the gang: unless it's lying low after a fight, \
+                                 it turns to meet you and pulls you out of fast travel. [B] \
+                                 arms the guns."
+                    .into(),
             });
         }
         Mode::Normal => {}
@@ -370,6 +374,24 @@ pub fn hint(w: &World) -> Option<String> {
             "[L] to land at {}.",
             w.galaxy.settlements[city].name
         ));
+    }
+    // In a gang's lair with the gang away: nothing comes of waiting there
+    // (time runs 1:1 in space), so say how to go and find it (#171).
+    if let Some((field, _)) = &w.field_rocks
+        && w.combat.gang.is_none()
+        && let Some(g) = retrox_sim::pirates::gang_at(&w.galaxy, *field)
+        && let Some(c) = w.traffic.pirate(g)
+        && let Some(p) = w.galaxy.pirates.prowls.get(&g)
+    {
+        let d = crate::hud::distance((c.pos - w.ship_position()).length());
+        let name = &c.name;
+        return Some(if p.aim == retrox_sim::pirates::Aim::Stalk {
+            format!("The {name} are coming for you, {d} out: [I] meets them on the way.")
+        } else if w.galaxy.time < p.rest_until {
+            format!("The {name} are lying low after the fight, {d} off: [I] goes in after them.")
+        } else {
+            format!("The {name} lair here but are out, {d} away: [I] goes after them.")
+        });
     }
     if w.field_rocks.is_some() {
         return Some(

@@ -1973,3 +1973,177 @@ fn a_city_founded_while_here_can_be_targeted_and_landed_at() {
         world.mode
     );
 }
+
+/// Parked in the nearest gang's lair, with the gang set to `aim`, its
+/// ships `out` m from the field's centre (at the field's speed), and not
+/// out to fight yet.
+fn in_lair(aim: retrox_sim::pirates::Aim, out: DVec3) -> (World, retrox_sim::pirates::GangId) {
+    let mut world = World::new(1);
+    assert!(world.start_by_raiders());
+    let Place::Field(field) = world.ship.frame else {
+        panic!("parked in the field");
+    };
+    let id = retrox_sim::pirates::gang_at(&world.galaxy, field).expect("a gang lairs here");
+    let t = world.t_days();
+    let home = world.position(Place::Field(field)) + out;
+    let vel = world.velocity_at(Place::Field(field), t);
+    let p = world.galaxy.pirates.prowls.get_mut(&id).unwrap();
+    p.aim = aim;
+    p.ship = retrox_sim::flight::Kinematics {
+        pos: crate::traffic::to_sim(home),
+        vel: crate::traffic::to_sim(vel),
+    };
+    (world, id)
+}
+
+#[test]
+fn a_gang_coming_home_meets_a_ship_waiting_in_its_field() {
+    // #171: a gang came out only at a ship arriving in its field; one
+    // that got home while the ship waited there never did.
+    use retrox_sim::pirates::Aim;
+    let (mut world, id) = in_lair(Aim::Return, DVec3::new(0.5 * AU, 0.0, 0.0));
+    run(&mut world, 1.0);
+    assert!(world.combat.gang.is_none(), "it's half an AU out");
+    // The sim brings it home, as its day's flight ends there.
+    let home = retrox_sim::pirates::field_goal(
+        &world.galaxy,
+        world.galaxy.pirates.gangs[id].field,
+        world.t_days(),
+    );
+    let p = world.galaxy.pirates.prowls.get_mut(&id).unwrap();
+    p.aim = Aim::Lurk;
+    p.ship = retrox_sim::flight::Kinematics {
+        pos: home.pos,
+        vel: home.vel,
+    };
+    run(&mut world, 0.1);
+    assert_eq!(world.combat.gang, Some(id), "it comes out at us");
+    assert!(world.hostiles_near() > 0);
+}
+
+#[test]
+fn a_gang_stalking_a_ship_in_its_field_comes_in_and_fights_there() {
+    // #171: the stalk brought the gang's ships out with no field, and the
+    // next frame ended that "fight" and sent the gang home resting.
+    use retrox_sim::pirates::Aim;
+    let (mut world, id) = in_lair(Aim::Stalk, DVec3::new(300e3, 0.0, 0.0));
+    world.update(1.0 / 60.0, Controls::default());
+    assert!(world.combat.gang.is_none(), "it's 300 km out");
+    let field = world.combat.field.expect("in the field");
+    real_seconds_until(&mut world, 120.0, |w| w.combat.gang.is_some());
+    run(&mut world, 2.0);
+    assert_eq!(world.combat.gang, Some(id), "the fight goes on");
+    assert_eq!(world.combat.field, Some(field), "in the field");
+    assert!(world.hostiles_near() > 0);
+    let p = world.galaxy.pirates.prowls[&id];
+    assert_eq!(p.aim, Aim::Engaged);
+    assert_eq!(
+        p.rest_until,
+        retrox_sim::GalaxyTime::ZERO,
+        "no fight was had"
+    );
+}
+
+/// `world`, a fraction `out` of an AU from its lair (on `side`), fast
+/// travelling there.
+fn fast_travel_to_lair(world: &mut World, side: f64, out: f64) {
+    let Place::Field(field) = world.ship.frame else {
+        panic!("parked in the field");
+    };
+    let centre = world.position(Place::Field(field));
+    world.field_rocks = None;
+    world.ship.frame = Place::Star;
+    world.ship.rel = centre + DVec3::new(side * out * AU, 0.006 * AU, 0.0);
+    world.ship.vel = DVec3::ZERO;
+    world.target = Some(Place::Field(field));
+    world.act(Action::FastTravel);
+    assert!(matches!(world.mode, Mode::FastTravel(_)));
+}
+
+#[test]
+fn fast_travel_to_a_lair_meets_the_gang_at_home() {
+    // #171: a gang at home flew out to stalk a ship bound for its field,
+    // and, matching its speed, was left millions of km off when it
+    // stopped. It waits at home now, and the ship arrives among it.
+    for side in [1.0, -1.0] {
+        for out in [0.1, 0.25, 0.39] {
+            let (mut world, id) = in_lair(retrox_sim::pirates::Aim::Lurk, DVec3::ZERO);
+            fast_travel_to_lair(&mut world, side, out);
+            run(&mut world, 30.0);
+            let p = world.galaxy.pirates.prowls[&id];
+            assert_eq!(
+                world.combat.gang,
+                Some(id),
+                "{side} {out}: {:?} {:?} {p:?}",
+                world.mode,
+                world.message
+            );
+            assert!(
+                world.interdicted.is_none(),
+                "{side} {out}: it waited at home"
+            );
+            assert!(world.field_rocks.is_some(), "{side} {out}: in the field");
+            assert!(world.hostiles_near() > 0);
+        }
+    }
+}
+
+#[test]
+fn a_gang_stalking_a_ship_bound_for_its_lair_meets_it() {
+    // #171: the stalk flew past the ship by hundreds of thousands of km
+    // and was left receding when the ship stopped. Now it interdicts the
+    // ship, or is near when it arrives, and [I] goes to meet it.
+    use retrox_sim::pirates::Aim;
+    for side in [1.0, -1.0] {
+        for out in [0.1, 0.25, 0.39] {
+            let (mut world, id) = in_lair(Aim::Stalk, DVec3::new(0.0, 0.0, 0.05 * AU));
+            fast_travel_to_lair(&mut world, side, out);
+            real_seconds_until(&mut world, 30.0, |w| {
+                w.combat.gang.is_some() || w.mode == Mode::Normal
+            });
+            if world.combat.gang.is_none() {
+                run(&mut world, 1.0);
+                let d = (world.traffic.pirate(id).unwrap().pos - world.ship_position()).length();
+                assert!(d < 0.05 * AU, "{side} {out}: the gang is {d} m off");
+                world.act(Action::Intercept);
+            }
+            real_seconds_until(&mut world, 30.0, |w| w.combat.gang == Some(id));
+            assert!(world.hostiles_near() > 0);
+        }
+    }
+}
+
+#[test]
+fn intercept_goes_after_a_gang_out_from_its_lair() {
+    // #171: with the gang out, waiting in its lair at 1:1 takes hours;
+    // [I] goes after it, and it turns to meet us.
+    use retrox_sim::pirates::Aim;
+    let (mut world, id) = in_lair(Aim::Return, DVec3::new(0.3 * AU, 0.0, 0.0));
+    // It spotted us, but at 1:1 it's hours out.
+    run(&mut world, 0.5);
+    assert!(world.combat.gang.is_none());
+    assert!(crate::guide::hint(&world).is_some_and(|s| s.contains("[I]")));
+    world.act(Action::Intercept);
+    assert!(
+        matches!(world.mode, Mode::FastTravel(FastTravel { leg: Leg::Gang(g), .. }) if g == id),
+        "{:?}",
+        world.message
+    );
+    real_seconds_until(&mut world, 30.0, |w| w.combat.gang == Some(id));
+    assert!(world.hostiles_near() > 0);
+}
+
+#[test]
+fn intercept_catches_a_gang_lying_low() {
+    // A gang resting after a fight won't come for us, but going after it
+    // catches it where it is.
+    use retrox_sim::pirates::Aim;
+    let (mut world, id) = in_lair(Aim::Return, DVec3::new(0.2 * AU, 0.0, 0.0));
+    let rest = retrox_sim::GalaxyTime::from_days(world.galaxy.time.days() + 3);
+    world.galaxy.pirates.prowls.get_mut(&id).unwrap().rest_until = rest;
+    run(&mut world, 0.5);
+    world.act(Action::Intercept);
+    real_seconds_until(&mut world, 30.0, |w| w.combat.gang == Some(id));
+    assert_eq!(world.mode, Mode::Normal);
+    assert!(world.hostiles_near() > 0);
+}
