@@ -3,20 +3,27 @@
 //!
 //! **The loop.** Fly into an asteroid field. Ping the prospector (G) and
 //! the rocks around you light up: what each is made of, how rich it is,
-//! and the glowing *veins* on its surface. Hold the mining laser (left
-//! mouse or R) on a rock until it fractures. Big rocks split into smaller
-//! ones; small ones crumble; everything sheds ore chunks, which the
-//! tractor pulls into the hold when you fly close. Full hold: fly to a
-//! station and sell.
+//! and the glowing *veins* on its surface. Work the mining laser (left
+//! mouse or R) on a rock, feathering it, until it fractures. Big rocks
+//! split into smaller ones; small ones crumble; everything sheds ore
+//! chunks, which the tractor pulls into the hold when you fly close.
+//! Full hold: fly to a station and sell.
 //!
 //! **The skill.** Veins are weak points. The laser cuts four times as fast
-//! on a vein and runs cooler, and a rock fractured through a vein yields
-//! half as much again. Rocks spin, so veins turn away: chase them. The
-//! laser heats up as it fires; let it hit the top and it locks out while
-//! it vents. Radiators cool it faster, reactors cut harder, cargo racks
-//! carry more home, so refits matter. Some rocks are *volatile*: rich,
-//! but they burst when fractured, scattering their ore and shoving the
-//! ship away.
+//! on a vein and runs cooler, and a rock worked mostly on a vein breaks
+//! through it for half as much again. Rocks spin, so veins turn away:
+//! chase them. And the laser builds *stress* in the rock (#212): each rock
+//! has a [`Temper`], a band of stress where it cracks clean, so the pilot
+//! feathers the trigger to hold the needle there. Below the band the laser
+//! only warms the rock; past it, in the red, it cracks faster but scars the
+//! vein, and at the end of the gauge the vein shatters (a botch: poor rock
+//! left). Gas pockets warn, then kick the needle. A clean break through a
+//! vein that has a core frees it: the jackpot. Pushed into the red the
+//! laser runs hot, and at the top of its heat it scorches the hull rather
+//! than locking out. Radiators cool it faster, reactors cut harder, cargo
+//! racks carry more home, so refits matter. Some rocks are *volatile*:
+//! rich and touchy, they burst when fractured, scattering their ore and
+//! shoving the ship away.
 //!
 //! **Big rocks are quarries.** Rocks larger than [`QUARRY_RADIUS`] don't
 //! break; each fracture calves a boulder off where the laser hit, until
@@ -68,13 +75,44 @@ const NUGGET_LIFETIME: f64 = 900.0;
 pub const VEIN_CUT: f64 = 4.0;
 /// Fracturing through a vein yields this much more.
 pub const VEIN_YIELD: f64 = 1.5;
-/// Laser heat per second while firing, before cooling (1 = locked out),
+/// Laser heat per second while firing, before cooling (1 = at the top),
 /// per MW the lasers make.
 const HEAT_PER_MW: f64 = 0.04;
 /// Heat while firing on a vein, relative to bare rock.
 const VEIN_HEAT: f64 = 0.6;
-/// A locked laser comes back once it has cooled to this.
-const UNLOCK_HEAT: f64 = 0.2;
+/// Heat by how hard the laser is pushing the rock (#212), relative to its
+/// rating: below the rock's clean band, in it, and in the red past it.
+/// Worked in the band it runs cool enough to keep at; pushed into the red
+/// it heats fast and soon scorches the hull.
+const COLD_HEAT: f64 = 0.3;
+const BAND_HEAT: f64 = 0.5;
+const RED_HEAT: f64 = 1.6;
+/// A laser run at the top of its heat scorches the hull round it, this
+/// much structure a second (#212): heat is a risk, never a lockout.
+pub const SCORCH_PER_S: f64 = 6.0;
+/// Scorching stops once the laser has cooled to this.
+const SCORCH_CLEAR: f64 = 0.9;
+
+/// Stress a rock under the laser sheds per second off it (#212).
+const STRESS_FALL: f64 = 0.24;
+/// How fast the laser cracks a rock below its clean band, relative to in it:
+/// it only warms the rock.
+const COLD_CUT: f64 = 0.15;
+/// ...and in the red above it, faster, at the vein's cost.
+const RED_CUT: f64 = 2.2;
+/// A pocket's warning, seconds: time to let off before it goes.
+pub const POCKET_WARNING: f64 = 0.7;
+/// A pocket that goes with the laser off kicks this share of its stress.
+const POCKET_OFF: f64 = 0.25;
+/// Scar from the vein at or under which a break is clean.
+pub const CLEAN_RUIN: f64 = 0.15;
+/// A botched rock gives this share of its ore, as fines.
+pub const BOTCH_YIELD: f64 = 0.3;
+/// A vein's core, freed by a clean break through it: this many times the
+/// rock's ordinary yield on top.
+pub const CORE_YIELD: f64 = 2.0;
+/// Hull a volatile rock's botched burst takes, structure.
+const BOTCH_BLAST: f64 = 40.0;
 
 /// The rock meshes, by index; see [`rock_mesh`]. Each is its own broken
 /// shape, so a field isn't copies of one rock at different sizes.
@@ -362,6 +400,107 @@ impl Lode {
     }
 }
 
+/// How a rock takes the laser (#212): where on its stress it cracks clean,
+/// how fast stress builds, how often gas pockets kick it, and whether its
+/// vein has a core to free. Every rock differs, so each is a new read.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Temper {
+    /// The clean band: stress from `lo` to `hi` cracks the rock well.
+    pub lo: f64,
+    pub hi: f64,
+    /// Stress per second the laser builds.
+    pub rise: f64,
+    /// Pockets per second of cutting, and the stress each kicks.
+    pub pockets: f64,
+    pub kick: f64,
+    /// A clean break through a vein frees its core: the jackpot.
+    pub core: bool,
+}
+
+impl Temper {
+    /// A rock's temper, from its seed and what's in it. Ice is soft and
+    /// forgiving; rich rock is touchier (a narrower band); volatile rock
+    /// is touchiest and full of pockets.
+    pub fn of(seed: u64, lode: &Lode) -> Self {
+        let mut rng = Rng::new(seed ^ 0x7465_6d70);
+        let mut width = if lode.good == Good::Ice { 0.30 } else { 0.22 };
+        width *= 1.15 - 0.5 * lode.grade;
+        let mut pockets = rng.range(0.08, 0.4);
+        let mut rise = rng.range(0.16, 0.26);
+        let mut core = 0.12 + 0.3 * lode.grade;
+        if lode.volatile {
+            width *= 0.65;
+            pockets += 0.3;
+            rise *= 1.25;
+            core += 0.15;
+        }
+        let hi = rng.range(0.62, 0.9);
+        Self {
+            lo: hi - width,
+            hi,
+            rise,
+            pockets,
+            kick: rng.range(0.2, 0.34),
+            core: rng.chance(core),
+        }
+    }
+}
+
+/// How a rock came apart (#212).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Break {
+    /// In the clean band, the vein whole or nearly.
+    Clean,
+    /// Cracked with the vein scarred by time in the red: less ore.
+    Rough,
+    /// Stress topped out, or the vein was ruined: it shattered to fines.
+    Botched,
+    /// Clean through a vein that had a core: the core came out whole.
+    Jackpot,
+}
+
+/// The rock under the laser right now (#212): its stress, how scarred its
+/// vein is, and any pocket about to go. Of the moment, not saved.
+#[derive(Clone, Copy, Debug)]
+pub struct Cut {
+    pub rock: RockId,
+    pub temper: Temper,
+    /// 0..1; at 1 the rock shatters.
+    pub stress: f64,
+    /// 0..1; time in the red scars the vein, and at 1 it's ruined.
+    pub ruin: f64,
+    /// A pocket about to go: seconds left, and the stress it kicks.
+    pub pocket: Option<(f64, f64)>,
+    /// Laser work done in this cut, and how much of it on a vein: a rock
+    /// worked mostly on its vein breaks through it.
+    pub work: f64,
+    pub vein_work: f64,
+}
+
+impl Cut {
+    /// Cracking speed for this stress, relative to the bottom of the band.
+    pub fn bite(&self) -> f64 {
+        let t = &self.temper;
+        if self.stress < t.lo {
+            COLD_CUT
+        } else if self.stress <= t.hi {
+            1.0 + 0.6 * (self.stress - t.lo) / (t.hi - t.lo).max(1e-6)
+        } else {
+            RED_CUT
+        }
+    }
+
+    /// Whether stress is in the red, past the clean band.
+    pub fn red(&self) -> bool {
+        self.stress > self.temper.hi
+    }
+
+    /// Whether the laser has kept to the vein for most of this cut.
+    pub fn on_vein(&self) -> bool {
+        self.vein_work >= 0.5 * self.work
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum RockId {
     /// One of the field's own rocks, by index.
@@ -403,6 +542,7 @@ pub struct Burst {
     pub radius: f64,
     pub good: Good,
     pub volatile: bool,
+    pub how: Break,
     pub age: f64,
     pub life: f64,
 }
@@ -421,6 +561,9 @@ pub struct FieldState {
     damage: HashMap<RockId, f64>,
     /// Rocks the prospector (or the laser) has read.
     scanned: BTreeSet<RockId>,
+    /// Rocks whose vein a botch shattered (#212): poor rock now.
+    #[serde(default)]
+    ruined: BTreeSet<RockId>,
     /// Galaxy day each base rock in `scanned`, `calved` or `damage` was
     /// last touched, so it all regrows together.
     #[serde(with = "crate::save::pairs")]
@@ -445,6 +588,8 @@ pub struct LiveRock {
     pub damage: f64,
     /// A quarry with nothing left to calve.
     pub worked_out: bool,
+    /// A botch shattered its vein (#212): no veins, poor yield.
+    pub ruined: bool,
 }
 
 impl LiveRock {
@@ -457,7 +602,7 @@ impl LiveRock {
     /// The centres of the veins, while they last, on the rock's mesh (its
     /// own axes, unit radius): where they're drawn.
     pub fn vein_marks(&self) -> impl Iterator<Item = Vec3> + '_ {
-        let veins = if self.worked_out {
+        let veins = if self.worked_out || self.ruined {
             &[][..]
         } else {
             self.lode.veins()
@@ -469,6 +614,10 @@ impl LiveRock {
     /// Tonnes of ore its next fracture gives, before any vein bonus.
     pub fn yield_t(&self) -> f64 {
         fracture_yield(self.radius, &self.lode)
+    }
+
+    pub fn temper(&self) -> Temper {
+        Temper::of(self.seed, &self.lode)
     }
 }
 
@@ -529,8 +678,21 @@ pub fn surface_along(seed: u64, rot: DQuat, radius: f64, dir: DVec3) -> f64 {
 
 /// Laser work to fracture a rock of this radius.
 pub fn integrity(radius: f64) -> f64 {
-    0.3 * radius.min(QUARRY_RADIUS).powf(1.5)
+    // A quarry calves a boulder for the work of a 30 m rock: it sheds a
+    // 20 m rock's ore and leaves the boulder to break (#212).
+    let r = if radius > QUARRY_RADIUS {
+        QUARRY_CALVE_R
+    } else {
+        radius
+    };
+    INTEGRITY * r.powf(1.5)
 }
+
+/// The size of rock a quarry's calving is as much work as, metres.
+const QUARRY_CALVE_R: f64 = 30.0;
+
+/// Laser work per m^1.5 of rock to fracture it.
+const INTEGRITY: f64 = 0.6;
 
 /// Tonnes of ore a fracture sheds, before any vein bonus. Quarries shed a
 /// boulder's worth.
@@ -585,6 +747,10 @@ pub struct Outcome {
     pub collected: Vec<(Good, f64)>,
     /// A shove on the ship, m/s.
     pub kick: DVec3,
+    /// Structure the hull takes: a scorching laser, a botched volatile.
+    pub hurt: f64,
+    /// A rock broke this frame, and how.
+    pub broke: Option<Break>,
     pub messages: Vec<String>,
 }
 
@@ -605,19 +771,30 @@ pub fn laser_cooling(stats: &ShipStats) -> f64 {
 
 /// The player's mining gear and everything it has done. What it has done
 /// to each field, and the haul, are saved with the game; what's only of
-/// the moment (aim, flashes, the trigger) isn't.
+/// the moment (aim, flashes, the trigger, the rock's stress) isn't.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Mining {
     #[serde(with = "crate::save::pairs")]
     fields: HashMap<FieldId, FieldState>,
-    /// 0..1; locked out at 1 until it cools to [`UNLOCK_HEAT`].
+    /// 0..1; at 1 the laser scorches the hull round it until it cools.
     pub heat: f64,
-    pub locked: bool,
-    /// The laser fired this frame.
+    /// At the top of its heat and burning the hull (#212).
+    #[serde(skip)]
+    pub scorching: bool,
+    /// The trigger is held.
+    #[serde(skip)]
+    pub held: bool,
+    /// The laser is cutting a rock this frame. It only fires at rock in
+    /// its reach: held on nothing, it stays cold (#212).
     #[serde(skip)]
     pub firing: bool,
     #[serde(skip)]
     pub aim: Option<Aim>,
+    /// The rock last under the laser, while its stress lasts.
+    #[serde(skip)]
+    pub cut: Option<Cut>,
+    #[serde(skip, default = "pocket_rng")]
+    rng: Rng,
     scan_cooldown: f64,
     /// Seconds since the last prospector ping, for the HUD's ripple.
     pub since_scan: f64,
@@ -628,14 +805,21 @@ pub struct Mining {
     hold_full_warned: bool,
 }
 
+fn pocket_rng() -> Rng {
+    Rng::new(0x706f_636b)
+}
+
 impl Default for Mining {
     fn default() -> Self {
         Self {
             fields: HashMap::new(),
             heat: 0.0,
-            locked: false,
+            scorching: false,
+            held: false,
             firing: false,
             aim: None,
+            cut: None,
+            rng: pocket_rng(),
             scan_cooldown: 0.0,
             // Never pinged: no ripple on the HUD until the first ping.
             since_scan: 1e9,
@@ -682,6 +866,7 @@ impl Mining {
                     / integrity(rock.radius_m),
                 worked_out: rock.radius_m > QUARRY_RADIUS
                     && calved >= quarry_capacity(rock.radius_m),
+                ruined: state.is_some_and(|s| s.ruined.contains(&rid)),
             })
         });
         let frags = state.into_iter().flat_map(move |s| {
@@ -698,6 +883,7 @@ impl Mining {
                     scanned: s.scanned.contains(&rid),
                     damage: s.damage.get(&rid).copied().unwrap_or(0.0) / integrity(f.radius),
                     worked_out: false,
+                    ruined: s.ruined.contains(&rid),
                 }
             })
         });
@@ -783,20 +969,31 @@ impl Mining {
         Some(found.len())
     }
 
-    /// No field here: the laser can still fire (at nothing), cool down,
-    /// and effects fade. Returns a message if it overheats.
-    pub fn idle(&mut self, dt: f64, stats: &ShipStats, fire: bool) -> Option<String> {
-        let can_fire = fire && !self.locked && stats.mining_cut > 0.0;
-        self.firing = can_fire;
+    /// No field here: nothing for the laser to cut, so it stays cold
+    /// while it cools, and effects fade.
+    pub fn idle(&mut self, dt: f64, stats: &ShipStats, fire: bool) {
+        self.held = fire && stats.mining_cut > 0.0;
+        self.firing = false;
         self.aim = None;
-        self.tick_gear(dt, stats, can_fire, false);
-        (can_fire && self.heat >= 1.0).then(|| {
-            self.locked = true;
-            "Laser overheated: venting".to_owned()
-        })
+        self.cut = None;
+        let mut out = Outcome::default();
+        self.tick_gear(dt, stats, false, false, &mut out);
     }
 
-    fn tick_gear(&mut self, dt: f64, stats: &ShipStats, firing: bool, on_vein: bool) {
+    /// The laser's heat, and the rock's stress, for a frame.
+    fn tick_gear(
+        &mut self,
+        dt: f64,
+        stats: &ShipStats,
+        firing: bool,
+        on_vein: bool,
+        out: &mut Outcome,
+    ) {
+        let push = match &self.cut {
+            Some(c) if c.red() => RED_HEAT,
+            Some(c) if c.stress >= c.temper.lo => BAND_HEAT,
+            _ => COLD_HEAT,
+        };
         self.scan_cooldown = (self.scan_cooldown - dt).max(0.0);
         self.since_scan += dt;
         for b in &mut self.bursts {
@@ -805,15 +1002,89 @@ impl Mining {
         self.bursts.retain(|b| b.age < b.life);
         let cool = laser_cooling(stats);
         if firing {
-            let heat = laser_heating(stats) * if on_vein { VEIN_HEAT } else { 1.0 };
+            let heat = laser_heating(stats) * push * if on_vein { VEIN_HEAT } else { 1.0 };
             self.heat += (heat - cool * 0.35) * dt;
         } else {
             self.heat -= cool * dt;
         }
         self.heat = self.heat.clamp(0.0, 1.0);
-        if self.locked && self.heat <= UNLOCK_HEAT {
-            self.locked = false;
+        if firing && self.heat >= 1.0 {
+            if !self.scorching {
+                out.messages
+                    .push("Laser overheating: it's scorching the hull. Let off".into());
+            }
+            self.scorching = true;
+        } else if self.heat <= SCORCH_CLEAR || !firing {
+            self.scorching = false;
         }
+        if self.scorching {
+            out.hurt += SCORCH_PER_S * dt;
+        }
+        // Off the rock its stress bleeds away.
+        if !firing && let Some(cut) = &mut self.cut {
+            cut.stress = (cut.stress - STRESS_FALL * dt).max(0.0);
+            if let Some((left, kick)) = &mut cut.pocket {
+                *left -= dt;
+                if *left <= 0.0 {
+                    cut.stress += *kick * POCKET_OFF;
+                    cut.pocket = None;
+                }
+            }
+        }
+    }
+
+    /// The rock under the laser takes a frame of it: its stress rises,
+    /// pockets warn and go, and the red scars the vein. Returns how fast
+    /// it cracks (relative to the bottom of its clean band), and whether
+    /// its vein just shattered.
+    fn stress(&mut self, dt: f64, rock: &LiveRock) -> (f64, bool) {
+        let cut = match &mut self.cut {
+            Some(c) if c.rock == rock.id => c,
+            slot => slot.insert(Cut {
+                rock: rock.id,
+                temper: rock.temper(),
+                stress: 0.0,
+                ruin: 0.0,
+                pocket: None,
+                work: 0.0,
+                vein_work: 0.0,
+            }),
+        };
+        let t = cut.temper;
+        cut.stress += t.rise * dt;
+        match &mut cut.pocket {
+            Some((left, kick)) => {
+                *left -= dt;
+                if *left <= 0.0 {
+                    cut.stress += *kick;
+                    cut.pocket = None;
+                }
+            }
+            None => {
+                if self.rng.chance(t.pockets * dt) {
+                    let kick = t.kick * self.rng.range(0.7, 1.3);
+                    cut.pocket = Some((POCKET_WARNING, kick));
+                }
+            }
+        }
+        if rock.ruined {
+            // Nothing left to spoil: it only cracks.
+            cut.stress = cut.stress.min(1.0);
+            cut.ruin = 1.0;
+            return (cut.bite(), false);
+        }
+        if cut.red() {
+            let over = (cut.stress - t.hi) / (1.0 - t.hi).max(1e-6);
+            cut.ruin += (0.3 + 0.9 * over) * dt;
+        }
+        let shattered = cut.stress >= 1.0 || cut.ruin >= 1.0;
+        if shattered {
+            // The vein's gone; the rock's stress goes with the blast.
+            cut.stress = 0.0;
+            cut.ruin = 1.0;
+            cut.pocket = None;
+        }
+        (cut.bite(), shattered)
     }
 
     /// One frame of mining in a field.
@@ -841,30 +1112,55 @@ impl Mining {
             ship.forward,
             READOUT_RANGE,
         );
-        let can_fire = ship.firing && !self.locked && stats.mining_cut > 0.0;
+        self.held = ship.firing && stats.mining_cut > 0.0;
         let cutting = self
             .aim
-            .filter(|a| can_fire && a.distance <= stats.mining_range_m && !a.rock.worked_out);
-        self.firing = can_fire;
-        self.tick_gear(dt, stats, can_fire, cutting.is_some_and(|a| a.on_vein));
-        if can_fire && self.heat >= 1.0 {
-            self.locked = true;
-            out.messages.push("Laser overheated: venting".into());
-        }
+            .filter(|a| self.held && a.distance <= stats.mining_range_m && !a.rock.worked_out);
+        self.firing = cutting.is_some();
+        self.tick_gear(
+            dt,
+            stats,
+            self.firing,
+            cutting.is_some_and(|a| a.on_vein),
+            &mut out,
+        );
 
         if let Some(aim) = cutting {
+            let (bite, shattered) = self.stress(dt, &aim.rock);
+            if shattered {
+                self.shatter(id, aim, ship.centre, &mut out);
+            }
             let rate = laser_power(stats) * if aim.on_vein { VEIN_CUT } else { 1.0 };
             let state = self.fields.entry(id).or_default();
             state.scanned.insert(aim.rock.id);
             if let RockId::Base(i) = aim.rock.id {
                 state.touched.insert(i, day);
             }
+            let done = rate * bite * dt;
+            if let Some(cut) = &mut self.cut {
+                cut.work += done;
+                if aim.on_vein {
+                    cut.vein_work += done;
+                }
+            }
+            let state = self.fields.entry(id).or_default();
             let work = state.damage.entry(aim.rock.id).or_insert(0.0);
-            *work += rate * dt;
+            *work += done;
             if *work >= integrity(aim.rock.radius) {
                 state.damage.remove(&aim.rock.id);
+                let ruined = aim.rock.ruined || state.ruined.remove(&aim.rock.id);
+                let cut = self.cut.take().expect("a rock under the laser has a cut");
+                let how = if ruined {
+                    Break::Botched
+                } else if cut.ruin > CLEAN_RUIN {
+                    Break::Rough
+                } else if cut.on_vein() && cut.temper.core {
+                    Break::Jackpot
+                } else {
+                    Break::Clean
+                };
                 let ship_pos = ship.centre;
-                self.fracture(id, aim, day, ship_pos, &mut out);
+                self.fracture(id, aim, &cut, how, day, ship_pos, &mut out);
             }
         }
 
@@ -895,6 +1191,7 @@ impl Mining {
             state.calved.remove(&i);
             state.damage.remove(&RockId::Base(i));
             state.scanned.remove(&RockId::Base(i));
+            state.ruined.remove(&RockId::Base(i));
         }
         let gone: Vec<u32> = state
             .frags
@@ -906,20 +1203,91 @@ impl Mining {
         for f in gone {
             state.damage.remove(&RockId::Frag(f));
             state.scanned.remove(&RockId::Frag(f));
+            state.ruined.remove(&RockId::Frag(f));
         }
     }
 
-    /// Break a rock along where the laser hit it.
-    fn fracture(&mut self, id: FieldId, aim: Aim, day: f64, ship: DVec3, out: &mut Outcome) {
+    /// A botch (#212): the rock's stress topped out, or the red ruined its
+    /// vein. The vein shatters to a spray of fines, leaving poor rock that
+    /// still has to be cut through; a volatile one blows in the ship's
+    /// face.
+    fn shatter(&mut self, id: FieldId, aim: Aim, ship: DVec3, out: &mut Outcome) {
+        let rock = aim.rock;
+        let state = self.fields.entry(id).or_default();
+        state.ruined.insert(rock.id);
+        state.next_id += 1;
+        let mut rng = Rng::new(rock.seed ^ (u64::from(state.next_id) << 20) ^ 0x626f_7463);
+        let lode = rock.lode;
+        let fines = fracture_yield(rock.radius, &lode) * 0.1;
+        let normal = (aim.point - rock.pos).normalize_or(DVec3::Y);
+        let pieces = (fines / 0.25).ceil().max(1.0) as usize;
+        for _ in 0..pieces {
+            let dir = (normal + random_dir(&mut rng)).normalize_or(normal);
+            state.nuggets.push(Nugget {
+                pos: aim.point + normal * 3.0,
+                vel: rock.vel + dir * rng.range(8.0, 18.0),
+                tonnes: fines / pieces as f64,
+                good: lode.good,
+                seed: rng.next_u64(),
+                age: 0.0,
+            });
+        }
+        self.bursts.push(Burst {
+            pos: aim.point,
+            radius: rock.radius.min(30.0) * if lode.volatile { 2.0 } else { 1.0 },
+            good: lode.good,
+            volatile: lode.volatile,
+            how: Break::Botched,
+            age: 0.0,
+            life: 1.0,
+        });
+        if lode.volatile {
+            let away = ship - aim.point;
+            let reach = rock.radius * 4.0 + 80.0;
+            let d = away.length();
+            if d < reach {
+                let k = 1.0 - d / reach;
+                out.kick += away.normalize_or(DVec3::Y) * 40.0 * k;
+                out.hurt += BOTCH_BLAST * k;
+            }
+            out.messages
+                .push("BOTCHED: the volatile pocket blew, and the vein with it".into());
+        } else {
+            out.messages
+                .push("BOTCHED: the vein shattered. What's left is poor rock".into());
+        }
+        out.broke = Some(Break::Botched);
+    }
+
+    /// Break a rock along where the laser hit it, `how` it came apart.
+    #[allow(clippy::too_many_arguments)]
+    fn fracture(
+        &mut self,
+        id: FieldId,
+        aim: Aim,
+        cut: &Cut,
+        how: Break,
+        day: f64,
+        ship: DVec3,
+        out: &mut Outcome,
+    ) {
         let rock = aim.rock;
         let state = self.fields.entry(id).or_default();
         state.next_id += 1;
         let mut rng = Rng::new(rock.seed ^ (u64::from(state.next_id) << 20) ^ 0x6672_6163);
         let lode = rock.lode;
-        let mut yield_t = fracture_yield(rock.radius, &lode);
-        if aim.on_vein {
+        let base_t = fracture_yield(rock.radius, &lode);
+        let mut yield_t = match how {
+            Break::Botched => base_t * BOTCH_YIELD,
+            // A scarred vein gives less, down to half.
+            Break::Rough => base_t * (1.0 - 0.5 * cut.ruin.min(1.0)),
+            Break::Clean | Break::Jackpot => base_t,
+        };
+        let through_vein = cut.on_vein() && how != Break::Botched;
+        if through_vein {
             yield_t *= VEIN_YIELD;
         }
+        let botched = how == Break::Botched;
         let quarry = rock.radius > QUARRY_RADIUS;
         let normal = (aim.point - rock.pos).normalize_or(DVec3::Y);
 
@@ -954,7 +1322,7 @@ impl Mining {
                 let r = rock.radius * rng.range(0.4, 0.6);
                 let dir = random_dir(&mut rng);
                 let pos = rock.pos + dir * rock.radius * 0.5;
-                let speed = if lode.volatile {
+                let speed = if lode.volatile || botched {
                     rng.range(4.0, 9.0)
                 } else {
                     rng.range(1.0, 4.0)
@@ -992,8 +1360,10 @@ impl Mining {
             }
         }
 
-        // Shed the ore.
-        let pieces = (yield_t / 0.5).ceil().max(1.0) as usize;
+        // Shed the ore: a botch flings fines everywhere, fast; a clean
+        // break lets chunks drift off.
+        let piece_t = if botched { 0.25 } else { 0.5 };
+        let pieces = (yield_t / piece_t).ceil().max(1.0) as usize;
         for _ in 0..pieces {
             let dir = if quarry {
                 (normal + random_dir(&mut rng) * 0.8).normalize_or(normal)
@@ -1002,6 +1372,8 @@ impl Mining {
             };
             let speed = if lode.volatile {
                 rng.range(10.0, 25.0)
+            } else if botched {
+                rng.range(8.0, 18.0)
             } else {
                 rng.range(2.0, 7.0)
             };
@@ -1015,33 +1387,68 @@ impl Mining {
                 age: 0.0,
             });
         }
+        // The core comes out whole, one big chunk, toward the ship.
+        let core_t = if how == Break::Jackpot {
+            base_t * CORE_YIELD
+        } else {
+            0.0
+        };
+        if core_t > 0.0 {
+            let dir = (ship - source).normalize_or(normal);
+            state.nuggets.push(Nugget {
+                pos: source + dir * rock.radius.min(20.0) * 0.5,
+                vel: rock.vel + dir * 3.0,
+                tonnes: core_t,
+                good: lode.good,
+                seed: rng.next_u64(),
+                age: 0.0,
+            });
+        }
 
         let size = if quarry { 14.0 } else { rock.radius };
+        let burst = match how {
+            _ if lode.volatile => 2.5,
+            Break::Jackpot => 2.0,
+            Break::Botched => 1.8,
+            _ => 1.2,
+        };
         self.bursts.push(Burst {
             pos: source,
-            radius: size * if lode.volatile { 2.5 } else { 1.2 },
+            radius: size * burst,
             good: lode.good,
             volatile: lode.volatile,
+            how,
             age: 0.0,
-            life: if lode.volatile { 1.4 } else { 0.8 },
+            life: if lode.volatile || how == Break::Jackpot {
+                1.4
+            } else {
+                0.8
+            },
         });
         if lode.volatile {
             let away = ship - rock.pos;
             let reach = rock.radius * 6.0 + 60.0;
             let d = away.length();
             if d < reach {
-                out.kick += away.normalize_or(DVec3::Y) * 45.0 * (1.0 - d / reach);
+                let k = 1.0 - d / reach;
+                out.kick += away.normalize_or(DVec3::Y) * 45.0 * k;
             }
-            out.messages.push("Volatile pocket burst!".into());
         }
         let what = lode.good.name();
-        out.messages.push(if quarry {
-            format!("Calved a boulder · {yield_t:.1} t {what}")
-        } else if aim.on_vein {
-            format!("Fractured through a vein · {yield_t:.1} t {what}")
-        } else {
-            format!("Fractured · {yield_t:.1} t {what}")
+        let total = yield_t + core_t;
+        let off = if quarry { "Calved a boulder" } else { "Broke" };
+        out.messages.push(match how {
+            Break::Jackpot => {
+                format!("JACKPOT: the vein's core came out whole · {total:.1} t {what}")
+            }
+            Break::Clean if through_vein => {
+                format!("{off} clean through a vein · {total:.1} t {what}")
+            }
+            Break::Clean => format!("{off} clean · {total:.1} t {what}"),
+            Break::Rough => format!("{off} rough: the red scarred the vein · {total:.1} t {what}"),
+            Break::Botched => format!("{off}, poor rock · {total:.1} t {what}"),
         });
+        out.broke = Some(how);
     }
 
     /// Fragments and loose ore drift; the tractor pulls ore in.
@@ -1285,25 +1692,180 @@ mod tests {
     }
 
     #[test]
-    fn firing_fractures_a_rock_into_ore_and_fragments() {
+    fn holding_the_trigger_botches_then_grinds_through() {
+        // #212: a new player who just holds the laser on a rock tops its
+        // stress out in seconds and shatters the vein; the poor rock left
+        // still breaks, for little.
         let mut m = Mining::default();
         let rocks = [rock(20.0)];
         let mut clock = 0.0;
-        // Bursts: it will overheat, lock, and come back.
         let outcomes = run(&mut m, &rocks, miner(150.0, true), 60.0, &mut clock);
+        let broke: Vec<Break> = outcomes.iter().filter_map(|o| o.broke).collect();
+        assert_eq!(broke.first(), Some(&Break::Botched), "{broke:?}");
         assert!(
             m.is_broken(fid(), 0),
             "20 m rock still whole after a minute"
         );
-        assert!(
-            outcomes
-                .iter()
-                .flat_map(|o| &o.messages)
-                .any(|s| s.contains("overheated")),
-            "a minute of firing should overheat the courier's laser"
-        );
         let state = m.field(fid()).unwrap();
         assert!(!state.frags.is_empty() || !state.nuggets.is_empty());
+    }
+
+    /// Tonnes a fracture banner says it gave: the number before " t ".
+    fn banner_t(msg: &str) -> Option<f64> {
+        let at = msg.find(" t ")?;
+        msg[..at].rsplit(' ').next()?.parse().ok()
+    }
+
+    /// How a pilot works the trigger.
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum Hand {
+        /// Holds it down.
+        Hold,
+        /// Feathers on the needle: lets off near the band's top, but
+        /// doesn't heed pockets.
+        Needle,
+        /// Feathers and lets off for pockets too.
+        Practised,
+    }
+
+    fn trigger(m: &Mining, hand: Hand) -> bool {
+        let Some(c) = m.cut else { return true };
+        match hand {
+            Hand::Hold => true,
+            Hand::Needle => c.stress < c.temper.hi - 0.06,
+            Hand::Practised => c.pocket.is_none() && c.stress < c.temper.hi - 0.06,
+        }
+    }
+
+    /// One rock, worked on a vein by `hand` until it breaks or `limit`
+    /// seconds pass: how it broke, how long it took, tonnes shed.
+    fn work_rock(radius: f64, seed: u64, hand: Hand, limit: f64) -> (Vec<Break>, f64, f64) {
+        work_rock_at(radius, seed, hand, limit, true)
+    }
+
+    /// The same, on a vein or off them all.
+    fn work_rock_at(
+        radius: f64,
+        seed: u64,
+        hand: Hand,
+        limit: f64,
+        vein: bool,
+    ) -> (Vec<Break>, f64, f64) {
+        let mut rocks = [rock(radius)];
+        rocks[0].seed = seed;
+        let f = field();
+        let stats = courier();
+        let mut m = Mining {
+            rng: Rng::new(seed),
+            ..Default::default()
+        };
+        let live = m.live_rocks(fid(), &f, &rocks, 0.0).next().unwrap();
+        let spot = if vein {
+            live.vein_points().next().expect("every rock has a vein")
+        } else {
+            // The surface point farthest from every vein.
+            (0..200)
+                .map(|i| {
+                    let d = random_dir(&mut Rng::new(i));
+                    live.pos + d * surface_along(live.seed, live.rot, live.radius, d)
+                })
+                .max_by(|a, b| {
+                    let gap = |p: &DVec3| {
+                        live.vein_points()
+                            .map(|v| (v - *p).length())
+                            .fold(f64::INFINITY, f64::min)
+                    };
+                    gap(a).total_cmp(&gap(b))
+                })
+                .unwrap()
+        };
+        let from = spot + (spot - live.pos).normalize() * 100.0;
+        let dir = (spot - from).normalize();
+        let ship = |firing| Miner {
+            nose: from,
+            forward: dir,
+            centre: from,
+            reach: 10.0,
+            free_t: 1000.0,
+            firing,
+        };
+        let (dt, mut t, mut breaks, mut shed) = (1.0 / 30.0, 0.0, Vec::new(), 0.0);
+        while t < limit && !m.is_broken(fid(), 0) {
+            t += dt;
+            let fire = trigger(&m, hand);
+            let o = m.update(dt, fid(), &f, &rocks, t, &stats, ship(fire));
+            if let Some(b) = o.broke {
+                breaks.push(b);
+            }
+            shed += o.messages.iter().filter_map(|s| banner_t(s)).sum::<f64>();
+        }
+        (breaks, t, shed)
+    }
+
+    #[test]
+    fn a_rock_is_a_minute_of_feathering_or_less() {
+        // #212, DESIGN §7.3: each rock a small job lasting a minute or
+        // less, for a pilot reading its needle.
+        for radius in [20.0, 40.0, 60.0] {
+            let mut times = Vec::new();
+            for seed in 0..20 {
+                let (breaks, t, _) = work_rock(radius, seed, Hand::Practised, 120.0);
+                assert!(!breaks.is_empty(), "{radius} m seed {seed}: unbroken");
+                times.push(t);
+            }
+            let mean = times.iter().sum::<f64>() / times.len() as f64;
+            let worst = times.iter().copied().fold(0.0, f64::max);
+            println!("{radius} m: mean {mean:.1} s, worst {worst:.1} s");
+            assert!(mean <= 45.0, "{radius} m: mean {mean:.1} s");
+            assert!(worst <= 75.0, "{radius} m: worst {worst:.1} s");
+        }
+    }
+
+    #[test]
+    fn practice_beats_holding_and_pays_jackpots() {
+        // #212: a practised hand mines better than a new one, and the
+        // same rocks can go clean, botched or jackpot by what the pilot
+        // did.
+        let mut tally = HashMap::new();
+        for hand in [Hand::Hold, Hand::Needle, Hand::Practised] {
+            let (mut tonnes, mut secs) = (0.0, 0.0);
+            let mut kinds: HashMap<String, usize> = HashMap::new();
+            for seed in 0..40 {
+                let (breaks, t, shed) = work_rock(30.0, seed, hand, 180.0);
+                tonnes += shed;
+                secs += t;
+                if let Some(last) = breaks.last() {
+                    let botched = breaks.contains(&Break::Botched);
+                    let key = if botched {
+                        "Botched".into()
+                    } else {
+                        format!("{last:?}")
+                    };
+                    *kinds.entry(key).or_default() += 1;
+                }
+            }
+            println!("{hand:?}: {:.2} t/min, {kinds:?}", tonnes / secs * 60.0);
+            tally.insert(format!("{hand:?}"), (tonnes / secs, kinds));
+        }
+        let rate = |h: &str| tally[h].0;
+        assert!(rate("Practised") > rate("Needle") && rate("Needle") > rate("Hold"));
+        assert!(rate("Practised") > 1.5 * rate("Hold"));
+        let practised = &tally["Practised"].1;
+        assert!(
+            practised.get("Jackpot").copied().unwrap_or(0) > 0,
+            "{practised:?}"
+        );
+        // Off the vein the same hand cracks slower and never frees a core.
+        let (mut tonnes, mut secs) = (0.0, 0.0);
+        for seed in 0..40 {
+            let (breaks, t, shed) = work_rock_at(30.0, seed, Hand::Practised, 180.0, false);
+            assert!(!breaks.contains(&Break::Jackpot), "seed {seed}: {breaks:?}");
+            tonnes += shed;
+            secs += t;
+        }
+        println!("Practised off the vein: {:.2} t/min", tonnes / secs * 60.0);
+        assert!(tonnes / secs < 0.6 * rate("Practised"));
+        assert!(tally["Hold"].1.get("Botched").copied().unwrap_or(0) >= 35);
     }
 
     #[test]
@@ -1332,7 +1894,9 @@ mod tests {
         let aim = m.aim.expect("aimed at the rock");
         assert!(aim.on_vein, "{aim:?}");
         let on_vein = m.field(fid()).unwrap().damage[&RockId::Base(0)];
-        assert!((on_vein - laser_power(&stats) * VEIN_CUT * 0.1).abs() < 1e-9);
+        // Cold rock, below its band: the laser only warms it.
+        let want = laser_power(&stats) * VEIN_CUT * COLD_CUT * 0.1;
+        assert!((on_vein - want).abs() < 1e-9, "{on_vein} vs {want}");
     }
 
     #[test]
@@ -1341,9 +1905,10 @@ mod tests {
         let rocks = [rock(30.0)];
         let mut clock = 0.0;
         let mut collected = 0.0;
-        // Less than any 30 m rock sheds (grade ≥ 0.15 gives 1.5 t).
+        // Less than any 30 m rock sheds (grade ≥ 0.15 gives 1.5 t; a
+        // botch's poor rock a third of that, its fines a tenth).
         let mut ship = miner(150.0, true);
-        ship.free_t = 1.0;
+        ship.free_t = 0.4;
         for _ in 0..120 * 30 {
             for o in run(&mut m, &rocks, ship, 1.0 / 30.0 + 1e-9, &mut clock) {
                 for (_, t) in o.collected {
@@ -1358,8 +1923,8 @@ mod tests {
             }
         }
         assert!(m.is_broken(fid(), 0));
-        assert!((collected - 1.0).abs() < 1e-6, "collected {collected} t");
-        assert!((m.haul[Good::Ore] + m.haul[Good::Ice] - 1.0).abs() < 1e-6);
+        assert!((collected - 0.4).abs() < 1e-6, "collected {collected} t");
+        assert!((m.haul[Good::Ore] + m.haul[Good::Ice] - 0.4).abs() < 1e-6);
         let left: f64 = m
             .field(fid())
             .unwrap()
@@ -1367,7 +1932,7 @@ mod tests {
             .iter()
             .map(|n| n.tonnes)
             .sum();
-        assert!(left > 0.4, "the rest is still floating there: {left} t");
+        assert!(left > 0.05, "the rest is still floating there: {left} t");
     }
 
     #[test]
@@ -1377,8 +1942,11 @@ mod tests {
         let mut clock = 0.0;
         let f = field();
         let mut boulders = 0;
-        for _ in 0..200 {
-            run(&mut m, &rocks, miner(300.0, true), 10.0, &mut clock);
+        let (stats, dt) = (courier(), 1.0 / 30.0);
+        for _ in 0..30 * 2000 {
+            clock += dt;
+            let ship = miner(300.0, trigger(&m, Hand::Practised));
+            m.update(dt, fid(), &f, &rocks, clock, &stats, ship);
             // Haul the boulders away so the laser keeps working the quarry.
             let state = m.fields.get_mut(&fid()).unwrap();
             boulders += state.frags.len();
@@ -1434,12 +2002,17 @@ mod tests {
                 let mut clock = 0.0;
                 let mut shed = 0.0;
                 let mut collected = 0.0;
-                for _ in 0..30 * 600 {
+                for _ in 0..30 * 900 {
                     clock += 1.0 / 30.0;
+                    if shed == 0.0 {
+                        ship.firing = trigger(&m, Hand::Practised);
+                    }
                     let o = m.update(1.0 / 30.0, fid(), &f, &rocks, clock, &courier(), ship);
+                    // The calving banner, clean, rough or jackpot (a
+                    // botch's banner gives no tonnes: its fines are few).
                     for msg in &o.messages {
-                        if let Some(rest) = msg.strip_prefix("Calved a boulder · ") {
-                            shed = rest.split(' ').next().unwrap().parse::<f64>().unwrap();
+                        if let Some(t) = banner_t(msg) {
+                            shed = t;
                             ship.firing = false;
                         }
                     }

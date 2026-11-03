@@ -2741,10 +2741,12 @@ fn mining_scene(
     }
     for b in &world.mining.bursts {
         let k = (b.age / b.life) as f32;
-        let glow = if b.volatile {
-            [1.0, 0.45, 0.2]
-        } else {
-            ore_glow(b.good)
+        // A jackpot flashes gold-white; a botch is a dull cloud of fines.
+        let glow = match b.how {
+            _ if b.volatile => [1.0, 0.45, 0.2],
+            mining::Break::Jackpot => [1.0, 0.86, 0.45],
+            mining::Break::Botched => ore_glow(b.good).map(|c| c * 0.45 + 0.12),
+            _ => ore_glow(b.good),
         };
         out.push((
             meshes.sphere,
@@ -2756,7 +2758,12 @@ fn mining_scene(
                 ),
                 glow,
                 Surface::Flash,
-                if b.volatile { 3.0 } else { 1.6 },
+                match b.how {
+                    _ if b.volatile => 3.0,
+                    mining::Break::Jackpot => 3.4,
+                    mining::Break::Botched => 0.9,
+                    _ => 1.6,
+                },
                 0.0,
                 [0.0, 1.0, 0.0, k],
             ),
@@ -3342,6 +3349,35 @@ fn remote_info(w: &World) -> String {
         w.combat.player.heat,
         w.combat.player.locked
     );
+    if let Some((text, _)) = &w.message {
+        let _ = writeln!(out, "message {text}");
+    }
+    // The mining laser and the rock under it, as its readout shows them.
+    let m = &w.mining;
+    let _ = writeln!(
+        out,
+        "laser heat {:.2} scorching {} firing {} aim {}",
+        m.heat,
+        m.scorching,
+        m.firing,
+        m.aim.map_or("-".into(), |a| format!(
+            "{:?} {:.0} m vein {} damage {:.2} ruined {}",
+            a.rock.id, a.distance, a.on_vein, a.rock.damage, a.rock.ruined
+        ))
+    );
+    if let Some(c) = m.cut {
+        let _ = writeln!(
+            out,
+            "cut {:?} stress {:.2} band {:.2}-{:.2} ruin {:.2} pocket {}",
+            c.rock,
+            c.stress,
+            c.temper.lo,
+            c.temper.hi,
+            c.ruin,
+            c.pocket
+                .map_or("-".into(), |(t, k)| format!("in {t:.1} s +{k:.2}"))
+        );
+    }
     for r in &w.combat.raiders {
         let to = r.craft.pos - me;
         let (yaw, pitch) = bearing(to);
@@ -3395,6 +3431,18 @@ fn remote_info(w: &World) -> String {
                 r.lode.veins().len(),
                 r.damage
             );
+            // Its veins as the eye finds them on it, and (for playtests
+            // only: nothing in the game shows it) whether it hides a core.
+            let veins: Vec<String> = r
+                .vein_points()
+                // Only the veins on the near face, which the eye can see.
+                .filter(|v| (*v - ship).length() < *d)
+                .map(|v| {
+                    let (yaw, pitch) = bearing(v - ship);
+                    format!("{yaw:.1}/{pitch:.1}")
+                })
+                .collect();
+            let _ = writeln!(out, "  veins {} core {}", veins.join(" "), r.temper().core);
         }
         // The nearest quarry, which may be well past the six nearest rocks.
         if let Some((d, r)) = near.iter().find(|(_, r)| r.radius > mining::QUARRY_RADIUS) {

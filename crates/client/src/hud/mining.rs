@@ -237,7 +237,7 @@ pub fn draw(ctx: &egui::Context, h: &HudInput) {
                 .aim
                 .is_some_and(|a| a.distance <= stats.mining_range_m);
             let color = match w.mining.aim {
-                _ if w.mining.locked => ALARM,
+                _ if w.mining.scorching => ALARM,
                 Some(a) if in_reach && a.on_vein => Color32::from_rgb(255, 222, 120),
                 _ if in_reach => AMBER,
                 _ => CREAM_DIM,
@@ -318,20 +318,37 @@ pub fn draw(ctx: &egui::Context, h: &HudInput) {
             let out_of_range = aim.distance > stats.mining_range_m;
             if out_of_range {
                 lines.push((
-                    format!("OUT OF LASER RANGE · {}", distance(aim.distance)),
-                    CREAM_DIM,
+                    format!(
+                        "OUT OF REACH · {} · LASER REACHES {}",
+                        distance(aim.distance),
+                        distance(stats.mining_range_m)
+                    ),
+                    if w.mining.held { ALARM } else { CREAM_DIM },
                 ));
             }
-            let bar = !out_of_range && rock.damage > 0.0;
+            // The rock's stress, once it's in reach (#212): where it
+            // cracks clean, if it's been read, and what the laser is
+            // doing to it.
+            let gauge = !out_of_range && !rock.worked_out && stats.mining_cut > 0.0;
+            let cut = w.mining.cut.filter(|c| c.rock == rock.id);
+            if gauge {
+                let (text, color) = stress_word(cut.as_ref(), &rock, w.mining.firing);
+                lines.push((text, color));
+            }
             let galleys: Vec<_> = lines
                 .into_iter()
                 .map(|(text, color)| painter.layout_no_wrap(text, mono(12.0), color))
                 .collect();
             let line_h = 15.0;
             let pad = Vec2::new(8.0, 5.0);
+            let gauge_w = 220.0;
+            let gauge_h = if gauge { GAUGE_H } else { 0.0 };
             let inner = Vec2::new(
-                galleys.iter().map(|g| g.size().x).fold(120.0, f32::max),
-                galleys.len() as f32 * line_h + if bar { 9.0 } else { 0.0 },
+                galleys
+                    .iter()
+                    .map(|g| g.size().x)
+                    .fold(if gauge { gauge_w } else { 120.0 }, f32::max),
+                galleys.len() as f32 * line_h + gauge_h,
             );
             let plate_size = inner + 2.0 * pad;
             // Right of the rock, or left of it if that runs off the screen.
@@ -355,19 +372,29 @@ pub fn draw(ctx: &egui::Context, h: &HudInput) {
                 painter.galley(at, g, CREAM);
                 at.y += line_h;
             }
-            if bar {
-                // Work done toward the fracture.
-                let rect = Rect::from_min_size(at + Vec2::new(0.0, 3.0), Vec2::new(120.0, 5.0));
-                painter.rect_filled(rect, 0.0, super::VFD_DIM);
-                painter.rect_filled(
-                    Rect::from_min_size(
-                        rect.min,
-                        Vec2::new(120.0 * rock.damage.min(1.0) as f32, 5.0),
-                    ),
-                    0.0,
-                    AMBER,
-                );
+            if gauge {
+                let rect = Rect::from_min_size(at + Vec2::new(0.0, 2.0), Vec2::new(gauge_w, 0.0));
+                stress_gauge(&painter, rect, &rock, cut.as_ref(), ctx.input(|i| i.time));
             }
+        }
+    }
+
+    // Holding the trigger with no rock in reach: say so by the reticle,
+    // rather than fire at nothing (#212).
+    if w.mining.held && !w.mining.firing && stats.mining_cut > 0.0 {
+        let forward = w.ship.rot * glam::DVec3::NEG_Z;
+        let muzzle = ship + w.ship.rot * w.laser_muzzle();
+        if let Some(p) = to_screen(muzzle + forward * stats.mining_range_m) {
+            let text = match w.mining.aim {
+                Some(a) if a.distance > stats.mining_range_m => {
+                    format!("ROCK {} OFF · CLOSE IN", distance(a.distance))
+                }
+                Some(a) if a.rock.worked_out => "WORKED OUT".to_owned(),
+                _ => format!("NOTHING IN REACH · {}", distance(stats.mining_range_m)),
+            };
+            let galley = painter.layout_no_wrap(text, mono(11.0), ALARM);
+            let at = p + Vec2::new(-galley.size().x / 2.0, 16.0);
+            crate::widgets::plated_galley(&painter, at, galley);
         }
     }
 
@@ -391,7 +418,7 @@ pub fn draw(ctx: &egui::Context, h: &HudInput) {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("LASER").color(CREAM_DIM));
                 lamp(ui, "FIRING", w.mining.firing, AMBER);
-                lamp(ui, "VENTING", w.mining.locked, ALARM);
+                lamp(ui, "SCORCHING", w.mining.scorching, ALARM);
                 lamp(
                     ui,
                     "VEIN",
@@ -400,7 +427,7 @@ pub fn draw(ctx: &egui::Context, h: &HudInput) {
                 );
             });
             let heat = w.mining.heat as f32;
-            let color = if w.mining.locked || heat > 0.8 {
+            let color = if w.mining.scorching || heat > 0.8 {
                 ALARM
             } else {
                 VFD
@@ -445,9 +472,134 @@ pub fn draw(ctx: &egui::Context, h: &HudInput) {
                 keycap(ui, "R");
                 ui.label(RichText::new("laser").color(CREAM));
             });
+
             if w.field_rocks.is_none() {
                 ui.label(RichText::new("fly into an asteroid field to mine").color(CREAM_DIM));
             }
         },
+    );
+}
+
+/// How tall the stress gauge and crack bar stand on the rock readout.
+const GAUGE_H: f32 = 26.0;
+
+/// One line on what the laser is doing to the rock under it (#212).
+fn stress_word(cut: Option<&mining::Cut>, rock: &LiveRock, firing: bool) -> (String, Color32) {
+    if rock.ruined {
+        let hot = if cut.is_some_and(mining::Cut::red) {
+            " · LET OFF"
+        } else {
+            ""
+        };
+        return (format!("VEIN SHATTERED · POOR ROCK{hot}"), ALARM);
+    }
+    let Some(cut) = cut.filter(|c| c.stress > 0.005 || firing) else {
+        return if rock.scanned {
+            ("HOLD THE NEEDLE IN THE BAND".into(), CREAM)
+        } else {
+            ("BAND UNKNOWN · CUTTING BLIND".into(), CREAM_DIM)
+        };
+    };
+    let scar = if cut.ruin > mining::CLEAN_RUIN {
+        format!(" · VEIN SCARRED {:.0}%", cut.ruin.min(1.0) * 100.0)
+    } else {
+        String::new()
+    };
+    if cut.pocket.is_some() {
+        let red = if cut.red() { " · IN THE RED" } else { "" };
+        return (format!("POCKET! LET OFF{red}{scar}"), ALARM);
+    }
+    if cut.red() {
+        (format!("IN THE RED · LET OFF{scar}"), ALARM)
+    } else if cut.stress >= cut.temper.lo {
+        let what = if rock.scanned {
+            "IN THE BAND"
+        } else {
+            "CRACKING"
+        };
+        (format!("{what} · CRACKING WELL{scar}"), VFD)
+    } else if firing {
+        (format!("TOO COLD · BARELY CUTTING{scar}"), CREAM)
+    } else {
+        (format!("EASING OFF{scar}"), CREAM_DIM)
+    }
+}
+
+/// The rock's stress gauge over its crack bar: the needle (teal, red in
+/// the red), the clean band marked once the rock is read, the red zone to
+/// the end, where it shatters, and a pocket's kick shown before it goes.
+fn stress_gauge(
+    painter: &egui::Painter,
+    top: Rect,
+    rock: &LiveRock,
+    cut: Option<&mining::Cut>,
+    time: f64,
+) {
+    let w = top.width();
+    let track = Rect::from_min_size(top.min, Vec2::new(w, 12.0));
+    let x = |s: f64| track.left() + w * s.clamp(0.0, 1.0) as f32;
+    let temper = cut.map_or_else(|| rock.temper(), |c| c.temper);
+    painter.rect_filled(track, 0.0, super::VFD_DIM);
+    // Past the band is red, to the stop where it shatters. Known only
+    // once read: an unread rock is cut blind.
+    if rock.scanned {
+        painter.rect_filled(
+            Rect::from_x_y_ranges(x(temper.hi)..=track.right(), track.y_range()),
+            0.0,
+            ALARM.gamma_multiply(0.35),
+        );
+    }
+    // A botched rock has no vein left to keep clean: no band, but the red
+    // still runs the laser hot.
+    if rock.scanned && !rock.ruined {
+        let band = Rect::from_x_y_ranges(x(temper.lo)..=x(temper.hi), track.y_range());
+        painter.rect_filled(band, 0.0, VFD.gamma_multiply(0.3));
+        painter.rect_stroke(band, 0.0, Stroke::new(1.0, VFD), egui::StrokeKind::Inside);
+    }
+    let stress = cut.map_or(0.0, |c| c.stress);
+    let red = cut.is_some_and(mining::Cut::red);
+    let needle = if red { ALARM } else { VFD };
+    painter.rect_filled(
+        Rect::from_x_y_ranges(track.left()..=x(stress), track.shrink(3.0).y_range()),
+        0.0,
+        needle.gamma_multiply(0.7),
+    );
+    painter.line_segment(
+        [
+            Pos2::new(x(stress), track.top() - 2.0),
+            Pos2::new(x(stress), track.bottom() + 2.0),
+        ],
+        Stroke::new(2.0, needle),
+    );
+    // A pocket about to go: where it'll throw the needle, blinking.
+    if let Some((_, kick)) = cut.and_then(|c| c.pocket)
+        && (time * 8.0) as i64 % 2 == 0
+    {
+        let to = x(stress + kick);
+        painter.rect_stroke(
+            Rect::from_x_y_ranges(x(stress)..=to, track.expand(1.0).y_range()),
+            0.0,
+            Stroke::new(1.5, ALARM),
+            egui::StrokeKind::Outside,
+        );
+    }
+    // The stop at the end.
+    painter.line_segment(
+        [
+            Pos2::new(track.right(), track.top() - 3.0),
+            Pos2::new(track.right(), track.bottom() + 3.0),
+        ],
+        Stroke::new(2.0, ALARM),
+    );
+    // Work done toward the break, under it.
+    let crack = Rect::from_min_size(
+        Pos2::new(track.left(), track.bottom() + 6.0),
+        Vec2::new(w, 5.0),
+    );
+    painter.rect_filled(crack, 0.0, super::VFD_DIM);
+    painter.rect_filled(
+        Rect::from_min_size(crack.min, Vec2::new(w * rock.damage.min(1.0) as f32, 5.0)),
+        0.0,
+        AMBER,
     );
 }

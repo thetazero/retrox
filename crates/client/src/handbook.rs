@@ -249,9 +249,14 @@ fn living(ui: &mut egui::Ui) {
         ui,
         "Mining",
         "Fast travel to an asteroid field stops among its rocks, in laser reach of one. [G] \
-         reads them: what they hold, how rich, and the glowing veins. Hold the laser ([LMB] \
-         or [R]) on a vein: it cuts faster and yields more. Watch the heat; fly close to scoop \
-         the ore. The mining panel lists the markets here and a jump away that pay most for \
+         reads them: what they hold, how rich, the glowing veins, and the band of stress \
+         where each cracks clean. Fire the laser ([LMB] or [R]) on a vein: it cuts faster and \
+         yields more. The laser builds stress in the rock; let off and it falls. Below the band \
+         it barely cuts; in it, it cracks; past it, in the red, it cracks fastest but scars the \
+         vein, and at the end the rock shatters to fines. Gas pockets warn (POCKET!) and then \
+         kick the needle up: let off in time. A clean break on a vein can free the vein's \
+         core, a jackpot. Run the laser at the top of its heat and it scorches your hull. Fly \
+         close to scoop the ore. The mining panel lists the markets here and a jump away that pay most for \
          your load: a market full of ore pays little.",
     );
     topic(

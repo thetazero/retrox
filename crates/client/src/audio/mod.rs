@@ -325,19 +325,28 @@ impl Audio {
         if now.since_scan < was.since_scan {
             self.play(Cue::Scan);
         }
-        if now.locked && !was.locked {
+        if now.scorching && !was.scorching {
             self.play(Cue::Overheat);
-        } else if was.locked && !now.locked {
+        } else if was.scorching && !now.scorching {
             self.play(Cue::Cooled);
+        }
+        // A gas pocket building in the rock: it groans, time to let off.
+        if now.pocket && !was.pocket {
+            self.play_with(Cue::HullCreak, 0.9, 1.3, 0.0);
         }
         for b in &world.mining.bursts {
             let key = burst_key(b.pos);
             if !was.bursts.contains(&key) {
                 if b.volatile {
                     self.play(Cue::Blast);
+                } else if b.how == crate::mining::Break::Botched {
+                    self.play_with(Cue::Fracture, 1.0, 0.7, 0.0);
                 } else {
                     let big = (b.radius / 40.0).clamp(0.0, 1.0) as f32;
                     self.play_with(Cue::Fracture, 0.6 + 0.4 * big, 1.15 - 0.3 * big, 0.0);
+                }
+                if b.how == crate::mining::Break::Jackpot {
+                    self.play(Cue::Trade);
                 }
             }
         }
@@ -446,7 +455,8 @@ struct Snapshot {
     screen: Screen,
     message: Option<String>,
     since_scan: f64,
-    locked: bool,
+    scorching: bool,
+    pocket: bool,
     bursts: HashSet<[u64; 3]>,
     cargo: f64,
     credits: f64,
@@ -483,7 +493,8 @@ impl Snapshot {
             screen: world.screen,
             message: world.message.as_ref().map(|(m, _)| m.clone()),
             since_scan: world.mining.since_scan,
-            locked: world.mining.locked,
+            scorching: world.mining.scorching,
+            pocket: world.mining.cut.is_some_and(|c| c.pocket.is_some()),
             bursts: world
                 .mining
                 .bursts
