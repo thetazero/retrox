@@ -593,6 +593,13 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
                         .map_or(0.0, |c| (c.pos - w.ship_position()).length());
                     ("Intercept", format!("{company} · {}", distance(d)))
                 }
+                Leg::Gang(gang) => {
+                    let (name, d) = w.traffic.pirate(gang).map_or_else(
+                        || ("the gang".to_owned(), 0.0),
+                        |c| (c.name.clone(), (c.pos - w.ship_position()).length()),
+                    );
+                    ("Intercept", format!("{name} · {}", distance(d)))
+                }
                 Leg::Climb { well, .. } => {
                     let out = (w.well_radius(well) - w.distance_to(well)).max(0.0) / 1000.0;
                     (
