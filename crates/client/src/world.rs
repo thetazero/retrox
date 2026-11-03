@@ -8,7 +8,9 @@
 //! **Three ways to move:**
 //! 1. *Normal flight*, in real time. The throttle's lower half is fine
 //!    control up to [`COMBAT_SPEED`]; the upper half ramps up to
-//!    [`CRUISE_SPEED`] for crossing gravity wells. One flight model.
+//!    [`CRUISE_SPEED`] for crossing gravity wells. A held [W] stops at the
+//!    detent between them; pressing it again goes on into cruise. One
+//!    flight model.
 //! 2. *Fast travel*: the sim's [`flight`] autopilot flies the ship to a
 //!    nav target while time runs faster. Same physics as every other ship,
 //!    so the trip takes as long as the flight does. You arrive at the edge
@@ -73,7 +75,9 @@ pub const LANDING_RADII: f64 = 2.0;
 /// low enough to land straight away.
 pub const APPROACH_RADII: f64 = 1.6;
 pub use field::MiningSpot;
-pub use pilot::{COMBAT_SPEED, STRAFE_SPEED, assist, handling, look_rotation, steer};
+pub use pilot::{
+    COMBAT_SPEED, DETENT, STRAFE_SPEED, assist, handling, look_rotation, steer, stopping_distance,
+};
 pub use yards::{Nearby, Service};
 
 /// Real seconds the hyperlane sequence plays for.
@@ -426,6 +430,9 @@ pub struct World {
     /// After fast travel, the attitude autopilot turning the ship to face
     /// where that leg went, until it's there or the pilot takes the stick.
     pub turn_over: Option<Leg>,
+    /// The push of [W] that opened the throttle to its detent is still
+    /// held, so it stays there (see `next_throttle`).
+    pub at_detent: bool,
     /// Seconds since a gang pulled us out of fast travel, and which,
     /// while that's news.
     pub interdicted: Option<(f64, String)>,
@@ -550,6 +557,7 @@ impl World {
             combat: Combat::new(player.ship.fit.clone(), player.ship.damage.clone()),
             burn: 0.0,
             turn_over: None,
+            at_detent: false,
             interdicted: None,
             travel_view: 0.0,
             travel_rot: DQuat::IDENTITY,

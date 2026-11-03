@@ -7,8 +7,11 @@ use retrox_sim::ship::ShipStats;
 
 use super::{Controls, FastTravel, Leg, Mode, Place, REFERENCE, SECONDS_PER_DAY, World};
 
-/// Top of the fine-control range, m/s (throttle 0.5).
+/// Top of the fine-control range, m/s (throttle [`DETENT`]).
 pub const COMBAT_SPEED: f64 = 500.0;
+/// The throttle's detent between the fine-control range and cruise: a held
+/// [W] stops here, and a fresh press goes on past it (#166).
+pub const DETENT: f64 = 0.5;
 /// Top speed at full throttle, m/s.
 pub const CRUISE_SPEED: f64 = 150_000.0;
 const BOOST: f64 = 2.0;
@@ -83,6 +86,20 @@ pub fn assist(vel: &mut DVec3, rot: DQuat, local: DVec3, boost: bool, thrust: f6
         (step.length() / (accel * dt)).min(1.0)
     } else {
         0.0
+    }
+}
+
+/// How far a ship flying at `speed` with flight assist on goes before it
+/// stops once the throttle is cut, m, given its `thrust` (see [`handling`]):
+/// what [`assist`] does with nothing asked for. Above `2 · ACCEL · thrust`
+/// the brakes scale with speed, so speed falls off exponentially.
+pub fn stopping_distance(speed: f64, thrust: f64) -> f64 {
+    let accel = ACCEL * thrust;
+    let knee = 2.0 * accel;
+    if speed <= knee {
+        speed * speed / (2.0 * accel)
+    } else {
+        2.0 * (speed - knee) + knee * knee / (2.0 * accel)
     }
 }
 
@@ -346,7 +363,31 @@ impl World {
             }
         }
         steer(&mut self.ship.rot, &mut self.ship.spin, c.stick, turn, dt);
-        self.ship.throttle = (self.ship.throttle + c.throttle_delta * dt * 0.4).clamp(-0.3, 1.0);
+        self.ship.throttle = self.next_throttle(c.throttle_delta, dt);
+    }
+
+    /// The throttle after a frame of [W]/[S]. Opening it stops at the
+    /// [`DETENT`] for as long as the push that reached it is held; only a
+    /// fresh push goes on into cruise, so a held [W] can't run a ship from
+    /// a standstill up to 150 km/s and tens of km past where it meant to
+    /// stop (#166). Past the detent it opens a quarter as fast: full cruise
+    /// takes [W] held for five seconds, so cruise speed can be set, and a
+    /// second push held out of habit gives a km/s or two, not 150.
+    fn next_throttle(&mut self, delta: f64, dt: f64) -> f64 {
+        let before = self.ship.throttle;
+        let rate = if delta > 0.0 && before >= DETENT {
+            0.1
+        } else {
+            0.4
+        };
+        let mut next = (before + delta * dt * rate).clamp(-0.3, 1.0);
+        if delta <= 0.0 {
+            self.at_detent = false;
+        } else if next > DETENT && before <= DETENT && (before < DETENT || self.at_detent) {
+            next = DETENT;
+            self.at_detent = true;
+        }
+        next
     }
 
     pub(super) fn fly(&mut self, dt: f64, c: Controls) {

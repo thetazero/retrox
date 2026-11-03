@@ -717,6 +717,20 @@ rather than space bugs.
 - Supercruise for in-system travel; hyperlane jumps between systems.
 - Interdiction can pull ships out of supercruise (piracy, patrols).
 
+- **The throttle has a detent** (#166) between fine control (up to
+  500 m/s, where boost works) and cruise (up to 150 km/s): a held [W]
+  stops at it, and only a fresh press goes on into cruise. Past the detent
+  the throttle opens a quarter as fast (full cruise is [W] held for five
+  seconds), so cruise speed can be set, and a second press held out of
+  habit gives a km/s or two rather than 150. Flying by hand to something
+  a few km away is then just holding [W]; cruise is a choice.
+  The flight panel marks the detent on the throttle bar (the cruise half
+  amber, like the CRUISE lamp), shows *[W] AGAIN FOR CRUISE* while the
+  throttle rests on it, and reads **STOPS IN**: how far the ship goes once
+  the throttle is cut, in red with PAST TARGET when that carries it past
+  the target it's closing on. Coming down, the throttle passes the detent
+  without stopping.
+
 #### 7.1.1 Gravity wells and planet stops (#95)
 
 A planet city stop used to cost about five real minutes of plain flying:

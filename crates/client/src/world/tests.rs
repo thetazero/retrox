@@ -23,6 +23,72 @@ fn throttle_curve() {
     assert!((throttle_speed(1.0) - CRUISE_SPEED).abs() < 1e-6);
 }
 
+fn hold_w(world: &mut World, seconds: f64) {
+    let dt = 1.0 / 60.0;
+    for _ in 0..(seconds / dt) as usize {
+        let c = Controls {
+            throttle_delta: 1.0,
+            ..Controls::default()
+        };
+        world.update(dt, c);
+    }
+}
+
+/// Issue #166: a held [W] stops at the detent, top of the fine-control
+/// range; only a fresh press goes on into cruise.
+#[test]
+fn held_w_stops_at_the_detent_and_a_fresh_press_cruises() {
+    let mut world = World::new(1);
+    world.act(Action::Launch);
+    open_space(&mut world);
+    world.ship.vel = DVec3::ZERO;
+    hold_w(&mut world, 10.0);
+    assert_eq!(world.ship.throttle, DETENT);
+    assert!(world.ship.vel.length() <= COMBAT_SPEED * 1.01);
+    run(&mut world, 0.1);
+    hold_w(&mut world, 1.0);
+    let speed = throttle_speed(world.ship.throttle);
+    assert!(
+        speed > COMBAT_SPEED && speed < 2_000.0,
+        "a second press goes on, gently: {speed} m/s"
+    );
+    hold_w(&mut world, 5.0);
+    assert_eq!(world.ship.throttle, 1.0, "held, it opens to full cruise");
+    // Coming back down through the detent doesn't stick.
+    for _ in 0..120 {
+        let c = Controls {
+            throttle_delta: -1.0,
+            ..Controls::default()
+        };
+        world.update(1.0 / 60.0, c);
+    }
+    assert!(world.ship.throttle < DETENT - 0.1);
+}
+
+/// The STOPS IN readout matches what flight assist does once the
+/// throttle's cut, from fine control and from cruise.
+#[test]
+fn stopping_distance_matches_the_flight_model() {
+    for v0 in [300.0, COMBAT_SPEED, 20_000.0, CRUISE_SPEED] {
+        let mut world = World::new(1);
+        world.act(Action::Launch);
+        open_space(&mut world);
+        world.ship.throttle = 0.0;
+        world.ship.vel = world.ship.rot * DVec3::NEG_Z * v0;
+        let predicted = stopping_distance(v0, world.handling().0);
+        let start = world.ship_position();
+        let dt = 1.0 / 240.0;
+        while world.ship.vel.length() > 0.01 {
+            world.update(dt, Controls::default());
+        }
+        let went = (world.ship_position() - start).length();
+        assert!(
+            (went - predicted).abs() < predicted * 0.03 + 2.0,
+            "from {v0} m/s: went {went:.0} m, predicted {predicted:.0} m"
+        );
+    }
+}
+
 #[test]
 fn starts_landed_at_a_capital_city() {
     let world = World::new(1);
