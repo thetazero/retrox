@@ -207,8 +207,12 @@ pub struct FastTravel {
     pub ship: Kinematics,
     /// Galaxy clock at departure.
     pub depart_s: f64,
-    /// Galaxy seconds per real second.
+    /// Galaxy seconds per real second at full speed, mid-trip.
     pub warp: f64,
+    /// Galaxy seconds per real second this frame: eased up from 1 as the
+    /// trip starts and back down to 1 as it ends (#207), so what the
+    /// ship leaves and what it arrives at are seen moving, not cut to.
+    pub rate: f64,
     /// Real seconds since departure.
     pub elapsed: f32,
     /// How hard the drive is burning, 0..1: the share of its acceleration

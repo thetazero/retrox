@@ -77,6 +77,9 @@ pub enum Surface {
     /// brightest toward the sun, thickest along the belt (`aux`: the
     /// camera from the field's centre, and its radius).
     Dust = 25,
+    /// A mote of space dust streaming past the ship (#211): a soft speck,
+    /// `emissive` its brightness.
+    Mote = 26,
 }
 
 #[repr(C)]

@@ -472,8 +472,13 @@ fn cut_inner(b: &mut Bot, field: FieldId, id: crate::mining::RockId, until: f64)
         if (off.length() - want).abs() > 30.0 {
             b.w.ship.rel = rock.pos + off.normalize_or(DVec3::Z) * want;
         }
-        // A pilot lets a locked laser vent rather than hold the trigger.
-        let fire = !b.w.mining.locked;
+        // A practised pilot feathers: holds the needle in the rock's clean
+        // band, lets off near its top and before a pocket goes, and lets a
+        // hot laser breathe rather than scorch the hull (#212).
+        let fire = match b.w.mining.cut.filter(|c| c.rock == id) {
+            Some(c) => c.pocket.is_none() && c.stress < c.temper.hi - 0.06,
+            None => true,
+        } && b.w.mining.heat < 0.95;
         b.frame(Controls {
             fire,
             ..Default::default()

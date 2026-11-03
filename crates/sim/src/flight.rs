@@ -39,7 +39,7 @@ pub const ARRIVE_DISTANCE_M: f64 = 500.0;
 pub const ARRIVE_SPEED: f64 = 5.0;
 /// Brake on a curve that only needs this share of full thrust, keeping the
 /// rest for steering onto a moving goal.
-const BRAKE_SHARE: f64 = 0.8;
+pub const BRAKE_SHARE: f64 = 0.8;
 /// Each step is at most this share of the time left to the goal...
 const STEP_SHARE: f64 = 0.1;
 /// ...and between these bounds, in seconds.

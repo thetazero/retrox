@@ -560,22 +560,11 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
                 egui::Order::Foreground,
                 egui::Id::unique("fast"),
             ));
-            // Streaks rushing out from the centre.
+            // The space dust streaming past shows the speed (#211); this
+            // is how fast the ship closes on where it's going.
             let c = screen.center();
-            let phase = trip.elapsed * 3.0;
-            for i in 0..72 {
-                let a = i as f32 * 2.399;
-                let f = (i as f32 * 0.37 + phase).fract();
-                let r = f * screen.width() * 0.6;
-                let dir = Vec2::new(a.cos(), a.sin());
-                let color = if i % 3 == 0 { VFD } else { CREAM_DIM };
-                painter.line_segment(
-                    [c + dir * r, c + dir * (r + 40.0 + r * 0.25)],
-                    Stroke::new(1.0 + f, color.gamma_multiply(f)),
-                );
-            }
             let days = (w.clock_s - trip.depart_s) / SECONDS_PER_DAY;
-            let km_s = w.ship.vel.length() / 1000.0;
+            let km_s = w.dust_frame().1.length() / trip.rate.max(1.0) / 1000.0;
             let (title, detail) = match trip.leg {
                 Leg::To(place) => {
                     let d = w.distance_to(place);

@@ -82,17 +82,8 @@ impl World {
         let stats = self.stats();
         self.beam = None;
         let Some((field, rocks)) = &self.field_rocks else {
-            if let Some(text) = self
-                .mining
-                .idle(dt, &stats, fire && self.mode == Mode::Normal)
-            {
-                self.say(text);
-            }
-            if self.mining.firing {
-                let muzzle = self.ship.rot * self.laser_muzzle();
-                let forward = self.ship.rot * DVec3::NEG_Z;
-                self.beam = Some((muzzle, muzzle + forward * stats.mining_range_m));
-            }
+            self.mining
+                .idle(dt, &stats, fire && self.mode == Mode::Normal);
             return;
         };
         let field = *field;
@@ -129,15 +120,19 @@ impl World {
             }
         }
         self.ship.vel += out.kick;
+        if out.hurt > 0.0 {
+            // At the laser's mount: it's what runs hot, and a botched
+            // pocket blows in its face.
+            self.combat.player.hit(out.hurt, self.laser_muzzle());
+            self.player.ship.damage = self.combat.player.damage.clone();
+        }
         if let Some(text) = out.messages.into_iter().last() {
             self.say(text);
         }
-        if self.mining.firing {
-            let end = match self.mining.aim {
-                Some(aim) if aim.distance <= stats.mining_range_m => aim.point - ship,
-                _ => muzzle + forward * stats.mining_range_m,
-            };
-            self.beam = Some((muzzle, end));
+        if self.mining.firing
+            && let Some(aim) = self.mining.aim
+        {
+            self.beam = Some((muzzle, aim.point - ship));
         }
     }
 

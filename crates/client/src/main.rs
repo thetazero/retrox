@@ -1777,6 +1777,10 @@ impl Running {
                 let mut instances = scene(world, &self.meshes, &traffic, cam_pos);
                 pirate_scene(world, &self.meshes, &pirates, cam_pos, &mut instances);
                 combat_scene(world, &self.meshes, &fighting, cam_pos, &mut instances);
+                if matches!(world.mode, Mode::Normal | Mode::FastTravel(_)) {
+                    let pixel = 70f64.to_radians() / f64::from(self.renderer.size().1.max(1));
+                    motes_scene(world, &self.meshes, cam_pos, pixel, &mut instances);
+                }
                 (proj * view, instances, cam_pos, star)
             }
         }
@@ -1941,6 +1945,35 @@ fn scene(
         ));
     }
 
+    // Every belt's sunlit dust, seen from outside as a haze long before
+    // its rocks are near enough to draw (#207), so a belt is approached,
+    // not arrived in.
+    for &field in &world.view.fields {
+        let center = world.position(Place::Field(field));
+        let field_r = world.galaxy.fields[field].radius_km * 1000.0;
+        let from_centre = cam - center;
+        if from_centre.length() > field_r * 100.0 {
+            continue;
+        }
+        out.push((
+            meshes.sphere,
+            Instance::new(
+                Mat4::from_scale(Vec3::splat(1.0e6)),
+                [1.0; 3],
+                Surface::Dust,
+                1.0,
+                0.0,
+                light(center),
+            )
+            .with_detail(mining::BELT_DUST as f32)
+            .with_aux([
+                from_centre.x as f32,
+                from_centre.y as f32,
+                from_centre.z as f32,
+                field_r as f32,
+            ]),
+        ));
+    }
     if let Some((field, rocks)) = &world.field_rocks {
         mining_scene(world, meshes, *field, rocks, cam, &mut out);
     }
@@ -2660,27 +2693,7 @@ fn mining_scene(
     let pulse = (0.6 + 0.4 * (t * 4.0).sin()) as f32;
     let f = &world.galaxy.fields[field];
     let field_r = f.radius_km * 1000.0;
-    let dust = mining::BELT_DUST as f32;
-    // The belt's dust round the camera, sunlit.
     let from_centre = cam - center;
-    out.push((
-        meshes.sphere,
-        Instance::new(
-            Mat4::from_scale(Vec3::splat(1.0e6)),
-            [1.0; 3],
-            Surface::Dust,
-            1.0,
-            0.0,
-            lit,
-        )
-        .with_detail(dust)
-        .with_aux([
-            from_centre.x as f32,
-            from_centre.y as f32,
-            from_centre.z as f32,
-            field_r as f32,
-        ]),
-    ));
     let icy = f.resources.ice > f.resources.ore;
     rubble_scene(meshes, from_centre, field_r, f.seed, icy, lit, t, out);
     for rock in world.mining.live_rocks(field, f, rocks, t) {
@@ -2763,10 +2776,12 @@ fn mining_scene(
     }
     for b in &world.mining.bursts {
         let k = (b.age / b.life) as f32;
-        let glow = if b.volatile {
-            [1.0, 0.45, 0.2]
-        } else {
-            ore_glow(b.good)
+        // A jackpot flashes gold-white; a botch is a dull cloud of fines.
+        let glow = match b.how {
+            _ if b.volatile => [1.0, 0.45, 0.2],
+            mining::Break::Jackpot => [1.0, 0.86, 0.45],
+            mining::Break::Botched => ore_glow(b.good).map(|c| c * 0.45 + 0.12),
+            _ => ore_glow(b.good),
         };
         out.push((
             meshes.sphere,
@@ -2778,11 +2793,95 @@ fn mining_scene(
                 ),
                 glow,
                 Surface::Flash,
-                if b.volatile { 3.0 } else { 1.6 },
+                match b.how {
+                    _ if b.volatile => 3.0,
+                    mining::Break::Jackpot => 3.4,
+                    mining::Break::Botched => 0.9,
+                    _ => 1.6,
+                },
                 0.0,
                 [0.0, 1.0, 0.0, k],
             ),
         ));
+    }
+}
+
+/// Space dust round the camera, at rest in the frame of whatever the ship
+/// is flying by, so motion reads at a glance (#211, DESIGN §8.9): specks
+/// stream past at the ship's speed, near ones faster than far ones,
+/// drawn out into short streaks by a film camera's shutter. A fine layer
+/// reads local flight's metres a second, a coarse one cruise and fast
+/// travel's kilometres. At rest there's nothing to show, so they fade
+/// out as the ship stops and never stand in for stars.
+fn motes_scene(
+    world: &World,
+    meshes: &Meshes,
+    cam: DVec3,
+    pixel: f64,
+    out: &mut Vec<(MeshId, Instance)>,
+) {
+    let (anchor, vel) = world.dust_frame();
+    let speed = vel.length();
+    let shown = f64::from(smoothstep(1.0, 25.0, speed as f32));
+    if shown <= 0.0 {
+        return;
+    }
+    let along = world::look_rotation(-vel).as_quat();
+    let from_anchor = cam - anchor;
+    // Cell size and reach, metres, and a salt.
+    let layers = [(22.0, 130.0, 11u64), (380.0, 2200.0, 12u64)];
+    for (cell, reach, salt) in layers {
+        let lo = ((from_anchor - DVec3::splat(reach)) / cell).floor();
+        let hi = ((from_anchor + DVec3::splat(reach)) / cell).floor();
+        for x in lo.x as i64..=hi.x as i64 {
+            for y in lo.y as i64..=hi.y as i64 {
+                for z in lo.z as i64..=hi.z as i64 {
+                    let h = cell_hash(x, y, z, salt);
+                    if unit_of(h) > 0.3 {
+                        continue;
+                    }
+                    let h2 = cell_hash(x, y, z, salt.wrapping_mul(977));
+                    let jitter = DVec3::new(unit_of(h2), unit_of(h2 >> 21), unit_of(h2 >> 42));
+                    let p = (DVec3::new(x as f64, y as f64, z as f64) + jitter) * cell;
+                    let off = p - from_anchor;
+                    let d = off.length();
+                    if d > reach {
+                        continue;
+                    }
+                    // Fading in at the edge of the layer, out right by the
+                    // camera, where one would cross the screen in a frame.
+                    let fade = (1.0 - smoothstep(0.6, 1.0, (d / reach) as f32))
+                        * smoothstep(0.08, 0.2, (d / reach) as f32);
+                    if fade <= 0.0 {
+                        continue;
+                    }
+                    // About a pixel across wherever it is; drawn out by
+                    // how far it moves in a 1/24 s exposure, up to half
+                    // the layer's reach.
+                    let radius = (d * pixel * 0.7).max(0.03);
+                    let streak = (speed / 24.0).min(reach * 0.5) / 2.0;
+                    let length = radius.max(streak);
+                    // A long streak spreads its light.
+                    let spread = (radius / length).sqrt().max(0.25);
+                    let glow = 0.55 * shown * f64::from(fade) * spread;
+                    out.push((
+                        meshes.sphere,
+                        Instance::new(
+                            Mat4::from_scale_rotation_translation(
+                                Vec3::new(radius as f32, radius as f32, length as f32),
+                                along,
+                                off.as_vec3(),
+                            ),
+                            [0.86, 0.82, 0.74],
+                            Surface::Mote,
+                            glow as f32,
+                            0.0,
+                            [0.0, 1.0, 0.0, 0.0],
+                        ),
+                    ));
+                }
+            }
+        }
     }
 }
 
@@ -3305,6 +3404,35 @@ fn remote_info(w: &World) -> String {
         w.combat.player.heat,
         w.combat.player.locked
     );
+    if let Some((text, _)) = &w.message {
+        let _ = writeln!(out, "message {text}");
+    }
+    // The mining laser and the rock under it, as its readout shows them.
+    let m = &w.mining;
+    let _ = writeln!(
+        out,
+        "laser heat {:.2} scorching {} firing {} aim {}",
+        m.heat,
+        m.scorching,
+        m.firing,
+        m.aim.map_or("-".into(), |a| format!(
+            "{:?} {:.0} m vein {} damage {:.2} ruined {}",
+            a.rock.id, a.distance, a.on_vein, a.rock.damage, a.rock.ruined
+        ))
+    );
+    if let Some(c) = m.cut {
+        let _ = writeln!(
+            out,
+            "cut {:?} stress {:.2} band {:.2}-{:.2} ruin {:.2} pocket {}",
+            c.rock,
+            c.stress,
+            c.temper.lo,
+            c.temper.hi,
+            c.ruin,
+            c.pocket
+                .map_or("-".into(), |(t, k)| format!("in {t:.1} s +{k:.2}"))
+        );
+    }
     for r in &w.combat.raiders {
         let to = r.craft.pos - me;
         let (yaw, pitch) = bearing(to);
@@ -3358,6 +3486,18 @@ fn remote_info(w: &World) -> String {
                 r.lode.veins().len(),
                 r.damage
             );
+            // Its veins as the eye finds them on it, and (for playtests
+            // only: nothing in the game shows it) whether it hides a core.
+            let veins: Vec<String> = r
+                .vein_points()
+                // Only the veins on the near face, which the eye can see.
+                .filter(|v| (*v - ship).length() < *d)
+                .map(|v| {
+                    let (yaw, pitch) = bearing(v - ship);
+                    format!("{yaw:.1}/{pitch:.1}")
+                })
+                .collect();
+            let _ = writeln!(out, "  veins {} core {}", veins.join(" "), r.temper().core);
         }
         // The nearest quarry, which may be well past the six nearest rocks.
         if let Some((d, r)) = near.iter().find(|(_, r)| r.radius > mining::QUARRY_RADIUS) {

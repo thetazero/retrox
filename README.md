@@ -14,7 +14,12 @@ A single-player space game in a simulated, procedural galaxy. See [docs/DESIGN.m
 | `crates/viewer` | a developer map that runs the sim live |
 
 CI runs `cargo fmt --all --check`, `cargo clippy --workspace --all-targets`
-and `cargo test --workspace`, with warnings as errors.
+and `cargo test --workspace`, with warnings as errors. A PR also fails the
+revert check (`.github/revert-check.py`) if it puts back text that one of the
+last 30 commits on main replaced, as #151 did to #150, unless its description
+names that commit's PR (`#N`). Run it locally with
+`python3 .github/revert-check.py origin/main HEAD --body "#N ..."`, or
+`--history` to check every commit on main.
 
 ## Running
 

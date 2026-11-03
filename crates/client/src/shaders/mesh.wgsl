@@ -130,6 +130,7 @@ const RING: u32 = 22u;
 const FLASH: u32 = 23u;
 const DUST: u32 = 25u;
 const CORONA: u32 = 24u;
+const MOTE: u32 = 26u;
 
 // Paints for built things (must match meshes.rs).
 const HULL: u32 = 0u;
@@ -838,6 +839,11 @@ fn fs_glow(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32
         let t1 = max((-qb + sqrt(disc)) / qa, 0.0);
         let depth = 1.0 - exp(-(t1 - t0) * i.params.w);
         return vec4<f32>(dust_light(d, i.light.xyz) * depth * i.params.y, 1.0);
+    }
+    if (mode == MOTE) {
+        // A mote of dust the ship flies through (#211): a soft speck,
+        // drawn out along the way it streams past.
+        return vec4<f32>(i.color.rgb * pow(mu, 0.7) * i.params.y, 1.0);
     }
     if (mode == CORONA) {
         // A star's corona, on a shell params.w times the star's radius:
