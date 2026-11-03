@@ -931,6 +931,33 @@ stopping, the camera, and moving between rocks. As built:
   full stick) and open to full over half a second of holding, so a tap
   aims a degree or so and a hold swings the ship round.
 
+#### 7.1.5 Time eases in and out of fast travel (#207)
+
+Fast travel ran its whole trip at one sped-up rate, so the last frame
+before arriving covered over a hundred thousand km: a belt's rocks
+weren't there, then were. Now **sped-up time eases**, as the user asked:
+
+- **Time winds up out of a departure and down into an arrival.** It runs
+  at (s / τ)^1.5 times real time, where s is the galaxy time flown so
+  far, or left until the ship stops on its brake curve, whichever is
+  less; never slower than real time, never faster than the trip's
+  cruise rate. τ is 0.6 s leaving and 1 s arriving. Each end takes about
+  3τ of real time however long the trip is: the last second at real
+  speed, the two before it winding down from full rate.
+- **So the place is approached, not cut to.** As time slows the closing
+  speed falls smoothly (the trip card reads hundreds of km/s, then 15,
+  then 1, then 0), a belt's dust haze grows ahead, then its rocks, and
+  no frame closes on the stop rock by more than about a fifth once it's
+  more than a speck. Arriving changes nothing in view.
+- It's still one real flight under the shared autopilot: the easing
+  only chooses how much galaxy time each frame flies.
+- The eases take the place of part of the old cruise: the stretch
+  between them gets up to 2.5 s, so a trip across a system still takes
+  about 7 s, and a short hop about 5.
+- **Belt dust is drawn from afar**, out to 100 field radii, as a haze in
+  the sun's light: a belt is seen from outside long before its rocks
+  are close enough to draw.
+
 ### 7.2 Combat
 
 - Small/medium ships: direct dogfighting.
@@ -1959,6 +1986,25 @@ of the planet from orbit. The view is the same on every screen there
   afternoon, always from the camera's side so the ship and the city's
   faces are lit, in its star's colour. No night: a city is always shown
   by day.
+
+### 8.9 Motion
+
+Decided while making flying read at a glance (issues #207, #211):
+
+- **Space dust shows speed.** Faint specks of dust, at rest in the frame
+  of whatever the ship is flying by, stream past the camera at the
+  ship's speed relative to it: near ones fast, far ones slowly. Each is
+  about a pixel across and drawn out into a streak by a film camera's
+  1/24 s shutter, so a pilot sees both that they're moving and roughly
+  how fast: short dashes at 100 m/s, long thin lines at 500 m/s, rays
+  from the vanishing point at cruise. A fine layer (out to ~130 m) reads
+  local flight, a coarse one (~2 km) cruise.
+- **At rest there's no dust**: it fades in with speed from a few m/s,
+  so it never sits still on screen looking like stars.
+- **Fast travel streams the same dust**, sped up with time, instead of
+  painted lines on the HUD: the streaks shorten as time eases into an
+  arrival and are gone as the ship stops.
+- Dust is cream, dim and additive; it never hides anything.
 
 ## 9. Technical architecture
 

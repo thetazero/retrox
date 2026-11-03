@@ -597,7 +597,8 @@ fn dropping_out_keeps_position_and_speed() {
     let target = world.view.bodies[0];
     world.target = Some(Place::Body(target));
     world.act(Action::FastTravel);
-    run(&mut world, 1.0);
+    // Past the first seconds, where time is still winding up (#207).
+    run(&mut world, 3.0);
     let (pos, vel) = (world.ship_position(), world.ship.vel);
     assert!(
         vel.length() > COMBAT_SPEED,
@@ -2370,4 +2371,92 @@ fn intercept_catches_a_gang_lying_low() {
     real_seconds_until(&mut world, 30.0, |w| w.combat.gang == Some(id));
     assert_eq!(world.mode, Mode::Normal);
     assert!(world.hostiles_near() > 0);
+}
+
+/// Issue #207: fast travel eases time down into an arrival, so a belt's
+/// rocks are seen coming: once its stop rock could show as more than a
+/// speck, no frame closes on it by more than a sixth of the way.
+#[test]
+fn fast_travel_into_a_field_slows_into_the_arrival() {
+    let mut world = World::new(1);
+    let field = world.view.fields[0];
+    open_space(&mut world);
+    world.target = Some(Place::Field(field));
+    world.act(Action::FastTravel);
+    let rock = |w: &World| {
+        let (_, offset, _) = w.field_stop.expect("a stop rock");
+        w.position(Place::Field(field)) + offset
+    };
+    let dt = 1.0 / 60.0;
+    let mut real = 0.0;
+    let mut worst: f64 = 1.0;
+    let mut d = (rock(&world) - world.ship_position()).length();
+    let mut last_rate = f64::INFINITY;
+    while matches!(world.mode, Mode::FastTravel(_)) {
+        world.update(dt, Controls::default());
+        real += dt;
+        assert!(real < 20.0, "still flying after 20 s");
+        let next = (rock(&world) - world.ship_position()).length();
+        if next < 20e3 {
+            worst = worst.max(d / next);
+        }
+        d = next;
+        if let Mode::FastTravel(trip) = world.mode {
+            last_rate = trip.rate;
+        }
+    }
+    println!("trip {real:.1} s, worst closing {worst:.3} a frame");
+    assert!(worst < 1.2, "closed {worst:.2}x in a frame");
+    assert!(last_rate < 1.5, "time still {last_rate:.1}x on arrival");
+    assert!(real < 10.0, "a trip took {real:.1} s");
+}
+
+#[test]
+fn eased_time_winds_up_and_down_in_fixed_real_time() {
+    use super::pilot::eased_seconds;
+    // Starts at real speed, then winds up to the cap within a few seconds.
+    assert!((eased_seconds(0.1, 0.0, 1e9, 1e6) - 0.1).abs() < 1e-9);
+    let (mut s, mut t) = (0.0, 0.0);
+    while eased_seconds(1.0 / 60.0, s, 1e9, 1e6) < 1e6 / 60.0 {
+        s += eased_seconds(1.0 / 60.0, s, 1e9, 1e6);
+        t += 1.0 / 60.0;
+        assert!(t < 4.0, "still winding up after {t:.1} s");
+    }
+    // And down: from a day out to stopped in about three real seconds,
+    // whether in frames or one long frame.
+    let (mut left, mut t) = (86_400.0, 0.0);
+    while left > 0.0 {
+        left -= eased_seconds(1.0 / 60.0, 1e9, left, 1e9);
+        t += 1.0 / 60.0;
+    }
+    assert!((2.5..3.2).contains(&t), "wound down in {t:.2} s");
+    let one = eased_seconds(t, 1e9, 86_400.0, 1e9);
+    assert!((one - 86_400.0).abs() < 1.0, "one frame flew {one:.1} s");
+}
+
+/// Issue #211: the dust the ship flies through streams past at the speed
+/// the pilot sees: the ship's own in local flight; sped up with time in
+/// fast travel, and back down to the ship's real closing speed as it
+/// arrives, so nothing jumps when the trip hands over.
+#[test]
+fn dust_streams_at_the_speed_the_pilot_sees() {
+    let mut world = World::new(1);
+    let field = world.view.fields[0];
+    open_space(&mut world);
+    world.ship.vel = DVec3::new(0.0, 0.0, -120.0);
+    assert_eq!(world.dust_frame().1, world.ship.vel);
+    world.ship.vel = DVec3::ZERO;
+    world.target = Some(Place::Field(field));
+    world.act(Action::FastTravel);
+    let (mut fastest, mut last) = (0.0f64, f64::INFINITY);
+    while matches!(world.mode, Mode::FastTravel(_)) {
+        world.update(1.0 / 60.0, Controls::default());
+        if matches!(world.mode, Mode::FastTravel(_)) {
+            last = world.dust_frame().1.length();
+            fastest = fastest.max(last);
+        }
+    }
+    assert!(fastest > 1e8, "streaming at {fastest:.0} m/s mid-trip");
+    assert!(last < 150.0, "streaming at {last:.0} m/s as it arrived");
+    assert!(world.dust_frame().1.length() < 10.0, "at rest in the field");
 }
