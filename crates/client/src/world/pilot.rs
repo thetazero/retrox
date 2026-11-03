@@ -1,7 +1,7 @@
 //! Flying the ship inside a system: the arcade flight model, collisions,
 //! and fast travel under the sim's autopilot.
 
-use glam::{DQuat, DVec3};
+use glam::{DQuat, DVec2, DVec3};
 use retrox_sim::flight::{self, Goal, Kinematics};
 use retrox_sim::ship::ShipStats;
 
@@ -104,6 +104,54 @@ pub fn attitude_stick(rot: DQuat, face: DVec3, turn: f64) -> DVec3 {
     let e = err.to_scaled_axis();
     let rates = DVec3::new(e.x, -e.y, -e.z) * ATTITUDE_GAIN;
     (rates / (TURN_RATES * turn)).clamp(DVec3::splat(-1.0), DVec3::splat(1.0))
+}
+
+/// How far the pilot's aim may lead the nose, radians (about 26°): far
+/// enough that the ship turns at its full rate toward it, near enough
+/// that the aim stays in view (DESIGN §7.1.5).
+pub const AIM_LEAD: f64 = 0.45;
+/// How hard the ship turns toward the aim per radian off, 1/s: the nose
+/// closes on it smoothly and settles there without overshooting.
+const AIM_GAIN: f64 = 3.0;
+
+/// The aim moved by `by` (radians, right and up as a ship at `rot` sees
+/// them), and kept within [`AIM_LEAD`] of its nose.
+pub fn move_aim(aim: DVec3, rot: DQuat, by: DVec2) -> DVec3 {
+    let up = rot * DVec3::Y;
+    let right = rot * DVec3::X;
+    let aim = DQuat::from_axis_angle(up, -by.x) * DQuat::from_axis_angle(right, by.y) * aim;
+    let nose = rot * DVec3::NEG_Z;
+    let off = nose.angle_between(aim);
+    if off <= AIM_LEAD {
+        return aim.normalize();
+    }
+    let axis = nose.cross(aim);
+    // Straight behind the nose, any way round will do.
+    let axis = axis.try_normalize().unwrap_or(up);
+    DQuat::from_axis_angle(axis, AIM_LEAD) * nose
+}
+
+/// The pitch and yaw stick that turns a ship at `rot` toward `aim` (a
+/// direction): rates in proportion to how far off the nose is, along the
+/// straight way there, never more than full stick. Fed through [`steer`]
+/// it eases in and settles on the aim. Roll is left to the pilot.
+pub fn aim_stick(rot: DQuat, aim: DVec3, turn: f64) -> DVec2 {
+    // Ship axes: x right, y up, -z forward.
+    let local = rot.inverse() * aim.normalize_or(rot * DVec3::NEG_Z);
+    let side = DVec2::new(local.y, local.x);
+    let off = (-local.z).clamp(-1.0, 1.0).acos();
+    let Some(dir) = side.try_normalize() else {
+        // On the nose, or dead behind it (go over the top).
+        return if local.z > 0.0 {
+            DVec2::new(1.0, 0.0)
+        } else {
+            DVec2::ZERO
+        };
+    };
+    let rates = dir * off * AIM_GAIN;
+    let stick = rates / (DVec2::new(TURN_RATES.x, TURN_RATES.y) * turn);
+    // Scaled as one, so a diagonal aim is reached along a straight line.
+    stick / stick.abs().max_element().max(1.0)
 }
 
 /// Flight assist for one frame: thrust the velocity toward `local` (the
@@ -487,19 +535,41 @@ impl World {
 
     pub(super) fn steer(&mut self, dt: f64, mut c: Controls) {
         let turn = self.handling().1;
+        let aiming = c.aim != DVec2::ZERO;
+        if self.ship.rot.dot(self.aim_rot).abs() < 1.0 - 1e-12 {
+            self.aim = None;
+        }
         if let Some(leg) = self.turn_over {
             let face = self.arrival_facing(leg, self.ship_position(), self.t_days());
             let off = (self.ship.rot * DVec3::NEG_Z).angle_between(face);
             if c.stick != DVec3::ZERO
+                || aiming
                 || (off < 0.2_f64.to_radians() && self.ship.spin.length() < 0.02)
             {
                 // The pilot has the stick, or we're there.
                 self.turn_over = None;
             } else {
                 c.stick = attitude_stick(self.ship.rot, face, turn);
+                self.aim = None;
+            }
+        }
+        if self.turn_over.is_none() {
+            if c.stick.x != 0.0 || c.stick.y != 0.0 {
+                // Turned by rates (scripted flight): no aim to hold.
+                self.aim = None;
+            } else {
+                // The pilot's aim, held where it was left (DESIGN §7.1.5).
+                let rot = self.ship.rot;
+                let aim = self.aim.unwrap_or(rot * DVec3::NEG_Z);
+                let aim = move_aim(aim, rot, c.aim);
+                self.aim = Some(aim);
+                let s = aim_stick(rot, aim, turn);
+                c.stick.x = s.x;
+                c.stick.y = s.y;
             }
         }
         steer(&mut self.ship.rot, &mut self.ship.spin, c.stick, turn, dt);
+        self.aim_rot = self.ship.rot;
         self.ship.throttle = self.next_throttle(c.throttle_delta, dt);
     }
 
@@ -694,6 +764,40 @@ pub fn settle_window(closing: f64) -> f64 {
 
 impl World {
     /// What the pilot is flying at, if anything: see [`Approach`].
+    /// Whether the pilot's aim is on a rock or station in reach (or just
+    /// off its edge): there the arrow keys slow to their fine rate, so a
+    /// held key doesn't carry the aim past a small rock before the pilot
+    /// can let go (DESIGN §7.1.5).
+    pub fn aim_on_something(&self) -> bool {
+        let Some(aim) = self.aim else {
+            return false;
+        };
+        if self.mode != Mode::Normal {
+            return false;
+        }
+        let me = self.ship_position();
+        let on = |pos: DVec3, radius: f64| {
+            let to = pos - me;
+            let d = to.length();
+            d > radius && aim.angle_between(to) < (radius / d).asin() + 0.25_f64.to_radians()
+        };
+        if let Some((field, rocks)) = &self.field_rocks {
+            let centre = self.position(Place::Field(*field));
+            let f = &self.galaxy.fields[*field];
+            for r in self.mining.live_rocks(*field, f, rocks, self.clock_s) {
+                let pos = centre + r.pos;
+                if (pos - me).length() - r.radius <= APPROACH_ROCK_RANGE && on(pos, r.radius) {
+                    return true;
+                }
+            }
+        }
+        self.view.stations.iter().any(|&s| {
+            let pos = self.position(Place::Station(s));
+            let radius = self.station_size_m(s) * 0.35;
+            (pos - me).length() - radius <= APPROACH_STATION_RANGE && on(pos, radius)
+        })
+    }
+
     pub fn approach(&self) -> Option<Approach> {
         if self.mode != Mode::Normal || self.combat.lost.is_some() {
             return None;

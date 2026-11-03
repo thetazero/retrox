@@ -927,9 +927,44 @@ stopping, the camera, and moving between rocks. As built:
   centre. The gap between the two is drift.
 - **Turns ease in and settle.** A ship's turn rate builds at 6/s toward the
   stick and settles at 10/s when the stick comes back, so letting go stops
-  the nose close to where it was let go. The arrow keys nudge (a fifth of
-  full stick) and open to full over half a second of holding, so a tap
-  aims a degree or so and a hold swings the ship round.
+  the nose close to where it was let go. Since #220 the pilot no longer
+  holds the stick directly: they aim, and the ship steers (§7.1.5).
+
+#### 7.1.5 Aiming: the ship turns onto where you aim (#220)
+
+After #210 a key tap still turned the nose half a degree, a held key
+ramped up and overshot, and the mouse set a turn rate that died away, so
+holding a small rock in the sights meant fighting the controls. As built:
+
+- **The pilot moves an aim; the ship turns onto it and holds it.** The
+  aim is a direction fixed in space, drawn as an amber diamond (amber:
+  what you target). The mouse and the arrow keys move it, right and up as
+  the ship sees them. The ship's attitude hold turns the nose onto it at
+  the hull's own turn rates, through the same easing as any turn, along
+  the straight way there, and settles on it without swinging past. Let go
+  and the nose stays on it. Aiming never rolls the ship; [Q]/[E] do.
+  Every ship's turning is unchanged: a heavy hull still swings round
+  slower than a light one.
+- **The aim leads the nose by at most about 26°**, the lead at which the
+  ship already turns at full rate, so it stays on screen. Pushing further
+  holds it at that lead while the ship swings. While the nose is still
+  swinging round to it, a faint amber line runs from the crosshair to it.
+- **The mouse moves the aim by distance**: about 30° an inch at
+  sensitivity 1. **The arrow keys move it by time held**: 4°/s for the
+  first 0.3 s, so a tap moves it a fraction of a degree, onto a rock a
+  couple of km off, then speeding up over 0.8 s to 80°/s, so a held key
+  swings the ship round. **Over a rock or station in reach** (or within a
+  quarter degree of its edge) a held key creeps at 2°/s and starts its
+  speed-up again, so it doesn't carry the aim past a small rock before
+  the pilot can let go. The mouse has no such pull.
+- **The chase view leans halfway from the nose toward the aim**, so what
+  the ship is swinging round to comes into view first and the ship turns
+  within the frame. With the aim on the nose, as in a straight run, it
+  sits behind the ship as before; the cockpit looks down the nose.
+- **Anything else that turns the ship** (the autopilot's turn-over after
+  fast travel, a start, scripted flight) leaves no stale aim: the aim
+  starts again on the nose. Touching the mouse or arrows during a
+  turn-over hands it to the pilot, as touching the stick did.
 
 #### 7.1.5 Time eases in and out of fast travel (#207)
 

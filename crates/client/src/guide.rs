@@ -94,9 +94,12 @@ pub fn flight_keys(invert_pitch: bool) -> &'static [KeyRow] {
 }
 
 pub const FLIGHT_KEYS: &[KeyRow] = &[
-    (&["MOUSE"], "steer (click the view first)"),
-    (&["↑", "↓"], "↓ nose up · ↑ nose down"),
-    (&["←", "→"], "turn left / right"),
+    (
+        &["MOUSE"],
+        "aim the amber diamond; the nose follows (click the view)",
+    ),
+    (&["↑", "↓"], "aim: ↓ nose up · ↑ nose down"),
+    (&["←", "→"], "aim left / right · tap to aim finely"),
     (&["W"], "hold to fly ahead, let go to stop"),
     (&["S"], "hold to back off"),
     (&["W", "W"], "let go at 500 m/s, W again: cruise"),
@@ -109,9 +112,12 @@ pub const FLIGHT_KEYS: &[KeyRow] = &[
 ];
 
 const FLIGHT_KEYS_INVERTED: &[KeyRow] = &[
-    (&["MOUSE"], "steer (click the view first)"),
-    (&["↑", "↓"], "↑ nose up · ↓ nose down"),
-    (&["←", "→"], "turn left / right"),
+    (
+        &["MOUSE"],
+        "aim the amber diamond; the nose follows (click the view)",
+    ),
+    (&["↑", "↓"], "aim: ↑ nose up · ↓ nose down"),
+    (&["←", "→"], "aim left / right · tap to aim finely"),
     (&["W"], "hold to fly ahead, let go to stop"),
     (&["S"], "hold to back off"),
     (&["W", "W"], "let go at 500 m/s, W again: cruise"),
@@ -718,7 +724,7 @@ mod tests {
             .filter(|&i| plain[i] != inverted[i])
             .collect();
         assert_eq!(differ.len(), 1);
-        assert_eq!(plain[differ[0]].1, "↓ nose up · ↑ nose down");
-        assert_eq!(inverted[differ[0]].1, "↑ nose up · ↓ nose down");
+        assert_eq!(plain[differ[0]].1, "aim: ↓ nose up · ↑ nose down");
+        assert_eq!(inverted[differ[0]].1, "aim: ↑ nose up · ↓ nose down");
     }
 }
