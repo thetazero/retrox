@@ -440,6 +440,12 @@ pub struct World {
     /// The push of [W] that opened the throttle to its detent is still
     /// held, so it stays there (see `next_throttle`).
     pub at_detent: bool,
+    /// A push of [W] that reached the detent was let go, and the ship is
+    /// still fast enough that a fresh [W] goes on into cruise (see
+    /// `next_throttle`).
+    pub cruise_ready: bool,
+    /// [W] or [S] (+1 or -1) was held last frame, 0 if neither.
+    pub throttle_held: f64,
     /// Seconds since a gang pulled us out of fast travel, and which,
     /// while that's news.
     pub interdicted: Option<(f64, String)>,
@@ -565,6 +571,8 @@ impl World {
             burn: 0.0,
             turn_over: None,
             at_detent: false,
+            cruise_ready: false,
+            throttle_held: 0.0,
             interdicted: None,
             travel_view: 0.0,
             travel_rot: DQuat::IDENTITY,
@@ -1085,7 +1093,7 @@ impl World {
                     self.ship.frame = Place::Station(s);
                     self.ship.rel = self.ship.rot * DVec3::new(0.0, 0.0, -(size * 0.9 + 150.0));
                     self.ship.vel = self.ship.rot * DVec3::new(0.0, 0.0, -60.0);
-                    self.ship.throttle = 0.1;
+                    self.ship.throttle = 0.0;
                     self.mode = Mode::Normal;
                     self.retarget_after_leaving(s, Place::Station(s));
                 }

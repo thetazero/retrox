@@ -68,7 +68,7 @@ and `--menu pause|quit` opens over a fresh game.
 | `--menu PAGE` | open a menu page: `title`, `new`, `load`, `settings`, or `pause` / `quit` over a fresh game |
 | `--keys K1,K2,…` | press these keys, one a frame (`waitN` waits N frames), then quit (`--screenshot` stops it early) |
 | `--mute` / `--sound` | silence any run / give sound to a screenshot or `--keys` run, which are silent by default |
-| `--remote PATH` | play turn by turn from steps appended to PATH: keys, `hold:KEY:N`, `click:X:Y`, `scroll:X:Y:DY`, `shot:PATH.png`, `info:PATH` (bearings, rocks, raiders and their lead pips, gangs), `type:TEXT` (into the text field with the keyboard); the world waits between steps (for playtests); steps are lowercased except the paths of `shot:` and `info:`, and `click:`/`move:`/`scroll:` take pixels of the screenshot |
+| `--remote PATH` | play turn by turn from steps appended to PATH: keys, `hold:KEY:N`, `release:KEY` (let a held key go), `click:X:Y`, `scroll:X:Y:DY`, `shot:PATH.png`, `info:PATH` (bearings, rocks, raiders and their lead pips, gangs), `type:TEXT` (into the text field with the keyboard); the world waits between steps (for playtests); steps are lowercased except the paths of `shot:` and `info:`, and `click:`/`move:`/`scroll:` take pixels of the screenshot |
 
 Screenshots (`--screenshot` and `shot:`) are compressed PNGs, at most
 1600 px wide: a wider window is shrunk by a whole factor (a 2880 px

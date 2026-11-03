@@ -277,8 +277,15 @@ pub fn draw(ctx: &egui::Context, h: HudInput) -> Vec<Action> {
             crate::widgets::plated_galley(&painter, rect.min + Vec2::splat(2.0), galley);
         }
 
-        // Crosshair and stick position.
-        let c = screen.center();
+        if w.mode == Mode::Normal {
+            approach_marker(&painter, &h, screen);
+            heading_marker(&painter, &h, screen);
+        }
+
+        // Crosshair on the nose (the chase view trails a turn, so that's
+        // off the screen's centre mid-turn), and stick position.
+        let nose = w.ship_position() - h.camera + w.ship.rot * glam::DVec3::NEG_Z * 1e5;
+        let c = project(h.view_proj, nose.as_vec3(), screen).unwrap_or(screen.center());
         let ring = CREAM_DIM.gamma_multiply(0.7);
         painter.circle_stroke(c, 14.0, Stroke::new(1.0, ring));
         for dir in [Vec2::X, -Vec2::X, Vec2::Y, -Vec2::Y] {
@@ -1386,6 +1393,101 @@ fn throttle_bar(ui: &mut egui::Ui, value: f32, width: f32) {
     );
 }
 
+/// The colour of a stop `short` of something with a `standoff` beside it
+/// (DESIGN §7.1): teal well short, amber beside it, red past it.
+fn stop_color(short: f64, standoff: f64) -> Color32 {
+    if short < 0.0 {
+        ALARM
+    } else if short <= standoff + 0.5 {
+        AMBER
+    } else {
+        VFD
+    }
+}
+
+/// What the ship is flying at (see [`World::approach`]): corner brackets
+/// round it, its distance and closing speed, and where the ship comes to
+/// rest if the throttle's let go now, as SHORT of it or PAST it. With [W]
+/// held and in the window where flight assist would settle the ship
+/// beside it, it says LET GO.
+fn approach_marker(painter: &egui::Painter, h: &HudInput, screen: Rect) {
+    let w = h.world;
+    let Some(a) = w.approach() else {
+        return;
+    };
+    let rel = (a.pos - h.camera).as_vec3();
+    let Some(p) = project(h.view_proj, rel, screen) else {
+        return;
+    };
+    let across = rel
+        .cross(glam::Vec3::Y)
+        .try_normalize()
+        .unwrap_or(glam::Vec3::X);
+    let r = project_any(h.view_proj, rel + across * a.radius as f32, screen)
+        .map_or(0.0, |e| (e - p).length())
+        .clamp(9.0, 160.0)
+        + 5.0;
+    let color = a
+        .stops_short
+        .map_or(CREAM_DIM, |short| stop_color(short, a.standoff));
+    brackets(
+        painter,
+        Rect::from_center_size(p, Vec2::splat(2.0 * r)),
+        (r * 0.35).clamp(4.0, 12.0),
+        color,
+    );
+    let mut lines = vec![(
+        if a.closing.abs() >= 1.0 {
+            format!("{} · {:.0} m/s", distance(a.gap.max(0.0)), a.closing)
+        } else {
+            distance(a.gap.max(0.0))
+        },
+        color,
+    )];
+    if let Some(short) = a.stops_short {
+        let text = if short < 0.0 {
+            format!("STOPS {} PAST", distance(-short))
+        } else if a.settle_brake.is_some() && w.throttle_held > 0.0 {
+            format!("LET GO · STOPS {} SHORT", distance(short))
+        } else {
+            format!("STOPS {} SHORT", distance(short))
+        };
+        lines.push((text, stop_color(short, a.standoff)));
+    }
+    // To the left of the brackets: below them is the ship, when it's
+    // dead ahead, and to the right the target's label.
+    let galleys: Vec<_> = lines
+        .into_iter()
+        .map(|(text, color)| painter.layout_no_wrap(text, mono(12.0), color))
+        .collect();
+    let height: f32 = galleys.iter().map(|g| g.size().y + 2.0).sum();
+    let mut y = p.y - height / 2.0;
+    for galley in galleys {
+        let at = Pos2::new(p.x - r - 8.0 - galley.size().x, y);
+        y += galley.size().y + 2.0;
+        crate::widgets::plated_galley(painter, at, galley);
+    }
+}
+
+/// Where the ship is actually going: a small ring with wings and a fin
+/// on the line it's moving along. The gap between it and the crosshair
+/// (the nose) is drift (DESIGN §7.1).
+fn heading_marker(painter: &egui::Painter, h: &HudInput, screen: Rect) {
+    let vel = h.world.ship.vel;
+    if vel.length() < 3.0 {
+        return;
+    }
+    let ahead = h.world.ship_position() - h.camera + vel.normalize() * 1e5;
+    let Some(p) = project(h.view_proj, ahead.as_vec3(), screen) else {
+        return;
+    };
+    let ink = Stroke::new(1.5, VFD);
+    painter.circle_stroke(p, 6.0, ink);
+    painter.line_segment([p + Vec2::new(6.0, 0.0), p + Vec2::new(14.0, 0.0)], ink);
+    painter.line_segment([p - Vec2::new(6.0, 0.0), p - Vec2::new(14.0, 0.0)], ink);
+    painter.line_segment([p - Vec2::new(0.0, 6.0), p - Vec2::new(0.0, 12.0)], ink);
+}
+
 /// Under the throttle: how it behaves from here. At the detent, the key
 /// that goes on into cruise; moving, how far the ship goes once the
 /// throttle is cut, red when that carries it past the target it's closing
@@ -1397,17 +1499,28 @@ fn speed_line(ui: &mut egui::Ui, w: &World, speed: f64) {
     ui.horizontal(|ui| {
         ui.set_min_height(22.0);
         if at_detent {
+            ui.label(RichText::new("LET GO, THEN").color(AMBER));
             keycap(ui, "W");
-            ui.label(RichText::new("AGAIN FOR CRUISE").color(AMBER));
+            ui.label(RichText::new("FOR CRUISE").color(AMBER));
+        } else if w.cruise_ready {
+            keycap(ui, "W");
+            ui.label(RichText::new("NOW FOR CRUISE").color(AMBER));
+        } else if w.ship.throttle > DETENT {
+            keycap(ui, "X");
+            ui.label(RichText::new("CUTS CRUISE").color(AMBER));
         }
         let Some(stop) = stop else { return };
-        let past = w.target.is_some_and(|t| {
-            let to = w.position(t) - w.ship_position();
-            w.ship.vel.dot(to) > 0.0 && stop > to.length()
-        });
+        // Past what it's flying at, or else past the target.
+        let past = match w.approach().and_then(|a| a.stops_short) {
+            Some(short) => short < 0.0,
+            None => w.target.is_some_and(|t| {
+                let to = w.position(t) - w.ship_position();
+                w.ship.vel.dot(to) > 0.0 && stop > to.length()
+            }),
+        };
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if past {
-                ui.label(RichText::new(format!("{} · PAST TARGET", distance(stop))).color(ALARM));
+                ui.label(RichText::new(format!("{} · PAST IT", distance(stop))).color(ALARM));
             } else {
                 ui.label(RichText::new(distance(stop)).color(VFD));
             }
